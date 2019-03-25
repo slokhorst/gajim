@@ -525,6 +525,13 @@ class GenericOptionPage(Gtk.Box):
         self.pack_start(box, True, True, 0)
 
     def _on_enable_switch(self, switch, param, account):
+        def _disable(account):
+            app.connections[account].change_status('offline', 'offline')
+            app.connections[account].disconnect(reconnect=False)
+            self.parent.disable_account(account)
+            app.config.set_per('accounts', account, 'active', False)
+            switch.set_active(False)
+
         old_state = app.config.get_per('accounts', account, 'active')
         state = switch.get_active()
         if old_state == state:
@@ -532,8 +539,13 @@ class GenericOptionPage(Gtk.Box):
 
         if (account in app.connections and
                 app.connections[account].connected > 0):
-            # connecting or connected
-            app.interface.raise_dialog('connected-on-disable-account')
+            # Connecting or connected
+            ConfirmationDialog(
+                _('Account %s is still connected') % account,
+                _('All chat and groupchat windows will be closed. '
+                  'Do you want to continue?'),
+                on_response_ok=(_disable, account),
+                transient_for=app.get_app_window('AccountsWindow'))
             switch.set_active(not state)
             return
         if state:
