@@ -25,6 +25,7 @@ from gajim.common import ged
 from gajim.common.i18n import _
 from gajim.common.connection import Connection
 from gajim.common.zeroconf.connection_zeroconf import ConnectionZeroconf
+from gajim.common.const import ButtonAction
 from gajim.common.const import Option
 from gajim.common.const import OptionKind
 from gajim.common.const import OptionType
@@ -39,6 +40,8 @@ from gajim.gtk.dialogs import ConfirmationDialog
 from gajim.gtk.dialogs import ConfirmationDialogDoubleRadio
 from gajim.gtk.dialogs import ErrorDialog
 from gajim.gtk.dialogs import YesNoDialog
+from gajim.gtk.dialogs import DialogButton
+from gajim.gtk.dialogs import NewConfirmationDialog
 from gajim.gtk.util import get_icon_name
 from gajim.gtk.util import get_builder
 
@@ -525,12 +528,11 @@ class GenericOptionPage(Gtk.Box):
         self.pack_start(box, True, True, 0)
 
     def _on_enable_switch(self, switch, param, account):
-        def _disable(account):
+        def _disable():
             app.connections[account].change_status('offline', 'offline')
             app.connections[account].disconnect(reconnect=False)
             self.parent.disable_account(account)
             app.config.set_per('accounts', account, 'active', False)
-            switch.set_active(False)
 
         old_state = app.config.get_per('accounts', account, 'active')
         state = switch.get_active()
@@ -540,13 +542,18 @@ class GenericOptionPage(Gtk.Box):
         if (account in app.connections and
                 app.connections[account].connected > 0):
             # Connecting or connected
-            ConfirmationDialog(
+            NewConfirmationDialog(
+                _('Disable Account'),
                 _('Account %s is still connected') % account,
                 _('All chat and groupchat windows will be closed. '
                   'Do you want to continue?'),
-                on_response_ok=(_disable, account),
-                transient_for=app.get_app_window('AccountsWindow'))
-            switch.set_active(not state)
+                [DialogButton.make('Cancel'),
+                 DialogButton.make('OK',
+                                   text=_('Disable Account'),
+                                   callback=_disable,
+                                   action=ButtonAction.DESTRUCTIVE)],
+                 transient_for=self.parent)
+            switch.set_active(app.config.get_per('accounts', account, 'active'))
             return
         if state:
             self.parent.enable_account(account)
