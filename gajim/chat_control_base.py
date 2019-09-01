@@ -1274,6 +1274,7 @@ class ChatControlBase(MessageControl, ChatCommandProcessor, CommandTools):
             # we are at the end
             if not app.events.remove_events(
                     self.account, jid, types=types_list):
+                con = app.connections[self.account]
                 # There were events to remove
                 self.redraw_after_event_removed(jid)
                 # XEP-0333 Send <displayed> tag.
