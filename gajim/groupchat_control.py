@@ -847,7 +847,8 @@ class GroupchatControl(ChatControlBase):
 
     def on_private_message(self, nick, sent, msg, tim, xhtml, session,
                            msg_log_id=None, encrypted=False,
-                           displaymarking=None):
+                           displaymarking=None, msg_id=None):
+
         # Do we have a queue?
         fjid = self.room_jid + '/' + nick
 
@@ -862,7 +863,9 @@ class GroupchatControl(ChatControlBase):
                                session=session,
                                form_node=None,
                                displaymarking=displaymarking,
-                               sent_forwarded=sent)
+                               sent_forwarded=sent,
+                               msg_id=msg_id)
+
         app.events.add_event(self.account, fjid, event)
 
         autopopup = app.config.get('autopopup')
@@ -1106,7 +1109,8 @@ class GroupchatControl(ChatControlBase):
                 self.on_private_message(
                     nick, obj.sent, obj.msgtxt, obj.timestamp,
                     obj.xhtml, self.session, msg_log_id=obj.msg_log_id,
-                    encrypted=obj.encrypted, displaymarking=obj.displaymarking)
+                    encrypted=obj.encrypted, displaymarking=obj.displaymarking,
+                    msg_id=obj.message_id)
 
     def _nec_ping(self, obj):
         if self.contact.jid != obj.contact.room_jid:

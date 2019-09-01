@@ -148,6 +148,11 @@ class Message(BaseModule):
             additional_data.set_value(
                 'gajim', 'user_timestamp', properties.user_timestamp)
 
+        marker_id = None
+        marker = stanza.getTag('displayed', namespace=nbxmpp.NS_CHATMARKERS)
+        if marker:
+            marker_id = marker.getAttr('id')
+
         event_attr = {
             'conn': self._con,
             'stanza': stanza,
@@ -171,7 +176,8 @@ class Message(BaseModule):
             'timestamp': properties.timestamp,
             'delayed': properties.user_timestamp is not None,
             'muc_pm': properties.is_muc_pm,
-            'gc_control': gc_control
+            'gc_control': gc_control,
+            'marker_id': marker_id
         }
 
         app.nec.push_incoming_event(NetworkEvent('update-client-info',

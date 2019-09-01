@@ -81,6 +81,7 @@ class ChatEvent(Event):
         self.form_node = form_node
         self.displaymarking = displaymarking
         self.sent_forwarded = sent_forwarded
+        self.msg_id = msg_id
         if additional_data is None:
             from gajim.common.helpers import AdditionalDataDict
             additional_data = AdditionalDataDict()
@@ -95,13 +96,14 @@ class PmEvent(ChatEvent):
 class PrintedChatEvent(Event):
     type_ = 'printed_chat'
     def __init__(self, message, subject, control, msg_log_id, time_=None,
-    show_in_roster=False, show_in_systray=True):
+    msg_id=None, show_in_roster=False, show_in_systray=True):
         Event.__init__(self, time_, show_in_roster=show_in_roster,
             show_in_systray=show_in_systray)
         self.message = message
         self.subject = subject
         self.control = control
         self.msg_log_id = msg_log_id
+        self.msg_id = msg_id
 
 class PrintedGcMsgEvent(PrintedChatEvent):
     type_ = 'printed_gc_msg'
