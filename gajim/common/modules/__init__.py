@@ -40,7 +40,6 @@ MODULES = [
     'bookmarks',
     'caps',
     'carbons',
-    'chat_markers',
     'chatstates',
     'delimiter',
     'discovery',
