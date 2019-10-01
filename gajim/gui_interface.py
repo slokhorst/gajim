@@ -285,6 +285,44 @@ class Interface:
         if ctrl and ctrl.session and len(obj.contact_list) > 1:
             ctrl.remove_session(ctrl.session)
 
+    def handle_event_chat_marker_received(self, event):
+        if event.type.is_groupchat:
+            types = ['printed_gc_msg', 'printed_marked_gc_msg']
+            control = app.interface.msg_win_mgr.get_control(event.jid,
+                                                            event.account)
+            if not control:
+                if event.jid in app.interface.minimized_controls[event.account]:
+                    control = app.interface.minimized_controls[event.account][event.jid]
+            if not control:
+                return
+            if obj.resource != control.nick:
+                return
+            event_jid = event.jid
+
+        else:
+
+            types = ['chat', 'pm', 'printed_chat', 'printed_pm']
+            if event.properties.carbon_type != 'sent':
+                return
+
+            control = app.interface.msg_win_mgr.get_control(event.jid,
+                                                            event.account)
+            if not control:
+                control = app.interface.msg_win_mgr.get_gc_control(
+                    event.jid, event.account)
+            event_jid = event.jid
+
+        # Compare with control.last_msg_id.
+        events_ = app.events.get_events(event.account, event_jid, types)
+        if not events_:
+            return
+        if events_[-1].msg_id != event.marker_id:
+            return
+        if not app.events.remove_events(event.account, event_jid, types=types):
+            # There were events to remove
+            if control:
+                control.redraw_after_event_removed(event.jid)
+
     def handle_event_msgerror(self, obj):
         #'MSGERROR' (account, (jid, error_code, error_msg, msg, time[session]))
         account = obj.conn.name
@@ -1173,6 +1211,7 @@ class Interface:
             'unsubscribed-presence-received': [
                 self.handle_event_unsubscribed_presence],
             'zeroconf-name-conflict': [self.handle_event_zc_name_conflict],
+            'displayed-marker-received': [self.handle_event_chat_marker_received],
         }
 
     def register_core_handlers(self):

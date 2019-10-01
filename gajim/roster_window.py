@@ -2650,44 +2650,6 @@ class RosterWindow:
         self.application.set_account_actions_state(obj.conn.name, True)
         self.draw_account(obj.conn.name)
 
-    def _nec_message_received(self, obj):
-        if not obj.marker_id:
-            return
-        if obj.mtype == 'error':
-            return
-        if obj.mtype == 'groupchat':
-            types = ['printed_gc_msg', 'printed_marked_gc_msg']
-            control = app.interface.msg_win_mgr.get_control(obj.jid,
-                obj.account)
-            if not control:
-                if obj.jid in app.interface.minimized_controls[obj.account]:
-                    control = app.interface.minimized_controls[obj.account][obj.jid]
-            if not control:
-                return
-            if obj.resource != control.nick:
-                return
-            event_jid = obj.jid
-        else:
-            if not obj.forwarded or not obj.sent:
-                return
-            types = ['chat', 'pm', 'printed_chat', 'printed_pm']
-            control = app.interface.msg_win_mgr.get_control(obj.fjid,
-                obj.account)
-            if not control:
-                control = app.interface.msg_win_mgr.get_gc_control(obj.jid,
-                    obj.account)
-            event_jid = obj.fjid
-        # Compare with control.last_msg_id.
-        events = app.events.get_events(obj.account, event_jid, types)
-        if not events:
-            return
-        if events[-1].msg_id != obj.marker_id:
-            return
-        if not app.events.remove_events(obj.account, event_jid, types=types):
-            # There were events to remove
-            if control:
-                control.redraw_after_event_removed(obj.fjid)
-
     def _nec_decrypted_message_received(self, obj):
         if not obj.msgtxt:
             return True
@@ -5722,8 +5684,6 @@ class RosterWindow:
             self._nec_signed_in)
         app.ged.register_event_handler('decrypted-message-received', ged.GUI2,
             self._nec_decrypted_message_received)
-        app.ged.register_event_handler('message-received', ged.GUI2,
-            self._nec_message_received)
         app.ged.register_event_handler('blocking', ged.GUI1,
             self._nec_blocking)
         app.ged.register_event_handler('style-changed', ged.GUI1,

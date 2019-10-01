@@ -13,16 +13,45 @@
 # along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
 
 # Chat Markers (XEP-0333)
-#TODO: add <thread> support
 
 import nbxmpp
+from nbxmpp.structs import StanzaHandler
 
+from gajim.common import app
+from gajim.common.nec import NetworkEvent
 from gajim.common.modules.base import BaseModule
 
 
 class ChatMarkers(BaseModule):
+
+    _nbxmpp_extends = 'ChatMarkers'
+
     def __init__(self, con):
         BaseModule.__init__(self, con)
+
+        self.handlers = [
+            StanzaHandler(name='message',
+                          callback=self._process_message_marker,
+                          ns=nbxmpp.NS_CHATMARKERS,
+                          priority=48),
+        ]
+
+    def _process_message_marker(self, _con, stanza, properties):
+        if not properties.is_displayed_marker:
+            return
+
+        if properties.type.is_error:
+            return
+
+        self._log.info('Displayed: %s, id: %s',
+                       properties.jid, properties.marker.id)
+
+        app.nec.push_outgoing_event(
+            NetworkEvent('displayed-marker-received',
+                         account=self._account,
+                         jid=properties.jid,
+                         type=properties.type,
+                         marker_id=properties.marker.id))
 
     def send_marker(self, jid, marker, id_, is_gc):
         if is_gc:
@@ -35,6 +64,7 @@ class ChatMarkers(BaseModule):
 
     def send_displayed_marker(self, jid, id_, is_gc):
         self.send_marker(jid, 'displayed', id_, is_gc)
+
 
 def get_instance(*args, **kwargs):
     return ChatMarkers(*args, **kwargs), 'ChatMarkers'

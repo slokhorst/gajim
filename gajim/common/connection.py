@@ -309,7 +309,7 @@ class CommonConnection:
                 msg_iq.setThread(obj.session.thread_id)
 
         if obj.message:
-            msg_iq.setTag('markable', namespace=nbxmpp.NS_CHATMARKERS)
+            msg_iq.setMarkable()
 
         self._push_stanza_message_outgoing(obj, msg_iq)
 

@@ -259,7 +259,6 @@ class ChatControlSession:
                 session=self, form_node=obj.form_node,
                 displaymarking=obj.displaymarking,
                 sent_forwarded=obj.forwarded and obj.sent,
-                msg_id=obj.message_id,
                 show_in_roster=obj.show_in_roster,
                 show_in_systray=obj.show_in_systray,
                 additional_data=obj.additional_data)
