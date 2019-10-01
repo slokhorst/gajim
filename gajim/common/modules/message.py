@@ -171,7 +171,7 @@ class Message(BaseModule):
             'timestamp': properties.timestamp,
             'delayed': properties.user_timestamp is not None,
             'muc_pm': properties.is_muc_pm,
-            'gc_control': gc_control,
+            'gc_control': gc_control
         }
 
         app.nec.push_incoming_event(NetworkEvent('update-client-info',
