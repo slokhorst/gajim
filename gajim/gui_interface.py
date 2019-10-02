@@ -287,40 +287,46 @@ class Interface:
 
     def handle_event_chat_marker_received(self, event):
         if event.type.is_groupchat:
+            control = self.get_groupchat_control(event.account, event.jid)
+            if control is None:
+                log.warning('Groupchat control not found')
+                return
+
+            con = app.connections[event.account]
+            manager = con.get_module('MUC').get_manager()
+
+            muc_data = manager.get(event.jid.getBare())
+            if muc_data is None:
+                log.warning('Unknown MUC')
+                return
+
+            if event.jid.getResource() != muc_data.nick:
+                return
+
+            jid = event.jid.getBare()
             types = ['printed_gc_msg', 'printed_marked_gc_msg']
-            control = app.interface.msg_win_mgr.get_control(event.jid,
-                                                            event.account)
-            if not control:
-                if event.jid in app.interface.minimized_controls[event.account]:
-                    control = app.interface.minimized_controls[event.account][event.jid]
-            if not control:
-                return
-            if obj.resource != control.nick:
-                return
-            event_jid = event.jid
 
         else:
-
             types = ['chat', 'pm', 'printed_chat', 'printed_pm']
-            if event.properties.carbon_type != 'sent':
-                return
+            jid = event.jid.getBare()
+            if event.is_muc_pm:
+                jid = event.jid
 
-            control = app.interface.msg_win_mgr.get_control(event.jid,
-                                                            event.account)
-            if not control:
-                control = app.interface.msg_win_mgr.get_gc_control(
-                    event.jid, event.account)
-            event_jid = event.jid
+            control = app.interface.msg_win_mgr.get_control(jid, event.account)
 
         # Compare with control.last_msg_id.
-        events_ = app.events.get_events(event.account, event_jid, types)
+        breakpoint()
+        events_ = app.events.get_events(event.account, jid, types)
         if not events_:
+            log.warning('No Events')
             return
-        if events_[-1].msg_id != event.marker_id:
+
+        if events_[-1].message_id != event.marker_id:
             return
-        if not app.events.remove_events(event.account, event_jid, types=types):
+
+        if not app.events.remove_events(event.account, jid, types=types):
             # There were events to remove
-            if control:
+            if control is None:
                 control.redraw_after_event_removed(event.jid)
 
     def handle_event_msgerror(self, obj):
@@ -1487,6 +1493,12 @@ class Interface:
 ################################################################################
 ### Methods for opening new messages controls
 ################################################################################
+
+    def get_groupchat_control(self, account, room_jid):
+        control = self.minimized_controls[account].get(room_jid)
+        if control is None:
+            control = self.msg_win_mgr.get_gc_control(room_jid, account)
+        return control
 
     def show_groupchat(self, account, room_jid):
         minimized_control = self.minimized_controls[account].get(room_jid)

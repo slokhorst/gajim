@@ -36,21 +36,29 @@ class ChatMarkers(BaseModule):
                           priority=48),
         ]
 
-    def _process_message_marker(self, _con, stanza, properties):
+    def _process_message_marker(self, _con, _stanza, properties):
         if not properties.is_displayed_marker:
             return
 
         if properties.type.is_error:
             return
 
-        self._log.info('Displayed: %s, id: %s',
-                       properties.jid, properties.marker.id)
+        if (not properties.type.is_groupchat and
+                properties.carbon_type != 'sent'):
+            # Only act on displayed marker received by own devices for now
+            return
+
+        self._log.info('%s: %s %s',
+                       properties.jid,
+                       properties.marker.type,
+                       properties.marker.id)
 
         app.nec.push_outgoing_event(
             NetworkEvent('displayed-marker-received',
                          account=self._account,
                          jid=properties.jid,
                          type=properties.type,
+                         is_muc_pm=properties.is_muc_pm,
                          marker_id=properties.marker.id))
 
     def send_marker(self, jid, marker, id_, is_gc):

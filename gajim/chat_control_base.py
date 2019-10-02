@@ -1071,7 +1071,7 @@ class ChatControlBase(MessageControl, ChatCommandProcessor, CommandTools):
                     event_type.type_, self.contact.jid)
 
                 event = event_type(text, subject, self, msg_log_id,
-                    msg_id=message_id,
+                    message_id=message_id,
                     show_in_roster=show_in_roster,
                     show_in_systray=show_in_systray)
                 app.events.add_event(self.account, full_jid, event)
