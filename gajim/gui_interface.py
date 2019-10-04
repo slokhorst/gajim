@@ -315,7 +315,6 @@ class Interface:
             control = app.interface.msg_win_mgr.get_control(jid, event.account)
 
         # Compare with control.last_msg_id.
-        breakpoint()
         events_ = app.events.get_events(event.account, jid, types)
         if not events_:
             log.warning('No Events')
