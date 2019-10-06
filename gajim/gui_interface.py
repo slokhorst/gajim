@@ -285,22 +285,12 @@ class Interface:
         if ctrl and ctrl.session and len(obj.contact_list) > 1:
             ctrl.remove_session(ctrl.session)
 
-    def handle_event_chat_marker_received(self, event):
+    def handle_event_read_state_sync(self, event):
         if event.type.is_groupchat:
-            control = self.get_groupchat_control(event.account, event.jid)
+            control = self.get_groupchat_control(event.account,
+                                                 event.jid.getBare())
             if control is None:
                 log.warning('Groupchat control not found')
-                return
-
-            con = app.connections[event.account]
-            manager = con.get_module('MUC').get_manager()
-
-            muc_data = manager.get(event.jid.getBare())
-            if muc_data is None:
-                log.warning('Unknown MUC')
-                return
-
-            if event.jid.getResource() != muc_data.nick:
                 return
 
             jid = event.jid.getBare()
@@ -325,7 +315,7 @@ class Interface:
 
         if not app.events.remove_events(event.account, jid, types=types):
             # There were events to remove
-            if control is None:
+            if control is not None:
                 control.redraw_after_event_removed(event.jid)
 
     def handle_event_msgerror(self, obj):
@@ -1216,7 +1206,7 @@ class Interface:
             'unsubscribed-presence-received': [
                 self.handle_event_unsubscribed_presence],
             'zeroconf-name-conflict': [self.handle_event_zc_name_conflict],
-            'displayed-marker-received': [self.handle_event_chat_marker_received],
+            'read-state-sync': [self.handle_event_read_state_sync],
         }
 
     def register_core_handlers(self):

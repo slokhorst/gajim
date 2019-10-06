@@ -31,35 +31,60 @@ class ChatMarkers(BaseModule):
 
         self.handlers = [
             StanzaHandler(name='message',
-                          callback=self._process_message_marker,
+                          callback=self._process_read_state_sync,
+                          ns=nbxmpp.NS_CHATMARKERS,
+                          priority=47),
+            StanzaHandler(name='message',
+                          callback=self._process_chat_marker,
                           ns=nbxmpp.NS_CHATMARKERS,
                           priority=48),
         ]
 
-    def _process_message_marker(self, _con, _stanza, properties):
-        if not properties.is_displayed_marker:
+    def _process_read_state_sync(self, _con, _stanza, properties):
+        if not properties.is_marker:
+            return
+
+        if not properties.marker.is_displayed:
             return
 
         if properties.type.is_error:
             return
 
-        if (not properties.type.is_groupchat and
-                properties.carbon_type != 'sent'):
-            # Only act on displayed marker received by own devices for now
+        if properties.is_mam_message:
             return
 
-        self._log.info('%s: %s %s',
+        if properties.type.is_groupchat:
+            manager = self._con.get_module('MUC').get_manager()
+            muc_data = manager.get(properties.muc_jid)
+            if muc_data is None:
+                return
+
+            if properties.muc_nickname != muc_data.nick:
+                return
+
+        elif not properties.is_carbon_message or not properties.carbon.is_sent:
+            return
+
+        self._log.info('Read state sync: %s %s',
                        properties.jid,
-                       properties.marker.type,
                        properties.marker.id)
 
         app.nec.push_outgoing_event(
-            NetworkEvent('displayed-marker-received',
+            NetworkEvent('read-state-sync',
                          account=self._account,
                          jid=properties.jid,
+                         properties=properties,
                          type=properties.type,
                          is_muc_pm=properties.is_muc_pm,
                          marker_id=properties.marker.id))
+
+        raise nbxmpp.NodeProcessed
+
+    def _process_chat_marker(self, _con, _stanza, properties):
+        if not properties.is_marker:
+            return
+        # TODO: Implement showing displayed state in ConversationsTextview
+        raise nbxmpp.NodeProcessed
 
     def send_marker(self, jid, marker, id_, is_gc):
         if is_gc:

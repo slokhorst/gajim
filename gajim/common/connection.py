@@ -1640,6 +1640,7 @@ class Connection(CommonConnection, ConnectionHandlers):
         msg_iq.setID(obj.stanza_id)
         if obj.message:
             msg_iq.setOriginID(obj.stanza_id)
+            msg_iq.setMarkable()
 
         if obj.correct_id:
             msg_iq.setTag('replace', attrs={'id': obj.correct_id},
