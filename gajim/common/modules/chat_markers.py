@@ -86,17 +86,23 @@ class ChatMarkers(BaseModule):
         # TODO: Implement showing displayed state in ConversationsTextview
         raise nbxmpp.NodeProcessed
 
-    def send_marker(self, jid, marker, id_, is_gc):
-        if is_gc:
-            message = nbxmpp.Message(to=jid, typ='groupchat')
-        else:
-            message = nbxmpp.Message(to=jid, typ='chat')
-        message.setTag(marker, namespace=nbxmpp.NS_CHATMARKERS,
-            attrs={'id': id_})
+    def _send_marker(self, contact, marker, id_, type_):
+        jid = contact.jid
+        if contact.is_pm_contact:
+            jid = app.get_jid_without_resource(contact.jid)
+
+        config = 'rooms' if type_ in ('gc', 'pm') else 'contacts'
+        if not app.config.get_per(config, jid, 'send_marker', False):
+            return
+
+        typ = 'groupchat' if type_ == 'gc' else 'chat'
+        message = nbxmpp.Message(to=contact.jid, typ=typ)
+        message.setMarker(marker, id_)
+        self._log.info('Send %s: %s', marker, contact.jid)
         self._nbxmpp().send(message)
 
-    def send_displayed_marker(self, jid, id_, is_gc):
-        self.send_marker(jid, 'displayed', id_, is_gc)
+    def send_displayed_marker(self, contact, id_, type_):
+        self._send_marker(contact, 'displayed', id_, type_)
 
 
 def get_instance(*args, **kwargs):

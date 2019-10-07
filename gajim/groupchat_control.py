@@ -354,6 +354,16 @@ class GroupchatControl(ChatControlBase):
         act.connect('change-state', self._on_sync_threshold)
         self.parent_win.window.add_action(act)
 
+        value = app.config.get_per(
+            'rooms', self.contact.jid, 'send_marker', False)
+
+        act = Gio.SimpleAction.new_stateful(
+            'send-marker-' + self.control_id,
+            None,
+            GLib.Variant.new_boolean(value))
+        act.connect('change-state', self._on_send_marker)
+        self.parent_win.window.add_action(act)
+
     def update_actions(self):
         if self.parent_win is None:
             return
@@ -586,6 +596,11 @@ class GroupchatControl(ChatControlBase):
         action.set_state(param)
         app.config.set_per('rooms', self.contact.jid,
                            'send_chatstate', param.get_string())
+
+    def _on_send_marker(self, action, param):
+        action.set_state(param)
+        app.config.set_per('rooms', self.contact.jid,
+                           'send_marker', param.get_boolean())
 
     def _on_notify_on_all_messages(self, action, param):
         action.set_state(param)

@@ -1229,8 +1229,9 @@ class ChatControlBase(MessageControl, ChatCommandProcessor, CommandTools):
                     self.redraw_after_event_removed(jid)
                     # XEP-0333 Send <displayed> tag.
                     con.get_module('ChatMarkers').send_displayed_marker(
-                        self.get_full_jid(), self.last_msg_id,
-                        self.type_id == message_control.TYPE_GC)
+                        self.contact,
+                        self.last_msg_id,
+                        self.type_id)
                     self.last_msg_id = None
             # send chatstate inactive to the one we're leaving
             # and active to the one we visit
@@ -1279,8 +1280,9 @@ class ChatControlBase(MessageControl, ChatCommandProcessor, CommandTools):
                 self.redraw_after_event_removed(jid)
                 # XEP-0333 Send <displayed> tag.
                 con.get_module('ChatMarkers').send_displayed_marker(
-                    self.get_full_jid(), self.last_msg_id,
-                    self.type_id == message_control.TYPE_GC)
+                    self.contact,
+                    self.last_msg_id,
+                    self.type_id)
                 self.last_msg_id = None
 
     def _on_scrollbar_button_release(self, scrollbar, event):
