@@ -1,7 +1,6 @@
-language: python
 os: osx
 osx_image: xcode11.2
-python: "3.7"
+language: shell # Travis has no mac+python: https://docs.travis-ci.com/user/languages/python/
 install:
   - pip3 install --upgrade git+https://dev.gajim.org/gajim/python-nbxmpp.git
   - pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
