@@ -2,7 +2,7 @@
 import os
 import sys
 from argparse import ArgumentParser
-from subprocess import run
+from subprocess import run, check_output, CalledProcessError
 
 if __name__ == '__main__':
     if not os.path.isdir('mac'):
@@ -14,6 +14,13 @@ if __name__ == '__main__':
     parser.add_argument('--version', help='version number of the .app bundle')
     args = parser.parse_args()
 
+    if args.version:
+        version = args.version
+    else:
+        try:
+            version = check_output(['git', 'describe', '--tags']).decode()
+        except CalledProcessError:
+            version = 'uknown'
     dmg_name = 'gajim-{}.dmg'.format(args.version)
 
     run(['cp', 'mac/gajim.spec', 'gajim.spec']) # the .spec has to be in the project root
