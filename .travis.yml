@@ -1,4 +1,6 @@
 language: python
+os: osx
+osx_image: xcode11.2
 python:
   - "3.8"
 install:
