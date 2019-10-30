@@ -11,13 +11,12 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='Create a macOS .app bundle. '
                             'Requires PyInstaller and hdiutil (macOS).')
-    parser.add_argument('--version', default='0.0.1',
-                        help='version number of the .app bundle')
+    parser.add_argument('--version', help='version number of the .app bundle')
     args = parser.parse_args()
 
     dmg_name = 'gajim-{}.dmg'.format(args.version)
 
-    run(['cp', 'mac/gajim.spec', 'gajim.spec'])
-    run(['pyinstaller', 'gajim.spec'], check=True)
-    run(['rm', '-rf', 'dist/launch'])
+    run(['cp', 'mac/gajim.spec', 'gajim.spec']) # the .spec has to be in the project root
+    run(['pyinstaller', 'gajim.spec'])
+    run(['rm', '-rf', 'dist/launch']) # we only want Gajim.app in the dmg
     run(['hdiutil', 'create', '-volname', 'Gajim', '-srcfolder', 'dist', '-ov', '-format', 'UDZO', dmg_name])
