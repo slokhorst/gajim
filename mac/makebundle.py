@@ -9,9 +9,6 @@ if __name__ == '__main__':
     if not os.path.isdir('mac'):
         sys.exit("can't find the 'mac' directory. make sure you run "
                  "this script from the project root")
-    if not os.path.isfile('mac/gajim.spec'):
-        sys.exit("can't find the 'mac/gajim.spec' file. make sure you run "
-                 "this script from the project root")
 
     parser = argparse.ArgumentParser(description='Create a macOS .app bundle.')
     parser.add_argument('--version', default='0.0.1',
