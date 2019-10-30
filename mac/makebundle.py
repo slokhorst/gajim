@@ -17,6 +17,7 @@ if __name__ == '__main__':
 
     dmg_name = 'gajim-{}.dmg'.format(args.version)
 
+    run(['cp' 'mac/gajim.spec', 'gajim.spec'])
     run(['pyinstaller', 'mac/gajim.spec'], check=True)
     run(['rm' '-rf', 'dist/launch'])
     run(['hdiutil', 'create', '-volname', 'Gajim', '-srcfolder', 'dist', '-ov', '-format', 'UDZO', dmg_name])
