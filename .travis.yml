@@ -5,5 +5,12 @@ install:
   - pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
   - pip3 install git+https://dev.gajim.org/gajim/python-nbxmpp.git
   - pip3 install pyinstaller
+  - brew install http://git.io/sshpass.rb # for deploy
 script:
   - python3 mac/makebundle.py
+deploy:
+  provider: script
+  script: "sshpass -e scp gajim*.dmg travis@lw.sebbro.nl:public_html"
+  edge: true
+  on:
+    branch: pyinstaller
