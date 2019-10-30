@@ -1,8 +1,7 @@
 language: python
 os: osx
 osx_image: xcode11.2
-python:
-  - "3.8"
+python: "3.7"
 install:
   - pip3 install --upgrade git+https://dev.gajim.org/gajim/python-nbxmpp.git
   - pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
