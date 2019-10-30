@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 import os
-import shutil
 import sys
-import argparse
+from argparse import ArgumentParser
 from subprocess import run
 
 if __name__ == '__main__':
@@ -10,7 +9,8 @@ if __name__ == '__main__':
         sys.exit("can't find the 'mac' directory. make sure you run "
                  "this script from the project root")
 
-    parser = argparse.ArgumentParser(description='Create a macOS .app bundle.')
+    parser = ArgumentParser(description='Create a macOS .app bundle. '
+                            'Requires PyInstaller and hdiutil (macOS).')
     parser.add_argument('--version', default='0.0.1',
                         help='version number of the .app bundle')
     args = parser.parse_args()

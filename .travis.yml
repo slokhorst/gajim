@@ -1,0 +1,8 @@
+language: python
+python:
+  - "3.8"
+install:
+  - pip3 install --upgrade git+https://dev.gajim.org/gajim/python-nbxmpp.git
+  - pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
+script:
+  - python3 mac/makebundle.py
