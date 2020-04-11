@@ -10,11 +10,26 @@ info_plist = {
     "NSHighResolutionCapable": True,
 }
 
+hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit']
+
+# https://github.com/pyinstaller/pyinstaller/commit/91481570517707fc70aa70dca9eb986c61eac35d
+hiddenimports.append('pkg_resources.py2_warn')
+
+# https://github.com/pyinstaller/pyinstaller/issues/4569
+#import subprocess
+#subprocess.check_output("sed -i sed 's/metadata.entry_points()\[\'keyring.backends\'\]/(metadata.EntryPoint(name=\'macOS\',value=\'keyring.backends.OS_X\',group=\'keyring.backends\'),)/g' /usr/local/lib/python3.7/site-packages/keyring/backend.py", shell=True)
+
+
 import sys
-sys.path.insert(0, os.path.join(cwd))
-from gajim.common.modules import MODULES
-hiddenimports = ['gajim.common.modules.' + m for m in MODULES]
-sys.path.pop(0)
+print(sys.path)
+#sys.path.insert(0, os.path.join(cwd))
+#from gajim.common.modules import MODULES
+#hiddenimports += ['gajim.common.modules.' + m for m in MODULES]
+#sys.path.pop(0)
+
+# import site
+# typelib_path = os.path.join(site.getsitepackages()[1], 'gnome', 'lib', 'girepository-1.0')
+# binaries = [(os.path.join(typelib_path, tl), 'gi_typelibs') for tl in os.listdir(typelib_path)]
 
 a = Analysis(['launch.py'],
              pathex=[cwd],

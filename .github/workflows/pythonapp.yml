@@ -1,0 +1,26 @@
+name: Python application
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install dependencies
+      run: |
+        brew install gettext git gtk+3 libsoup librsvg pygobject3 adwaita-icon-theme python
+        brew link --force gettext
+        pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser pyinstaller
+        pip3 install git+https://dev.gajim.org/gajim/python-nbxmpp.git
+        pip3 install .
+    - name: Build Mac app
+      run: |
+        python3 mac/makebundle.py --version 0.0.1
+    - name: Upload app
+      uses: actions/upload-artifact@v1
+      with:
+        name: gajim.dmg
+        path: gajim-0.0.1.dmg
