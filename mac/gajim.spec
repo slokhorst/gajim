@@ -12,9 +12,6 @@ info_plist = {
 
 hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit']
 
-# https://github.com/pyinstaller/pyinstaller/commit/91481570517707fc70aa70dca9eb986c61eac35d
-hiddenimports.append('pkg_resources.py2_warn')
-
 # https://github.com/pyinstaller/pyinstaller/issues/4569
 #import subprocess
 #subprocess.check_output("sed -i sed 's/metadata.entry_points()\[\'keyring.backends\'\]/(metadata.EntryPoint(name=\'macOS\',value=\'keyring.backends.OS_X\',group=\'keyring.backends\'),)/g' /usr/local/lib/python3.7/site-packages/keyring/backend.py", shell=True)
