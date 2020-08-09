@@ -19,33 +19,19 @@
 
 import logging
 
-import OpenSSL.crypto
-import nbxmpp
+from nbxmpp.namespaces import Namespace
 
 from gajim.common import nec
 from gajim.common import helpers
 from gajim.common import app
 from gajim.common import i18n
 from gajim.common.i18n import _
-from gajim.common.const import SSLError
 from gajim.common.jingle_transport import JingleTransportSocks5
 from gajim.common.file_props import FilesProp
 
 
 log = logging.getLogger('gajim.c.connection_handlers_events')
 
-
-class StreamReceivedEvent(nec.NetworkIncomingEvent):
-    name = 'stream-received'
-
-class StreamConflictReceivedEvent(nec.NetworkIncomingEvent):
-    name = 'stream-conflict-received'
-    base_network_events = ['stream-received']
-
-    def generate(self):
-        if self.base_event.stanza.getTag('conflict'):
-            self.conn = self.base_event.conn
-            return True
 
 class PresenceReceivedEvent(nec.NetworkIncomingEvent):
     name = 'presence-received'
@@ -58,32 +44,6 @@ class OurShowEvent(nec.NetworkIncomingEvent):
 
 class MessageSentEvent(nec.NetworkIncomingEvent):
     name = 'message-sent'
-
-class NewAccountConnectedEvent(nec.NetworkIncomingEvent):
-    name = 'new-account-connected'
-
-    def generate(self):
-        try:
-            self.errnum = self.conn.connection.Connection.ssl_errnum
-        except AttributeError:
-            self.errnum = 0 # we don't have an errnum
-        self.ssl_msg = ''
-        if self.errnum > 0:
-            self.ssl_msg = SSLError.get(self.errnum,
-                _('Unknown SSL error: %d') % self.errnum)
-        self.ssl_cert = ''
-        self.ssl_fingerprint_sha1 = ''
-        self.ssl_fingerprint_sha256 = ''
-        if self.conn.connection.Connection.ssl_certificate:
-            cert = self.conn.connection.Connection.ssl_certificate
-            self.ssl_cert = OpenSSL.crypto.dump_certificate(
-                OpenSSL.crypto.FILETYPE_PEM, cert).decode('utf-8')
-            self.ssl_fingerprint_sha1 = cert.digest('sha1').decode('utf-8')
-            self.ssl_fingerprint_sha256 = cert.digest('sha256').decode('utf-8')
-        return True
-
-class NewAccountNotConnectedEvent(nec.NetworkIncomingEvent):
-    name = 'new-account-not-connected'
 
 class ConnectionLostEvent(nec.NetworkIncomingEvent):
     name = 'connection-lost'
@@ -129,7 +89,7 @@ class FileRequestReceivedEvent(nec.NetworkIncomingEvent):
             host['initiator'] = self.FT_content.session.initiator
             host['target'] = self.FT_content.session.responder
         self.file_props.session_type = 'jingle'
-        self.file_props.stream_methods = nbxmpp.NS_BYTESTREAM
+        self.file_props.stream_methods = Namespace.BYTESTREAM
         desc = self.jingle_content.getTag('description')
         if self.jingle_content.getAttr('creator') == 'initiator':
             file_tag = desc.getTag('file')
@@ -325,7 +285,9 @@ class NotificationEvent(nec.NetworkIncomingEvent):
         sound = msg_obj.gc_control.highlighting_for_message(
             msg_obj.msgtxt, msg_obj.properties.timestamp)[1]
 
-        if msg_obj.properties.muc_nickname != msg_obj.gc_control.nick:
+        nick = msg_obj.properties.muc_nickname
+
+        if nick != msg_obj.gc_control.nick:
             self.do_sound = True
             if sound == 'received':
                 self.sound_event = 'muc_message_received'
@@ -343,8 +305,9 @@ class NotificationEvent(nec.NetworkIncomingEvent):
             self.control_focused = self.control.has_focus()
 
         if app.config.get('notify_on_new_message'):
-            notify_for_muc = (app.config.notify_for_muc(self.jid) or
-                              sound == 'highlight')
+            contact = app.contacts.get_groupchat_contact(self.account,
+                                                         self.jid)
+            notify_for_muc = sound == 'highlight' or contact.can_notify()
             if not notify_for_muc:
                 self.do_popup = False
 
@@ -364,6 +327,9 @@ class NotificationEvent(nec.NetworkIncomingEvent):
 
         if app.config.get('notification_preview_message'):
             self.popup_text = msg_obj.msgtxt
+            if self.popup_text and (self.popup_text.startswith('/me ') or
+                                    self.popup_text.startswith('/me\n')):
+                self.popup_text = '* ' + nick + self.popup_text[3:]
 
         type_events = ['printed_marked_gc_msg', 'printed_gc_msg']
         count = len(app.events.get_events(self.account, self.jid, type_events))
@@ -373,7 +339,7 @@ class NotificationEvent(nec.NetworkIncomingEvent):
         self.popup_title = i18n.ngettext(
             'New message from %(nickname)s',
             '%(n_msgs)i unread messages in %(groupchat_name)s',
-            count) % {'nickname': msg_obj.properties.muc_nickname,
+            count) % {'nickname': nick,
                       'n_msgs': count,
                       'groupchat_name': contact.get_shown_name()}
 

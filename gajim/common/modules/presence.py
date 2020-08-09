@@ -17,6 +17,7 @@
 import time
 
 import nbxmpp
+from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import StanzaHandler
 from nbxmpp.const import PresenceType
 
@@ -24,6 +25,7 @@ from gajim.common import app
 from gajim.common import idle
 from gajim.common.i18n import _
 from gajim.common.nec import NetworkEvent
+from gajim.common.helpers import should_log
 from gajim.common.const import KindConstant
 from gajim.common.const import ShowConstant
 from gajim.common.modules.base import BaseModule
@@ -89,7 +91,7 @@ class Presence(BaseModule):
         if properties.is_self_presence:
             app.nec.push_incoming_event(
                 NetworkEvent('our-show',
-                             conn=self._con,
+                             account=self._account,
                              show=properties.show.value))
             return
 
@@ -172,7 +174,7 @@ class Presence(BaseModule):
                 contact.resource = resource
                 app.contacts.add_contact(self._account, contact)
             else:
-                # Convert the inital roster contact to a contact with resource
+                # Convert the initial roster contact to a contact with resource
                 contact.resource = resource
                 event.old_show = 0
                 if contact.show in status_strings:
@@ -227,7 +229,7 @@ class Presence(BaseModule):
     def _log_presence(self, properties):
         if not app.config.get('log_contact_status_changes'):
             return
-        if not app.config.should_log(self._account, properties.jid.getBare()):
+        if not should_log(self._account, properties.jid.getBare()):
             return
 
         show = ShowConstant[properties.show.name]
@@ -340,7 +342,7 @@ class Presence(BaseModule):
         infos = {'jid': jid}
         if name:
             infos['name'] = name
-        iq = nbxmpp.Iq('set', nbxmpp.NS_ROSTER)
+        iq = nbxmpp.Iq('set', Namespace.ROSTER)
         query = iq.setQuery()
         item = query.addChild('item', attrs=infos)
         for group in groups:
@@ -361,7 +363,7 @@ class Presence(BaseModule):
             show = None
         presence = nbxmpp.Presence(to, typ, priority, show, status)
         if nick is not None:
-            nick_tag = presence.setTag('nick', namespace=nbxmpp.NS_NICK)
+            nick_tag = presence.setTag('nick', namespace=Namespace.NICK)
             nick_tag.setData(nick)
 
         if not self._con.avatar_conversion:
@@ -376,13 +378,13 @@ class Presence(BaseModule):
             time_ = time.strftime('%Y-%m-%dT%H:%M:%SZ',
                                   time.gmtime(time.time() - idle_sec))
 
-            idle_node = presence.setTag('idle', namespace=nbxmpp.NS_IDLE)
+            idle_node = presence.setTag('idle', namespace=Namespace.IDLE)
             idle_node.setAttr('since', time_)
 
         caps = self._con.get_module('Caps').caps
         if caps is not None and typ != 'unavailable':
             presence.setTag('c',
-                            namespace=nbxmpp.NS_CAPS,
+                            namespace=Namespace.CAPS,
                             attrs=caps._asdict())
 
         return presence

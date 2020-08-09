@@ -34,17 +34,16 @@ import re
 import os
 import subprocess
 import webbrowser
-import errno
-import select
 import base64
 import hashlib
 import shlex
 import socket
-import time
 import logging
 import json
 import copy
 import collections
+import platform
+import functools
 from collections import defaultdict
 import random
 import weakref
@@ -52,14 +51,11 @@ import string
 from string import Template
 import urllib
 from urllib.parse import unquote
-from io import StringIO
-from datetime import datetime, timedelta
-from distutils.version import LooseVersion as V
 from encodings.punycode import punycode_encode
 from functools import wraps
+from packaging.version import Version as V
 
-import nbxmpp
-from nbxmpp.stringprepare import nameprep
+from nbxmpp.namespaces import Namespace
 from nbxmpp.const import Role
 from nbxmpp.const import ConnectionProtocol
 from nbxmpp.const import ConnectionType
@@ -83,15 +79,16 @@ from gajim.common.const import Display
 from gajim.common.const import URIType
 from gajim.common.const import URIAction
 from gajim.common.const import GIO_TLS_ERRORS
+from gajim.common.const import SHOW_LIST
 from gajim.common.structs import URI
-
-if app.is_installed('PYCURL'):
-    import pycurl
 
 
 log = logging.getLogger('gajim.c.helpers')
 
-special_groups = (_('Transports'), _('Not in contact list'), _('Observers'), _('Group chats'))
+special_groups = (_('Transports'),
+                  _('Not in contact list'),
+                  _('Observers'),
+                  _('Group chats'))
 
 URL_REGEX = re.compile(
     r"(www\.(?!\.)|[a-z][a-z0-9+.-]*://)[^\s<>'\"]+[^!,\.\s<>\)'\"\]]")
@@ -101,48 +98,11 @@ class InvalidFormat(Exception):
     pass
 
 
-def decompose_jid(jidstring):
-    user = None
-    server = None
-    resource = None
-
-    # Search for delimiters
-    user_sep = jidstring.find('@')
-    res_sep = jidstring.find('/')
-
-    if user_sep == -1:
-        if res_sep == -1:
-            # host
-            server = jidstring
-        else:
-            # host/resource
-            server = jidstring[0:res_sep]
-            resource = jidstring[res_sep + 1:]
-    else:
-        if res_sep == -1:
-            # user@host
-            user = jidstring[0:user_sep]
-            server = jidstring[user_sep + 1:]
-        else:
-            if user_sep < res_sep:
-                # user@host/resource
-                user = jidstring[0:user_sep]
-                server = jidstring[user_sep + 1:user_sep + (res_sep - user_sep)]
-                resource = jidstring[res_sep + 1:]
-            else:
-                # server/resource (with an @ in resource)
-                server = jidstring[0:res_sep]
-                resource = jidstring[res_sep + 1:]
-    return user, server, resource
-
 def parse_jid(jidstring):
-    """
-    Perform stringprep on all JID fragments from a string and return the full
-    jid
-    """
-    # This function comes from http://svn.twistedmatrix.com/cvs/trunk/twisted/words/protocols/jabber/jid.py
-
-    return prep(*decompose_jid(jidstring))
+    try:
+        return str(validate_jid(jidstring))
+    except Exception as error:
+        raise InvalidFormat(error)
 
 def idn_to_ascii(host):
     """
@@ -187,90 +147,18 @@ def parse_resource(resource):
     """
     Perform stringprep on resource and return it
     """
-    if resource:
-        try:
-            return resource.encode('OpaqueString').decode('utf-8')
-        except UnicodeError:
-            raise InvalidFormat('Invalid character in resource.')
-
-def prep(user, server, resource):
-    """
-    Perform stringprep on all JID fragments and return the full jid
-    """
-    # This function comes from
-    #http://svn.twistedmatrix.com/cvs/trunk/twisted/words/protocols/jabber/jid.py
-
-    ip_address = False
+    if not resource:
+        return None
 
     try:
-        socket.inet_aton(server)
-        ip_address = True
-    except socket.error:
-        pass
+        return resource.encode('OpaqueString').decode('utf-8')
+    except UnicodeError:
+        raise InvalidFormat('Invalid character in resource.')
 
-    if not ip_address and hasattr(socket, 'inet_pton'):
-        try:
-            socket.inet_pton(socket.AF_INET6, server.strip('[]'))
-            server = '[%s]' % server.strip('[]')
-            ip_address = True
-        except (socket.error, ValueError):
-            pass
-
-    if not ip_address:
-        if server is not None:
-            if server.endswith('.'):  # RFC7622, 3.2
-                server = server[:-1]
-            if not server or len(server.encode('utf-8')) > 1023:
-                raise InvalidFormat(_('Server must be between 1 and 1023 bytes'))
-            try:
-                server = nameprep.prepare(server)
-            except UnicodeError:
-                raise InvalidFormat(_('Invalid character in hostname.'))
-        else:
-            raise InvalidFormat(_('Server address required.'))
-
-    if user is not None:
-        if not user or len(user.encode('utf-8')) > 1023:
-            raise InvalidFormat(_('Username must be between 1 and 1023 bytes'))
-        try:
-            user = user.encode('UsernameCaseMapped').decode('utf-8')
-        except UnicodeError:
-            raise InvalidFormat(_('Invalid character in username.'))
-    else:
-        user = None
-
-    if resource is not None:
-        if not resource or len(resource.encode('utf-8')) > 1023:
-            raise InvalidFormat(_('Resource must be between 1 and 1023 bytes'))
-        try:
-            resource = resource.encode('OpaqueString').decode('utf-8')
-        except UnicodeError:
-            raise InvalidFormat(_('Invalid character in resource.'))
-    else:
-        resource = None
-
-    if user:
-        if resource:
-            return '%s@%s/%s' % (user, server, resource)
-        return '%s@%s' % (user, server)
-
-    if resource:
-        return '%s/%s' % (server, resource)
-    return server
-
-def windowsify(s):
+def windowsify(word):
     if os.name == 'nt':
-        return s.capitalize()
-    return s
-
-def temp_failure_retry(func, *args, **kwargs):
-    while True:
-        try:
-            return func(*args, **kwargs)
-        except (os.error, IOError, select.error) as ex:
-            if ex.errno == errno.EINTR:
-                continue
-            raise
+        return word.capitalize()
+    return word
 
 def get_uf_show(show, use_mnemonic=False):
     """
@@ -322,16 +210,6 @@ def get_uf_show(show, use_mnemonic=False):
     else:
         uf_show = Q_('?contact has status:Has errors')
     return uf_show
-
-def get_css_show_color(show):
-    if show in ('online', 'chat'):
-        return 'status-online'
-    if show in ('offline', 'not in roster', 'requested'):
-        return None
-    if show in ('xa', 'dnd'):
-        return 'status-dnd'
-    if show == 'away':
-        return 'status-away'
 
 def get_uf_sub(sub):
     if sub == 'none':
@@ -461,8 +339,8 @@ def exec_command(command, use_shell=False, posix=True):
         subprocess.Popen('%s &' % command, shell=True).wait()
     else:
         args = shlex.split(command, posix=posix)
-        p = subprocess.Popen(args)
-        app.thread_interface(p.wait)
+        process = subprocess.Popen(args)
+        app.thread_interface(process.wait)
 
 def build_command(executable, parameter):
     # we add to the parameter (can hold path with spaces)
@@ -482,11 +360,6 @@ def get_file_path_from_dnd_dropped_uri(uri):
     elif path.startswith('file:'): # xffm
         path = path[5:] # 5 is len('file:')
     return path
-
-def get_xmpp_show(show):
-    if show in ('online', 'offline'):
-        return None
-    return show
 
 def sanitize_filename(filename):
     """
@@ -540,42 +413,6 @@ def get_account_status(account):
     status = reduce_chars_newlines(account['status_line'], 100, 1)
     return status
 
-def datetime_tuple(timestamp):
-    """
-    Convert timestamp using strptime and the format: %Y%m%dT%H:%M:%S
-
-    Because of various datetime formats are used the following exceptions
-    are handled:
-            - Optional milliseconds appened to the string are removed
-            - Optional Z (that means UTC) appened to the string are removed
-            - XEP-082 datetime strings have all '-' cahrs removed to meet
-              the above format.
-    """
-    date, tim = timestamp.split('T', 1)
-    date = date.replace('-', '')
-    tim = tim.replace('z', '')
-    tim = tim.replace('Z', '')
-    zone = None
-    if '+' in tim:
-        sign = -1
-        tim, zone = tim.split('+', 1)
-    if '-' in tim:
-        sign = 1
-        tim, zone = tim.split('-', 1)
-    tim = tim.split('.')[0]
-    tim = time.strptime(date + 'T' + tim, '%Y%m%dT%H:%M:%S')
-    if zone:
-        zone = zone.replace(':', '')
-        tim = datetime.fromtimestamp(time.mktime(tim))
-        if len(zone) > 2:
-            zone = time.strptime(zone, '%H%M')
-        else:
-            zone = time.strptime(zone, '%H')
-        zone = timedelta(hours=zone.tm_hour, minutes=zone.tm_min)
-        tim += zone * sign
-        tim = tim.timetuple()
-    return tim
-
 def get_contact_dict_for_account(account):
     """
     Create a dict of jid, nick -> contact with all contacts of account.
@@ -584,8 +421,7 @@ def get_contact_dict_for_account(account):
     """
     contacts_dict = {}
     for jid in app.contacts.get_jid_list(account):
-        contact = app.contacts.get_contact_with_highest_priority(account,
-                        jid)
+        contact = app.contacts.get_contact_with_highest_priority(account, jid)
         contacts_dict[jid] = contact
         name = contact.name
         if name in contacts_dict:
@@ -623,22 +459,25 @@ def check_soundfile_path(file_, dirs=None):
     if os.path.exists(file_):
         return file_
 
-    for d in dirs:
-        d = os.path.join(d, 'sounds', file_)
-        if os.path.exists(d):
-            return d
+    for dir_ in dirs:
+        dir_ = os.path.join(dir_, 'sounds', file_)
+        if os.path.exists(dir_):
+            return dir_
     return None
 
 def strip_soundfile_path(file_, dirs=None, abs_=True):
     """
     Remove knowns paths from a sound file
 
-    Filechooser returns absolute path. If path is a known fallback path, we remove it.
-    So config have no hardcoded path        to DATA_DIR and text in textfield is shorther.
-    param: file_: the filename to strip.
-    param: dirs: list of knowns paths from which the filename should be stripped.
-    param:  abs_: force absolute path on dirs
+    Filechooser returns an absolute path.
+    If path is a known fallback path, we remove it.
+    So config has no hardcoded path to DATA_DIR and text in textfield is
+    shorther.
+    param: file_: the filename to strip
+    param: dirs: list of knowns paths from which the filename should be stripped
+    param: abs_: force absolute path on dirs
     """
+
     if not file_:
         return None
 
@@ -647,11 +486,11 @@ def strip_soundfile_path(file_, dirs=None, abs_=True):
                 configpaths.get('DATA')]
 
     name = os.path.basename(file_)
-    for d in dirs:
-        d = os.path.join(d, 'sounds', name)
+    for dir_ in dirs:
+        dir_ = os.path.join(dir_, 'sounds', name)
         if abs_:
-            d = os.path.abspath(d)
-        if file_ == d:
+            dir_ = os.path.abspath(dir_)
+        if file_ == dir_:
             return name
     return file_
 
@@ -704,10 +543,10 @@ def get_global_show():
                                   'sync_with_global_status'):
             continue
         status = get_connection_status(account)
-        index = app.SHOW_LIST.index(status)
+        index = SHOW_LIST.index(status)
         if index > maxi:
             maxi = index
-    return app.SHOW_LIST[maxi]
+    return SHOW_LIST[maxi]
 
 def get_global_status_message():
     maxi = 0
@@ -716,12 +555,11 @@ def get_global_status_message():
                                   'sync_with_global_status'):
             continue
         status = app.connections[account].status
-        index = app.SHOW_LIST.index(status)
+        index = SHOW_LIST.index(status)
         if index > maxi:
             maxi = index
             status_message = app.connections[account].status_message
     return status_message
-
 
 def statuses_unified():
     """
@@ -744,8 +582,8 @@ def get_icon_name_to_show(contact, account=None):
     """
     if account and app.events.get_nb_roster_events(account, contact.jid):
         return 'event'
-    if account and app.events.get_nb_roster_events(
-        account, contact.get_full_jid()):
+    if account and app.events.get_nb_roster_events(account,
+                                                   contact.get_full_jid()):
         return 'event'
     if account and account in app.interface.minimized_controls and \
     contact.jid in app.interface.minimized_controls[account] and app.interface.\
@@ -764,7 +602,7 @@ def get_icon_name_to_show(contact, account=None):
     transport = app.get_transport_name_from_jid(contact.jid)
     if transport:
         return contact.show
-    if contact.show in app.SHOW_LIST:
+    if contact.show in SHOW_LIST:
         return contact.show
     return 'notinroster'
 
@@ -805,24 +643,23 @@ def get_random_string(count=16):
     allowed = string.ascii_uppercase + string.digits
     return ''.join(random.choice(allowed) for char in range(count))
 
+@functools.lru_cache(maxsize=1)
 def get_os_info():
-    if app.os_info:
-        return app.os_info
-    app.os_info = 'N/A'
-    if os.name == 'nt' or sys.platform == 'darwin':
-        import platform
-        app.os_info = platform.system() + " " + platform.release()
-    elif os.name == 'posix':
+    info = 'N/A'
+    if sys.platform in ('win32', 'darwin'):
+        info = f'{platform.system()} {platform.release()}'
+
+    elif sys.platform == 'linux':
         try:
             import distro
-            app.os_info = distro.name(pretty=True)
+            info = distro.name(pretty=True)
         except ImportError:
-            import platform
-            app.os_info = platform.system()
-    return app.os_info
+            info = platform.system()
+    return info
 
-def allow_showing_notification(account, type_='notify_on_new_message',
-is_first_message=True):
+def allow_showing_notification(account,
+                               type_='notify_on_new_message',
+                               is_first_message=True):
     """
     Is it allowed to show nofication?
 
@@ -832,9 +669,9 @@ is_first_message=True):
     """
     if type_ and (not app.config.get(type_) or not is_first_message):
         return False
-    if app.config.get('autopopupaway'): # always show notification
+    if app.config.get('autopopupaway'):
         return True
-    if app.connections[account].status in ('online', 'chat'): # we're online or chat
+    if app.connections[account].status in ('online', 'chat'):
         return True
     return False
 
@@ -845,7 +682,7 @@ def allow_popup_window(account):
     autopopup = app.config.get('autopopup')
     autopopupaway = app.config.get('autopopupaway')
     if autopopup and (autopopupaway or \
-    app.connections[account].status in ('online', 'chat')): # we're online or chat
+    app.connections[account].status in ('online', 'chat')):
         return True
     return False
 
@@ -856,35 +693,12 @@ def allow_sound_notification(account, sound_event):
         return True
     return False
 
-def get_chat_control(account, contact):
-    full_jid_with_resource = contact.jid
-    if contact.resource:
-        full_jid_with_resource += '/' + contact.resource
-    highest_contact = app.contacts.get_contact_with_highest_priority(
-        account, contact.jid)
-
-    # Look for a chat control that has the given resource, or default to
-    # one without resource
-    ctrl = app.interface.msg_win_mgr.get_control(full_jid_with_resource,
-            account)
-
-    if ctrl:
-        return ctrl
-
-    if (highest_contact and
-        highest_contact.resource and
-            contact.resource != highest_contact.resource):
-        return None
-
-    # unknown contact or offline message
-    return app.interface.msg_win_mgr.get_control(contact.jid, account)
-
 def get_notification_icon_tooltip_dict():
     """
     Return a dict of the form {acct: {'show': show, 'message': message,
     'event_lines': [list of text lines to show in tooltip]}
     """
-    # How many events must there be before they're shown summarized, not per-user
+    # How many events before we show summarized, not per-user
     max_ungrouped_events = 10
 
     accounts = get_accounts_info()
@@ -895,7 +709,8 @@ def get_notification_icon_tooltip_dict():
         account['event_lines'] = []
         # Gather events per-account
         pending_events = app.events.get_events(account=account_name)
-        messages, non_messages, total_messages, total_non_messages = {}, {}, 0, 0
+        messages, non_messages = {}, {}
+        total_messages, total_non_messages = 0, 0
         for jid in pending_events:
             for event in pending_events[jid]:
                 if event.type_.count('file') > 0:
@@ -909,19 +724,21 @@ def get_notification_icon_tooltip_dict():
         # Display unread messages numbers, if any
         if total_messages > 0:
             if total_messages > max_ungrouped_events:
-                text = ngettext(
-                        '%d message pending',
-                        '%d messages pending',
-                        total_messages, total_messages, total_messages)
+                text = ngettext('%d message pending',
+                                '%d messages pending',
+                                total_messages,
+                                total_messages,
+                                total_messages)
                 account['event_lines'].append(text)
             else:
                 for jid in messages:
-                    text = ngettext(
-                            '%d message pending',
-                            '%d messages pending',
-                            messages[jid], messages[jid], messages[jid])
+                    text = ngettext('%d message pending',
+                                    '%d messages pending',
+                                    messages[jid],
+                                    messages[jid],
+                                    messages[jid])
                     contact = app.contacts.get_first_contact_from_jid(
-                            account['name'], jid)
+                        account['name'], jid)
                     text += ' '
                     if jid in app.gc_connected[account['name']]:
                         text += _('from group chat %s') % (jid)
@@ -935,63 +752,23 @@ def get_notification_icon_tooltip_dict():
         # Display unseen events numbers, if any
         if total_non_messages > 0:
             if total_non_messages > max_ungrouped_events:
-                text = ngettext(
-                    '%d event pending',
-                    '%d events pending',
-                    total_non_messages, total_non_messages, total_non_messages)
+                text = ngettext('%d event pending',
+                                '%d events pending',
+                                total_non_messages,
+                                total_non_messages,
+                                total_non_messages)
                 account['event_lines'].append(text)
             else:
                 for jid in non_messages:
-                    text = ngettext('%d event pending', '%d events pending',
-                        non_messages[jid], non_messages[jid], non_messages[jid])
+                    text = ngettext('%d event pending',
+                                    '%d events pending',
+                                    non_messages[jid],
+                                    non_messages[jid],
+                                    non_messages[jid])
                     text += ' ' + _('from user %s') % (jid)
                     account[account]['event_lines'].append(text)
 
     return accounts
-
-def get_notification_icon_tooltip_text():
-    text = None
-    # How many events must there be before they're shown summarized, not per-user
-    # max_ungrouped_events = 10
-    # Character which should be used to indent in the tooltip.
-    indent_with = ' '
-
-    accounts = get_notification_icon_tooltip_dict()
-
-    if not accounts:
-        # No configured account
-        return _('Gajim')
-
-    # at least one account present
-
-    # Is there more that one account?
-    if len(accounts) == 1:
-        show_more_accounts = False
-    else:
-        show_more_accounts = True
-
-    # If there is only one account, its status is shown on the first line.
-    if show_more_accounts:
-        text = _('Gajim')
-    else:
-        text = _('Gajim - %s') % (get_account_status(accounts[0]))
-
-    # Gather and display events. (With accounts, when there are more.)
-    for account in accounts:
-        account_name = account['name']
-        # Set account status, if not set above
-        if show_more_accounts:
-            message = '\n' + indent_with + ' %s - %s'
-            text += message % (account_name, get_account_status(account))
-            # Account list shown, messages need to be indented more
-            indent_how = 2
-        else:
-            # If no account list is shown, messages could have default indenting.
-            indent_how = 1
-        for line in account['event_lines']:
-            text += '\n' + indent_with * indent_how + ' '
-            text += line
-    return text
 
 def get_accounts_info():
     """
@@ -1000,7 +777,8 @@ def get_accounts_info():
     accounts = []
     accounts_list = sorted(app.contacts.get_accounts())
     for account in accounts_list:
-        status = app.connections[account].status
+
+        status = get_connection_status(account)
         message = app.connections[account].status_message
         single_line = get_uf_show(status)
         if message is None:
@@ -1025,24 +803,24 @@ def get_current_show(account):
 def get_optional_features(account):
     features = []
     if app.config.get_per('accounts', account, 'subscribe_mood'):
-        features.append(nbxmpp.NS_MOOD + '+notify')
+        features.append(Namespace.MOOD + '+notify')
     if app.config.get_per('accounts', account, 'subscribe_activity'):
-        features.append(nbxmpp.NS_ACTIVITY + '+notify')
+        features.append(Namespace.ACTIVITY + '+notify')
     if app.config.get_per('accounts', account, 'subscribe_tune'):
-        features.append(nbxmpp.NS_TUNE + '+notify')
+        features.append(Namespace.TUNE + '+notify')
     if app.config.get_per('accounts', account, 'subscribe_nick'):
-        features.append(nbxmpp.NS_NICK + '+notify')
+        features.append(Namespace.NICK + '+notify')
     if app.config.get_per('accounts', account, 'subscribe_location'):
-        features.append(nbxmpp.NS_LOCATION + '+notify')
+        features.append(Namespace.LOCATION + '+notify')
     if app.connections[account].get_module('Bookmarks').using_bookmark_2:
-        features.append(nbxmpp.NS_BOOKMARKS_2 + '+notify')
+        features.append(Namespace.BOOKMARKS_2 + '+notify')
     elif app.connections[account].get_module('Bookmarks').using_bookmark_1:
-        features.append(nbxmpp.NS_BOOKMARKS + '+notify')
+        features.append(Namespace.BOOKMARKS + '+notify')
     if app.is_installed('AV'):
-        features.append(nbxmpp.NS_JINGLE_RTP)
-        features.append(nbxmpp.NS_JINGLE_RTP_AUDIO)
-        features.append(nbxmpp.NS_JINGLE_RTP_VIDEO)
-        features.append(nbxmpp.NS_JINGLE_ICE_UDP)
+        features.append(Namespace.JINGLE_RTP)
+        features.append(Namespace.JINGLE_RTP_AUDIO)
+        features.append(Namespace.JINGLE_RTP_VIDEO)
+        features.append(Namespace.JINGLE_ICE_UDP)
 
     # Give plugins the possibility to add their features
     app.plugin_manager.extension_point('update_caps', account, features)
@@ -1050,14 +828,7 @@ def get_optional_features(account):
 
 def jid_is_blocked(account, jid):
     con = app.connections[account]
-    return (jid in con.get_module('Blocking').blocked or
-            jid in con.get_module('PrivacyLists').blocked_contacts or
-            con.get_module('PrivacyLists').blocked_all)
-
-def group_is_blocked(account, group):
-    con = app.connections[account]
-    return (group in con.get_module('PrivacyLists').blocked_groups or
-            con.get_module('PrivacyLists').blocked_all)
+    return jid in con.get_module('Blocking').blocked
 
 def get_subscription_request_msg(account=None):
     s = app.config.get_per('accounts', account, 'subscription_request_msg')
@@ -1074,20 +845,6 @@ def get_subscription_request_msg(account=None):
             name = nick
         s = Template(s).safe_substitute({'name': name})
         return s
-
-def replace_dataform_media(form, stanza):
-    found = False
-    for field in form.getTags('field'):
-        for media in field.getTags('media'):
-            for uri in media.getTags('uri'):
-                uri_data = uri.getData()
-                if uri_data.startswith('cid:'):
-                    uri_data = uri_data[4:]
-                    for data in stanza.getTags('data', namespace=nbxmpp.NS_BOB):
-                        if data.getAttr('cid') == uri_data:
-                            uri.setData(data.getData())
-                            found = True
-    return found
 
 def get_user_proxy(account):
     proxy_name = app.config.get_per('accounts', account, 'proxy')
@@ -1108,133 +865,6 @@ def get_proxy(proxy_name):
                      host='%s:%s' % (proxy['host'], proxy['port']),
                      username=username,
                      password=password)
-
-def get_proxy_info(account):
-    p = app.config.get_per('accounts', account, 'proxy')
-    if not p:
-        p = app.config.get('global_proxy')
-    if p and p in app.config.get_per('proxies'):
-        proxy = {}
-        proxyptr = app.config.get_per('proxies', p)
-        if not proxyptr:
-            return proxy
-        for key in proxyptr.keys():
-            proxy[key] = proxyptr[key]
-        return proxy
-
-def _get_img_direct(attrs):
-    """
-    Download an image. This function should be launched in a separated thread.
-    """
-    mem = b''
-    alt = ''
-    max_size = 2*1024*1024
-    if 'max_size' in attrs:
-        max_size = attrs['max_size']
-    # Wait maximum 10s for connection
-    socket.setdefaulttimeout(10)
-    try:
-        req = urllib.request.Request(attrs['src'])
-        req.add_header('User-Agent', 'Gajim ' + app.version)
-        f = urllib.request.urlopen(req)
-    except Exception as ex:
-        log.debug('Error loading image %s ', attrs['src']  + str(ex))
-        alt = attrs.get('alt', 'Broken image')
-    else:
-        # Wait 2s between each byte
-        try:
-            f.fp._sock.fp._sock.settimeout(2)
-        except Exception:
-            pass
-        # On a slow internet connection with ~1000kbps you need ~10 seconds for 1 MB
-        deadline = time.time() + (10 * (max_size / 1048576))
-        while True:
-            if time.time() > deadline:
-                log.debug('Timeout loading image %s ', attrs['src'])
-                mem = ''
-                alt = attrs.get('alt', '')
-                if alt:
-                    alt += '\n'
-                alt += _('Timeout loading image')
-                break
-            try:
-                temp = f.read(100)
-            except socket.timeout as ex:
-                log.debug('Timeout loading image %s ', attrs['src'] + str(ex))
-                alt = attrs.get('alt', '')
-                if alt:
-                    alt += '\n'
-                alt += _('Timeout loading image')
-                break
-            if temp:
-                mem += temp
-            else:
-                break
-            if len(mem) > max_size:
-                alt = attrs.get('alt', '')
-                if alt:
-                    alt += '\n'
-                alt += _('Image is too big')
-                break
-        f.close()
-    return (mem, alt)
-
-def _get_img_proxy(attrs, proxy):
-    """
-    Download an image through a proxy. This function should be launched in a
-    separated thread.
-    """
-    if not app.is_installed('PYCURL'):
-        return '', _('PyCURL is not installed')
-    alt, max_size = '', 2*1024*1024
-    if 'max_size' in attrs:
-        max_size = attrs['max_size']
-    try:
-        b = StringIO()
-        c = pycurl.Curl()
-        c.setopt(pycurl.URL, attrs['src'].encode('utf-8'))
-        c.setopt(pycurl.FOLLOWLOCATION, 1)
-        # Wait maximum 10s for connection
-        c.setopt(pycurl.CONNECTTIMEOUT, 10)
-        # On a slow internet connection with ~1000kbps you need ~10 seconds for 1 MB
-        c.setopt(pycurl.TIMEOUT, 10 * (max_size / 1048576))
-        c.setopt(pycurl.MAXFILESIZE, max_size)
-        c.setopt(pycurl.WRITEFUNCTION, b.write)
-        c.setopt(pycurl.USERAGENT, 'Gajim ' + app.version)
-        # set proxy
-        c.setopt(pycurl.PROXY, proxy['host'].encode('utf-8'))
-        c.setopt(pycurl.PROXYPORT, proxy['port'])
-        if proxy['useauth']:
-            c.setopt(pycurl.PROXYUSERPWD, proxy['user'].encode('utf-8')\
-                + ':' + proxy['pass'].encode('utf-8'))
-            c.setopt(pycurl.PROXYAUTH, pycurl.HTTPAUTH_ANY)
-        if proxy['type'] == 'http':
-            c.setopt(pycurl.PROXYTYPE, pycurl.PROXYTYPE_HTTP)
-        elif proxy['type'] == 'socks5':
-            c.setopt(pycurl.PROXYTYPE, pycurl.PROXYTYPE_SOCKS5)
-        c.close()
-        t = b.getvalue()
-        return (t, attrs.get('alt', ''))
-    except pycurl.error as ex:
-        alt = attrs.get('alt', '')
-        if alt:
-            alt += '\n'
-        if ex.errno == pycurl.E_FILESIZE_EXCEEDED:
-            alt += _('Image is too big')
-        elif ex.errno == pycurl.E_OPERATION_TIMEOUTED:
-            alt += _('Timeout loading image')
-        else:
-            alt += _('Error loading image')
-    except Exception as ex:
-        log.debug('Error loading image %s ', attrs['src']  + str(ex))
-        alt = attrs.get('alt', 'Broken image')
-    return ('', alt)
-
-def download_image(account, attrs):
-    proxy = get_proxy_info(account)
-    if proxy and proxy['type'] in ('http', 'socks5'):
-        return _get_img_proxy(attrs, proxy)
-    return _get_img_direct(attrs)
 
 def version_condition(current_version, required_version):
     if V(current_version) < V(required_version):
@@ -1620,6 +1250,7 @@ def get_alternative_venue(error):
         uri = parse_uri(error.condition_data)
         if uri.type == URIType.XMPP and uri.action == URIAction.JOIN:
             return uri.data['jid']
+    return None
 
 
 def is_affiliation_change_allowed(self_contact, contact, target_aff):
@@ -1634,7 +1265,7 @@ def is_affiliation_change_allowed(self_contact, contact, target_aff):
         return False
 
     if target_aff in ('admin', 'owner'):
-        # Admin cant edit admin/owner list
+        # Admin can’t edit admin/owner list
         return False
     return self_contact.affiliation > contact.affiliation
 
@@ -1771,7 +1402,35 @@ def warn_about_plain_connection(account, connection_types):
     return False
 
 
-def get_ignored_ssl_errors(account):
+def get_ignored_tls_errors(account):
     ignore_ssl_errors = app.config.get_per(
         'accounts', account, 'ignore_ssl_errors').split()
     return {Gio.TlsCertificateFlags(int(err)) for err in ignore_ssl_errors}
+
+
+def get_idle_status_message(state, status_message):
+    message = app.config.get(f'auto{state}_message')
+    if not message:
+        message = status_message
+    else:
+        message = message.replace('$S', '%(status)s')
+        message = message.replace('$T', '%(time)s')
+        message = message % {
+            'status': status_message,
+            'time': app.config.get(f'auto{state}time')
+        }
+    return message
+
+
+def should_log(account, jid):
+    """
+    Should conversations between a local account and a remote jid be logged?
+    """
+    no_log_for = app.config.get_per('accounts', account, 'no_log_for')
+
+    if not no_log_for:
+        no_log_for = ''
+
+    no_log_for = no_log_for.split()
+
+    return (account not in no_log_for) and (jid not in no_log_for)

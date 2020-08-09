@@ -3,13 +3,15 @@ from collections import namedtuple
 
 from gi.repository import Gio
 
-import nbxmpp
+from nbxmpp.namespaces import Namespace
 
 from gajim.common.i18n import _
 from gajim.common.i18n import Q_
 
 EncryptionData = namedtuple('EncryptionData', 'additional_data')
 EncryptionData.__new__.__defaults__ = (None,)  # type: ignore
+
+Entity = namedtuple('Entity', 'jid node hash method')
 
 
 class AvatarSize(IntEnum):
@@ -118,11 +120,11 @@ class ButtonAction(Enum):
     SUGGESTED = 'suggested-action'
 
 @unique
-class IdleState(IntEnum):
-    UNKNOWN = 0
-    XA = 1
-    AWAY = 2
-    AWAKE = 3
+class IdleState(Enum):
+    UNKNOWN = 'unknown'
+    XA = 'xa'
+    AWAY = 'away'
+    AWAKE = 'online'
 
 
 @unique
@@ -215,6 +217,30 @@ class MUCJoinedState(Enum):
 
     def __str__(self):
         return self.name
+
+    @property
+    def is_joined(self):
+        return self == MUCJoinedState.JOINED
+
+    @property
+    def is_not_joined(self):
+        return self == MUCJoinedState.NOT_JOINED
+
+    @property
+    def is_joining(self):
+        return self == MUCJoinedState.JOINING
+
+    @property
+    def is_creating(self):
+        return self == MUCJoinedState.CREATING
+
+    @property
+    def is_captcha_request(self):
+        return self == MUCJoinedState.CAPTCHA_REQUEST
+
+    @property
+    def is_captcha_failed(self):
+        return self == MUCJoinedState.CAPTCHA_FAILED
 
 
 class ClientState(IntEnum):
@@ -601,6 +627,8 @@ Jakub Szypulka
 DEVS_CURRENT = u"""\
 Yann Leboulanger (asterix AT lagaule.org)
 Philipp Hörist (philipp AT hoerist.com)
+Daniel Brötzmann (wurstsalat AT posteo.de)
+André Apitzsch
 """.strip().split("\n")
 
 DEVS_PAST = u"""\
@@ -920,37 +948,49 @@ SASL_ERRORS = {
 
 
 COMMON_FEATURES = [
-    nbxmpp.NS_BYTESTREAM,
-    nbxmpp.NS_MUC,
-    nbxmpp.NS_COMMANDS,
-    nbxmpp.NS_DISCO_INFO,
-    nbxmpp.NS_LAST,
-    nbxmpp.NS_DATA,
-    nbxmpp.NS_ENCRYPTED,
-    nbxmpp.NS_PING,
-    nbxmpp.NS_CHATSTATES,
-    nbxmpp.NS_RECEIPTS,
-    nbxmpp.NS_TIME_REVISED,
-    nbxmpp.NS_VERSION,
-    nbxmpp.NS_ROSTERX,
-    nbxmpp.NS_SECLABEL,
-    nbxmpp.NS_CONFERENCE,
-    nbxmpp.NS_CORRECT,
-    nbxmpp.NS_EME,
-    nbxmpp.NS_XHTML_IM,
-    nbxmpp.NS_HASHES_2,
-    nbxmpp.NS_HASHES_MD5,
-    nbxmpp.NS_HASHES_SHA1,
-    nbxmpp.NS_HASHES_SHA256,
-    nbxmpp.NS_HASHES_SHA512,
-    nbxmpp.NS_HASHES_SHA3_256,
-    nbxmpp.NS_HASHES_SHA3_512,
-    nbxmpp.NS_HASHES_BLAKE2B_256,
-    nbxmpp.NS_HASHES_BLAKE2B_512,
-    nbxmpp.NS_JINGLE,
-    nbxmpp.NS_JINGLE_FILE_TRANSFER_5,
-    nbxmpp.NS_JINGLE_XTLS,
-    nbxmpp.NS_JINGLE_BYTESTREAM,
-    nbxmpp.NS_JINGLE_IBB,
-    nbxmpp.NS_AVATAR_METADATA + '+notify',
+    Namespace.BYTESTREAM,
+    Namespace.MUC,
+    Namespace.COMMANDS,
+    Namespace.DISCO_INFO,
+    Namespace.LAST,
+    Namespace.DATA,
+    Namespace.ENCRYPTED,
+    Namespace.PING,
+    Namespace.CHATSTATES,
+    Namespace.RECEIPTS,
+    Namespace.TIME_REVISED,
+    Namespace.VERSION,
+    Namespace.ROSTERX,
+    Namespace.SECLABEL,
+    Namespace.CONFERENCE,
+    Namespace.CORRECT,
+    Namespace.EME,
+    Namespace.XHTML_IM,
+    Namespace.HASHES_2,
+    Namespace.HASHES_MD5,
+    Namespace.HASHES_SHA1,
+    Namespace.HASHES_SHA256,
+    Namespace.HASHES_SHA512,
+    Namespace.HASHES_SHA3_256,
+    Namespace.HASHES_SHA3_512,
+    Namespace.HASHES_BLAKE2B_256,
+    Namespace.HASHES_BLAKE2B_512,
+    Namespace.JINGLE,
+    Namespace.JINGLE_FILE_TRANSFER_5,
+    Namespace.JINGLE_XTLS,
+    Namespace.JINGLE_BYTESTREAM,
+    Namespace.JINGLE_IBB,
+    Namespace.AVATAR_METADATA + '+notify',
+]
+
+
+SHOW_LIST = [
+    'offline',
+    'connecting',
+    'online',
+    'chat',
+    'away',
+    'xa',
+    'dnd',
+    'error'
 ]

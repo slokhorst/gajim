@@ -61,7 +61,6 @@ import sys
 import os
 from io import StringIO
 from functools import reduce
-from pkg_resources import parse_version
 
 from gi.repository import Gtk
 from gi.repository import Gdk
@@ -102,7 +101,7 @@ class IterableIPShell:
     @ivar history_level: The place in history where we currently are
     when pressing up/down.
     @type history_level: integer
-    @ivar complete_sep: Seperation delimeters for completion function.
+    @ivar complete_sep: Separation delimiters for completion function.
     @type complete_sep: _sre.SRE_Pattern
     """
     def __init__(self, argv=None, user_ns=None, user_global_ns=None, cin=None,
@@ -131,7 +130,7 @@ class IterableIPShell:
             IPython.terminal.interactiveshell.raw_input_original = input_func
 
 
-        # This is to get rid of the blockage that accurs during
+        # This is to get rid of the blockage that occurs during
         # IPython.Shell.InteractiveShell.user_setup()
         io.raw_input = lambda x: None
 
@@ -170,12 +169,6 @@ class IterableIPShell:
         # Workaround for updating namespace with sys.modules
         #
         self.__update_namespace()
-
-        # Avoid using input splitter when not really needed.
-        # Perhaps it could work even before 5.8.0
-        # But it definitely does not work any more with >= 7.0.0
-        self.no_input_splitter = parse_version(IPython.release.version) >= \
-            parse_version('5.8.0')
         self.lines = []
 
     def __update_namespace(self):
@@ -208,28 +201,21 @@ class IterableIPShell:
                 self.IP.rl_do_indent = True
 
         try:
-            line = self.IP.raw_input(self.prompt)
+            self.IP.raw_input(self.prompt)
         except KeyboardInterrupt:
             self.IP.write('\nKeyboardInterrupt\n')
             self.IP.input_splitter.reset()
         except Exception:
             self.IP.showtraceback()
         else:
-            if self.no_input_splitter:
-                self.lines.append(self.IP.raw_input(self.prompt))
-                self.iter_more = self.IP.check_complete(
-                    '\n'.join(self.lines))[0] == 'incomplete'
-            else:
-                self.IP.input_splitter.push(line)
-                self.iter_more = self.IP.input_splitter.push_accepts_more()
+            self.lines.append(self.IP.raw_input(self.prompt))
+            self.iter_more = self.IP.check_complete(
+                '\n'.join(self.lines))[0] == 'incomplete'
 
             self.prompt = self.generatePrompt(self.iter_more)
             if not self.iter_more:
-                if self.no_input_splitter:
-                    source_raw = '\n'.join(self.lines)
-                    self.lines = []
-                else:
-                    source_raw = self.IP.input_splitter.raw_reset()
+                source_raw = '\n'.join(self.lines)
+                self.lines = []
 
                 self.IP.run_cell(source_raw, store_history=True)
                 self.IP.rl_do_indent = False
@@ -621,7 +607,7 @@ class IPythonView(ConsoleView, IterableIPShell):
 
     def raw_input(self, _prompt=''):
         """
-        Custom raw_input() replacement. Get's current line from console buffer
+        Custom raw_input() replacement. Gets current line from console buffer
 
         @param prompt: Prompt to print. Here for compatibility as replacement.
         @type prompt: string

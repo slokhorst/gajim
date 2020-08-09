@@ -98,7 +98,7 @@ class Server:
 
         result = getattr(self, method_name)(*args)
 
-        # out_args is atleast (signature1). We therefore always wrap the result
+        # out_args is at least (signature1). We therefore always wrap the result
         # as a tuple. Refer to https://bugzilla.gnome.org/show_bug.cgi?id=765603
         result = (result, )
 
@@ -163,20 +163,6 @@ class GajimRemote(Server):
                 <arg name='jid' type='s' />
                 <arg name='account' type='s' />
                 <arg name='message' type='s' />
-                <arg direction='out' type='b' />
-            </method>
-            <method name='prefs_del'>
-                <arg name='key' type='s' />
-                <arg direction='out' type='b' />
-            </method>
-            <method name='prefs_list'>
-                <arg direction='out' type='a{ss}' />
-            </method>
-            <method name='prefs_put'>
-                <arg name='key' type='s' />
-                <arg direction='out' type='b' />
-            </method>
-            <method name='prefs_store'>
                 <arg direction='out' type='b' />
             </method>
             <method name='remove_contact'>
@@ -382,8 +368,8 @@ class GajimRemote(Server):
             event_type, obj.properties.subject,
             obj.msg_log_id, obj.properties.nickname]))
 
-    def on_our_status(self, obj):
-        self.raise_signal('AccountPresence', (obj.show, obj.conn.name))
+    def on_our_status(self, event):
+        self.raise_signal('AccountPresence', (event.show, event.account))
 
     def on_account_created(self, obj):
         self.raise_signal('NewAccount', (obj.conn.name, obj.account_info))
@@ -739,53 +725,6 @@ class GajimRemote(Server):
                         result.append(item)
         return result
 
-    def prefs_list(self):
-        prefs_dict = {}
-
-        def get_prefs(data, name, path, value):
-            if value is None:
-                return
-            key = ''
-            if path is not None:
-                for node in path:
-                    key += node + '#'
-            key += name
-            prefs_dict[key] = str(value)
-
-        app.config.foreach(get_prefs)
-        return prefs_dict
-
-    def prefs_store(self):
-        try:
-            app.interface.save_config()
-        except Exception:
-            return False
-        return True
-
-    def prefs_del(self, key):
-        if not key:
-            return False
-        key_path = key.split('#', 2)
-        if len(key_path) != 3:
-            return False
-        if key_path[2] == '*':
-            app.config.del_per(key_path[0], key_path[1])
-        else:
-            app.config.del_per(key_path[0], key_path[1], key_path[2])
-        return True
-
-    def prefs_put(self, key):
-        if not key:
-            return False
-        key_path = key.split('#', 2)
-        if len(key_path) < 3:
-            subname, value = key.split('=', 1)
-            app.config.set(subname, value)
-            return True
-        subname, value = key_path[2].split('=', 1)
-        app.config.set_per(key_path[0], key_path[1], subname, value)
-        return True
-
     def add_contact(self, jid, account):
         if account:
             if app.account_is_available(account):
@@ -884,8 +823,12 @@ class GajimRemote(Server):
     def get_unread_msgs_number(self):
         unread = app.events.get_nb_events()
         for event in app.events.get_all_events(['printed_gc_msg']):
-            if not app.config.notify_for_muc(event.jid):
+            contact = app.contacts.get_groupchat_contact(event.account,
+                                                         event.jid)
+            if contact is None or not contact.can_notify():
                 unread -= 1
+                continue
+
         return str(unread)
 
     def start_chat(self, jid=''):

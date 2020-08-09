@@ -27,7 +27,9 @@ from typing import List
 
 import logging
 import functools
+from pathlib import Path
 
+from gajim.common import configpaths
 from gajim.plugins import plugins_i18n
 from gajim.gtk.util import Builder
 
@@ -51,8 +53,8 @@ class log_calls:
     filter_out_classes = ['GajimPluginConfig', 'PluginManager',
                           'GajimPluginConfigDialog', 'PluginsWindow']
     '''
-    List of classes from which no logs should be emited when methods are called,
-    even though `log_calls` decorator is used.
+    List of classes from which no logs should be emitted when methods are
+    called, even though `log_calls` decorator is used.
     '''
 
     def __init__(self, classname=''):
@@ -121,3 +123,11 @@ def get_builder(file_name: str, widgets: List[str] = None) -> Builder:
                    widgets,
                    domain=plugins_i18n.DOMAIN,
                    gettext_=plugins_i18n._)
+
+
+def is_shipped_plugin(path):
+    base = Path(configpaths.get('PLUGINS_BASE'))
+    if not base.exists():
+        return False
+    plugin_parent = Path(path).parent
+    return base.samefile(plugin_parent)

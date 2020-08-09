@@ -54,9 +54,6 @@ opt_int = ['integer', 0]
 opt_str = ['string', 0]
 opt_bool = ['boolean', 0]
 opt_color = ['color', r'(#[0-9a-fA-F]{6})|rgb\(\d+,\d+,\d+\)|rgba\(\d+,\d+,\d+,[01]\.?\d*\)']
-opt_one_window_types = ['never', 'always', 'always_with_roster', 'peracct', 'pertype']
-opt_show_roster_on_startup = ['always', 'never', 'last_state']
-opt_treat_incoming_messages = ['', 'chat', 'normal']
 
 
 class Config:
@@ -90,17 +87,8 @@ class Config:
         'allow_hide_roster': [opt_bool, False, _('Allow to hide the contact list window even if the notification area icon is not shown.'), False],
         'iconset': [opt_str, DEFAULT_ICONSET, '', True],
         'use_transports_iconsets': [opt_bool, True, '', True],
-        'notif_signin_color': [opt_color, '#32CD32', _('Notification color for contacts signing in.')], # limegreen
-        'notif_signout_color': [opt_color, '#FF0000', _('Notification color for contacts signing out.')], # red
-        'notif_message_color': [opt_color, '#1E90FF', _('Notification color for new message notification.')], # dodgerblue
-        'notif_ftrequest_color': [opt_color, '#F0E68C', _('Notification color for file transfer request.')], # khaki
-        'notif_fterror_color': [opt_color, '#B22222', _('Notification color for file transfer errors.')], # firebrick
-        'notif_ftcomplete_color': [opt_color, '#9ACD32', _('Notification color for stopped or completed file transfers.')], # yellowgreen
-        'notif_invite_color': [opt_color, '#D2B48C', _('Notification color for group chat invitations.')], # tan1
-        'notif_status_color': [opt_color, '#D8BFD8', _('Notification background color for changed status.')], # thistle2
-        'notif_other_color': [opt_color, '#FFFFFF', _('Notification color for other dialogs.')], # white
         'collapsed_rows': [opt_str, '', _('List of rows (accounts and groups) that are collapsed (space separated).'), True],
-        'roster_theme': [opt_str, _('default'), '', True],
+        'roster_theme': [opt_str, 'default', '', True],
         'mergeaccounts': [opt_bool, False, '', True],
         'sort_by_show_in_roster': [opt_bool, True, '', True],
         'sort_by_show_in_muc': [opt_bool, False, '', True],
@@ -116,7 +104,6 @@ class Config:
                 'remove */_ . So *abc* will be bold but with * * not removed.')],
         'sounds_on': [opt_bool, True],
         'gc_refer_to_nick_char': [opt_str, ',', _('Character to add after nickname when using nickname completion (tab) in group chat.')],
-        'gc_proposed_nick_char': [opt_str, '_', _('Character to propose to add after desired nickname when nickname is already used in group chat.')],
         'msgwin-max-state': [opt_bool, False],
         'msgwin-x-position': [opt_int, -1], # Default is to let the window manager decide
         'msgwin-y-position': [opt_int, -1], # Default is to let the window manager decide
@@ -156,7 +143,6 @@ class Config:
         'change_roster_title': [opt_bool, True, _('If enabled, Gajim will add * and [n] in contact list window title.')],
         'restore_lines': [opt_int, 10, _('Number of messages from chat history to be restored when a chat tab/window is reopened.')],
         'restore_timeout': [opt_int, -1, _('How far back in time (minutes) chat history is restored. -1 means no limit.')],
-        'muc_autorejoin_timeout': [opt_int, 1, _('How many seconds to wait before trying to automatically rejoin a group chat you were disconnected from. Set to 0 to disable automatic rejoining.')],
         'send_on_ctrl_enter': [opt_bool, False, _('Send message on Ctrl+Enter and make a new line with Enter.')],
         'last_roster_visible': [opt_bool, True],
         'key_up_lines': [opt_int, 25, _('How many lines to store for Ctrl+KeyUP (previously sent messages).')],
@@ -179,29 +165,16 @@ class Config:
         'last_save_dir': [opt_str, ''],
         'last_send_dir': [opt_str, ''],
         'last_sounds_dir': [opt_str, ''],
-        'tabs_position': [opt_str, 'top'],
+        'tabs_position': [opt_str, 'left'],
         'tabs_always_visible': [opt_bool, False, _('Show tab when only one conversation?')],
         'tabs_border': [opt_bool, False, _('Show tabbed notebook border in chat windows?')],
         'tabs_close_button': [opt_bool, True, _('Show close button in tab?')],
-        'tooltip_status_online_color': [opt_color, '#73D216'],
-        'tooltip_status_free_for_chat_color': [opt_color, '#3465A4'],
-        'tooltip_status_away_color': [opt_color, '#EDD400'],
-        'tooltip_status_busy_color': [opt_color, '#F57900'],
-        'tooltip_status_na_color': [opt_color, '#CC0000'],
-        'tooltip_status_offline_color': [opt_color, '#555753'],
-        'tooltip_affiliation_none_color': [opt_color, '#555753'],
-        'tooltip_affiliation_member_color': [opt_color, '#73D216'],
-        'tooltip_affiliation_administrator_color': [opt_color, '#F57900'],
-        'tooltip_affiliation_owner_color': [opt_color, '#CC0000'],
-        'tooltip_account_name_color': [opt_color, '#888A85'],
-        'tooltip_idle_color': [opt_color, '#888A85'],
         'notification_preview_message': [opt_bool, True, _('Preview new messages in notification popup?')],
         'notification_position_x': [opt_int, -1],
         'notification_position_y': [opt_int, -1],
         'muc_highlight_words': [opt_str, '', _('A list of words (semicolon separated) that will be highlighted in group chats.')],
         'quit_on_roster_x_button': [opt_bool, False, _('If enabled, Gajim quits when clicking the X button of your Window Manager. This setting is taken into account only if the notification area icon is used.')],
         'hide_on_roster_x_button': [opt_bool, False, _('If enabled, Gajim hides the contact list window when pressing the X button instead of minimizing into the notification area.')],
-        'show_unread_tab_icon': [opt_bool, False, _('If enabled, Gajim will display an icon on each tab containing unread messages. Depending on the theme, this icon may be animated.')],
         'show_status_msgs_in_roster': [opt_bool, True, _('If enabled, Gajim will display the status message (if not empty) underneath the contact name in the contact list window.'), True],
         'show_avatars_in_roster': [opt_bool, True, '', True],
         'show_mood_in_roster': [opt_bool, True, '', True],
@@ -235,8 +208,7 @@ class Config:
         'scroll_roster_to_last_message': [opt_bool, True, _('If enabled, Gajim will scroll and select the contact who sent you the last message, if the chat window is not already opened.')],
         'change_status_window_timeout': [opt_int, 15, _('Time of inactivity needed before the change status window closes down.')],
         'max_conversation_lines': [opt_int, 500, _('Maximum number of lines that are printed in conversations. Oldest lines are cleared.')],
-        'check_idle_every_foo_seconds': [opt_int, 2, _('Choose interval between 2 checks of idleness.')],
-        'uri_schemes': [opt_str, 'aaa:// aaas:// acap:// cap:// cid: crid:// data: dav: dict:// dns: fax: file:/ ftp:// geo: go: gopher:// h323: http:// https:// iax: icap:// im: imap:// info: ipp:// iris: iris.beep: iris.xpc: iris.xpcs: iris.lwz: ldap:// mid: modem: msrp:// msrps:// mtqp:// mupdate:// news: nfs:// nntp:// opaquelocktoken: pop:// pres: prospero:// rtsp:// service: shttp:// sip: sips: sms: snmp:// soap.beep:// soap.beeps:// tag: tel: telnet:// tftp:// thismessage:/ tip:// tv: urn:// vemmi:// xmlrpc.beep:// xmlrpc.beeps:// z39.50r:// z39.50s:// about: apt: cvs:// daap:// ed2k:// feed: fish:// git:// iax2: irc:// ircs:// ldaps:// magnet: mms:// rsync:// ssh:// svn:// sftp:// smb:// webcal:// aesgcm://', _('Valid URI schemes. Only schemes in this list will be accepted as \'real\' URI (mailto and xmpp are handled separately).'), True],
+        'uri_schemes': [opt_str, 'aaa:// aaas:// acap:// cap:// cid: crid:// data: dav: dict:// dns: fax: file:/ ftp:// geo: go: gopher:// h323: http:// https:// iax: icap:// im: imap:// info: ipp:// iris: iris.beep: iris.xpc: iris.xpcs: iris.lwz: ldap:// mid: modem: msrp:// msrps:// mtqp:// mupdate:// news: nfs:// nntp:// opaquelocktoken: pop:// pres: prospero:// rtsp:// service: sip: sips: sms: snmp:// soap.beep:// soap.beeps:// tag: tel: telnet:// tftp:// thismessage:/ tip:// tv: urn:// vemmi:// xmlrpc.beep:// xmlrpc.beeps:// z39.50r:// z39.50s:// about: apt: cvs:// daap:// ed2k:// feed: fish:// git:// iax2: irc:// ircs:// ldaps:// magnet: mms:// rsync:// ssh:// svn:// sftp:// smb:// webcal:// aesgcm://', _('Valid URI schemes. Only schemes in this list will be accepted as \'real\' URI (mailto and xmpp are handled separately).'), True],
         'shell_like_completion': [opt_bool, False, _('If enabled, completion in group chats will be like a shell auto-completion.')],
         'audio_input_device': [opt_str, 'autoaudiosrc ! volume name=gajim_vol'],
         'audio_output_device': [opt_str, 'autoaudiosink'],
@@ -248,12 +220,10 @@ class Config:
         'audio_output_volume': [opt_int, 50],
         'use_stun_server': [opt_bool, False, _('If enabled, Gajim will try to use a STUN server when using Jingle. The one in \'stun_server\' option, or the one given by the XMPP server.')],
         'stun_server': [opt_str, '', _('STUN server to use when using Jingle')],
-        'show_affiliation_in_groupchat': [opt_bool, True, _('If enabled, Gajim will show affiliation of group chat participants by adding a colored square to the status icon.')],
         'global_proxy': [opt_str, '', _('Proxy used for all outgoing connections if the account does not have a specific proxy configured.')],
         'ignore_incoming_attention': [opt_bool, False, _('If enabled, Gajim will ignore incoming attention requests (\'wizz\').')],
         'remember_opened_chat_controls': [opt_bool, True, _('If enabled, Gajim will reopen chat windows that were opened last time Gajim was closed.')],
         'positive_184_ack': [opt_bool, False, _('If enabled, Gajim will display an icon to show that sent messages have been received by your contact.')],
-        'show_avatar_in_tabs': [opt_bool, False, _('Show a mini avatar in chat window tabs and as the window\'s icon.')],
         'use_keyring': [opt_bool, True, _('If enabled, Gajim will use the System\'s Keyring to store account passwords.')],
         'remote_commands': [opt_bool, False, _('If enabled, Gajim will execute XEP-0146 Commands.')],
         'dark_theme': [opt_int, 2, _('2: System, 1: Enabled, 0: Disabled')],
@@ -273,12 +243,16 @@ class Config:
         'command_system_execute': [opt_bool, False, _('If enabled, Gajim will execute commands (/show, /sh, /execute, /exec).')],
         'groupchat_roster_width': [opt_int, 210, _('Width of group chat roster in pixel')],
         'dev_force_bookmark_2': [opt_bool, False, _('Force Bookmark 2 usage')],
+        'show_help_start_chat': [opt_bool, True, _('Shows an info bar with helpful hints in the Start / Join Chat dialog')],
+        'check_for_update': [opt_bool, True, _('Check for Gajim updates periodically')],
+        'last_update_check': [opt_str, '', _('Date of the last update check')],
     }, {})  # type: Tuple[Dict[str, List[Any]], Dict[Any, Any]]
 
     __options_per_key = {
         'accounts': ({
             'name': [opt_str, '', '', True],
             'account_label': [opt_str, '', '', False],
+            'account_color': [opt_color, 'rgb(85, 85, 85)'],
             'hostname': [opt_str, '', '', True],
             'anonymous_auth': [opt_bool, False],
             'avatar_sha': [opt_str, '', '', False],
@@ -312,7 +286,6 @@ class Config:
             'sync_with_global_status': [opt_bool, False, ],
             'no_log_for': [opt_str, '', _('List of XMPP Addresses (space separated) for which you do not want to store chat history. You can also add the name of an account to disable storing chat history for this account.')],
             'attached_gpg_keys': [opt_str, ''],
-            'time_for_ping_alive_answer': [opt_int, 60, _('How many seconds to wait for the answer of a ping alive packet before trying to reconnect.')],
             'http_auth': [opt_str, 'ask'], # yes, no, ask
             # proxy65 for FT
             'file_transfer_proxies': [opt_str, ''],
@@ -356,10 +329,6 @@ class Config:
             'activity_text': [opt_str, ''],
             'mood': [opt_str, ''],
             'mood_text': [opt_str, ''],
-        }, {}),
-        'defaultstatusmsg': ({
-            'enabled': [opt_bool, False],
-            'message': [opt_str, ''],
         }, {}),
         'soundevents': ({
             'enabled': [opt_bool, True],
@@ -408,15 +377,6 @@ class Config:
         '_last_xa': ['', '', '', '', '', ''],
         '_last_dnd': ['', '', '', '', '', ''],
         '_last_offline': ['', '', '', '', '', ''],
-    }
-
-    defaultstatusmsg_default = {
-        'online': [False, _('I\'m available.')],
-        'chat': [False, _('I\'m free for chat.')],
-        'away': [False, _('Be right back.')],
-        'xa': [False, _('I\'m not available.')],
-        'dnd': [False, _('Do not disturb.')],
-        'offline': [False, _('Bye!')],
     }
 
     soundevents_default = {
@@ -661,24 +621,6 @@ class Config:
             return obj[subname][Option.RESTART]
         return False
 
-    def should_log(self, account, jid):
-        """
-        Should conversations between a local account and a remote jid be logged?
-        """
-        no_log_for = self.get_per('accounts', account, 'no_log_for')
-
-        if not no_log_for:
-            no_log_for = ''
-
-        no_log_for = no_log_for.split()
-
-        return (account not in no_log_for) and (jid not in no_log_for)
-
-    def notify_for_muc(self, room):
-        all_ = self.get('notify_on_all_muc_messages')
-        room = self.get_per('rooms', room, 'notify_on_all_messages')
-        return all_ or room
-
     def get_options(self, optname, return_type=str):
         options = self.get(optname).split(',')
         options = [return_type(option.strip()) for option in options]
@@ -712,9 +654,3 @@ class Config:
             self.add_per('soundevents', event)
             self.set_per('soundevents', event, 'enabled', default[0])
             self.set_per('soundevents', event, 'path', default[1])
-
-        for status in self.defaultstatusmsg_default:
-            default = self.defaultstatusmsg_default[status]
-            self.add_per('defaultstatusmsg', status)
-            self.set_per('defaultstatusmsg', status, 'enabled', default[0])
-            self.set_per('defaultstatusmsg', status, 'message', default[1])

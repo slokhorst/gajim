@@ -28,6 +28,7 @@ from importlib import import_module
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from functools import wraps
+from functools import lru_cache
 
 try:
     from PIL import Image
@@ -255,7 +256,7 @@ def get_icon_name(name: str,
 
     iconset = app.config.get('iconset')
     if not iconset:
-        iconset = app.config.DEFAULT_ICONSET
+        iconset = 'dcraven'
     return '%s-%s' % (iconset, name)
 
 
@@ -443,6 +444,13 @@ def convert_rgb_to_hex(rgb_string: str) -> str:
     return '#%02x%02x%02x' % (red, green, blue)
 
 
+@lru_cache(maxsize=1024)
+def convert_rgb_string_to_float(rgb_string: str) -> Tuple[float, float, float]:
+    rgba = Gdk.RGBA()
+    rgba.parse(rgb_string)
+    return (rgba.red, rgba.green, rgba.blue)
+
+
 def get_monitor_scale_factor() -> int:
     display = Gdk.Display.get_default()
     monitor = display.get_primary_monitor()
@@ -488,12 +496,14 @@ def get_show_in_roster(event, session=None):
     return True
 
 
-def get_show_in_systray(type_, jid):
+def get_show_in_systray(type_, account, jid):
     """
     Return True if this event must be shown in systray, else False
     """
-    notify = app.config.notify_for_muc(jid)
-    if type_ == 'printed_gc_msg' and not notify:
+    if type_ == 'printed_gc_msg':
+        contact = app.contacts.get_groupchat_contact(account, jid)
+        if contact is not None:
+            return contact.can_notify()
         # it's not an highlighted message, don't show in systray
         return False
     return app.config.get('trayicon_notification_on_events')
@@ -644,6 +654,37 @@ def text_to_color(text):
     else:
         background = (1, 1, 1)  # RGB (255, 255, 255) white
     return nbxmpp.util.text_to_color(text, background)
+
+
+def get_color_for_account(account: str) -> str:
+    col_r, col_g, col_b = text_to_color(account)
+    rgba = Gdk.RGBA(red=col_r, green=col_g, blue=col_b)
+    return rgba.to_string()
+
+
+def generate_account_badge(account):
+    account_label = app.get_account_label(account)
+    badge = Gtk.Label(label=account_label)
+    badge.set_ellipsize(Pango.EllipsizeMode.END)
+    badge.set_max_width_chars(12)
+    badge.set_size_request(50, -1)
+    account_class = app.css_config.get_dynamic_class(account)
+    badge_context = badge.get_style_context()
+    badge_context.add_class(account_class)
+    badge_context.add_class('badge')
+    return badge
+
+
+@lru_cache(maxsize=16)
+def get_css_show_class(show):
+    if show in ('online', 'chat'):
+        return '.gajim-status-online'
+    if show == 'away':
+        return '.gajim-status-away'
+    if show in ('dnd', 'xa'):
+        return '.gajim-status-dnd'
+    # 'offline', 'not in roster', 'requested'
+    return '.gajim-status-offline'
 
 
 def scale_with_ratio(size, width, height):

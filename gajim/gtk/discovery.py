@@ -48,6 +48,7 @@ import uuid
 import nbxmpp
 from nbxmpp.util import is_error_result
 from nbxmpp.structs import DiscoIdentity
+from nbxmpp.namespaces import Namespace
 
 from gi.repository import GLib
 from gi.repository import Gtk
@@ -336,13 +337,13 @@ class ServicesCache:
             browser = info[0]
             if browser:
                 return browser
-        # NS_BROWSE is deprecated, but we check for it anyways.
+        # Namespace.BROWSE is deprecated, but we check for it anyways.
         # Some services list it in features and respond to
-        # NS_DISCO_ITEMS anyways.
+        # Namespace.DISCO_ITEMS anyways.
         # Allow browsing for unknown types as well.
         if ((not features and not identities) or
-                nbxmpp.NS_DISCO_ITEMS in features or
-                nbxmpp.NS_BROWSE in features):
+                Namespace.DISCO_ITEMS in features or
+                Namespace.BROWSE in features):
             return ToplevelAgentBrowser
         return None
 
@@ -1398,12 +1399,12 @@ class ToplevelAgentBrowser(AgentBrowser):
     def _update_actions(self, jid, node, identities, features, data):
         AgentBrowser._update_actions(
             self, jid, node, identities, features, data)
-        if self.execute_button and nbxmpp.NS_COMMANDS in features:
+        if self.execute_button and Namespace.COMMANDS in features:
             self.execute_button.set_sensitive(True)
-        if self.search_button and nbxmpp.NS_SEARCH in features:
+        if self.search_button and Namespace.SEARCH in features:
             self.search_button.set_sensitive(True)
         # Don't authorize to register with a server via disco
-        if (self.register_button and nbxmpp.NS_REGISTER in features and
+        if (self.register_button and Namespace.REGISTER in features and
                 jid != self.jid):
             # We can register this agent
             registered_transports = []
@@ -1419,14 +1420,14 @@ class ToplevelAgentBrowser(AgentBrowser):
             else:
                 self.register_button.set_label(_('Re_gister'))
             self.register_button.set_sensitive(True)
-        if self.join_button and nbxmpp.NS_MUC in features:
+        if self.join_button and Namespace.MUC in features:
             self.join_button.set_sensitive(True)
 
     def _default_action(self, jid, node, identities, features, data):
         if AgentBrowser._default_action(self, jid, node, identities,
                                         features, data):
             return True
-        if nbxmpp.NS_REGISTER in features:
+        if Namespace.REGISTER in features:
             # Register if we can't browse
             self._on_register_button_clicked()
             return True
@@ -1710,7 +1711,7 @@ class MucBrowser(AgentBrowser):
 
     def _on_join_button_clicked(self, *args):
         """
-        When we want to join a conference: ask specific informations about the
+        When we want to join a conference: ask specific information about the
         selected agent and close the window
         """
         model, iter_ = \

@@ -18,6 +18,7 @@ from datetime import timedelta
 
 import nbxmpp
 from nbxmpp.util import is_error_result
+from nbxmpp.namespaces import Namespace
 from gi.repository import Gtk
 from gi.repository import Gdk
 from gi.repository import Pango
@@ -77,7 +78,6 @@ class ServerInfo(Gtk.ApplicationWindow, EventHelper):
         self.feature_listbox = Gtk.ListBox()
         self.feature_listbox.set_name('ServerInfo')
         self.feature_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.feature_listbox.set_header_func(self.header_func, 'Features')
         self._ui.features_scrolled.add(self.feature_listbox)
         for feature in self.get_features():
             self.add_feature(feature)
@@ -88,15 +88,6 @@ class ServerInfo(Gtk.ApplicationWindow, EventHelper):
     def _on_key_press(self, _widget, event):
         if event.keyval == Gdk.KEY_Escape:
             self.destroy()
-
-    @staticmethod
-    def header_func(row, before, user_data):
-        if before:
-            row.set_header(None)
-        else:
-            label = Gtk.Label(label=user_data)
-            label.set_halign(Gtk.Align.START)
-            row.set_header(label)
 
     def _add_connection_info(self):
         # Connection type
@@ -129,12 +120,13 @@ class ServerInfo(Gtk.ApplicationWindow, EventHelper):
         if not app.account_is_connected(self.account):
             return
         con = app.connections[self.account]
-        iq = nbxmpp.Iq(to=self.hostname, typ='get', queryNS=nbxmpp.NS_LAST)
+        iq = nbxmpp.Iq(to=self.hostname, typ='get', queryNS=Namespace.LAST)
         con.connection.SendAndCallForResponse(iq, self._on_last_activity)
 
     def _add_contact_addresses(self, dataforms):
         fields = {
             'admin-addresses': _('Admin'),
+            'status-addresses': _('Status'),
             'support-addresses': _('Support'),
             'security-addresses': _('Security'),
             'feedback-addresses': _('Feedback'),
@@ -211,7 +203,7 @@ class ServerInfo(Gtk.ApplicationWindow, EventHelper):
         if not nbxmpp.isResultNode(stanza):
             log.warning('Received malformed result: %s', stanza)
             return
-        if stanza.getQueryNS() != nbxmpp.NS_LAST:
+        if stanza.getQueryNS() != Namespace.LAST:
             log.warning('Wrong namespace on result: %s', stanza)
             return
         try:
@@ -266,27 +258,27 @@ class ServerInfo(Gtk.ApplicationWindow, EventHelper):
                     max_file_size
 
         return [
-            Feature('XEP-0016: Privacy Lists',
-                    con.get_module('PrivacyLists').supported),
             Feature('XEP-0045: Multi-User Chat',
                     con.get_module('MUC').supported),
             Feature('XEP-0054: vcard-temp',
                     con.get_module('VCardTemp').supported),
+            Feature('XEP-0077: In-Band Registration',
+                    con.get_module('Register').supported),
             Feature('XEP-0163: Personal Eventing Protocol',
                     con.get_module('PEP').supported),
             Feature('XEP-0163: #publish-options',
                     con.get_module('PubSub').publish_options),
             Feature('XEP-0191: Blocking Command',
                     con.get_module('Blocking').supported,
-                    nbxmpp.NS_BLOCKING),
+                    Namespace.BLOCKING),
             Feature('XEP-0198: Stream Management',
-                    con.features.has_sm, nbxmpp.NS_STREAM_MGMT),
+                    con.features.has_sm, Namespace.STREAM_MGMT),
             Feature('XEP-0258: Security Labels in XMPP',
                     con.get_module('SecLabels').supported,
-                    nbxmpp.NS_SECLABEL),
+                    Namespace.SECLABEL),
             Feature('XEP-0280: Message Carbons',
                     con.get_module('Carbons').supported,
-                    nbxmpp.NS_CARBONS),
+                    Namespace.CARBONS),
             Feature('XEP-0313: Message Archive Management',
                     con.get_module('MAM').available),
             Feature('XEP-0363: HTTP File Upload',

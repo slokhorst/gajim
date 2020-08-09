@@ -28,11 +28,13 @@ import sys
 import re
 import logging
 from pathlib import Path
+from packaging.version import Version as V
+
+from gi.repository import Gdk
+from nbxmpp.util import text_to_color
 
 from gajim.common import app
-from gajim.common import caps_cache
 from gajim.common.i18n import _
-
 
 log = logging.getLogger('gajim.c.optparser')
 
@@ -125,55 +127,28 @@ class OptionsParser:
         return True
 
     def update_config(self, old_version, new_version):
-        old_version_list = old_version.split('.') # convert '0.x.y' to (0, x, y)
-        old = []
-        while old_version_list:
-            old.append(int(old_version_list.pop(0)))
-        new_version_list = new_version.split('.')
-        new = []
-        while new_version_list:
-            new.append(int(new_version_list.pop(0)))
+        old = V(old_version)
 
-        if old < [0, 16, 4, 1] and new >= [0, 16, 4, 1]:
+        if old < V('0.16.4.1'):
             self.update_config_to_01641()
-        if old < [0, 16, 10, 1] and new >= [0, 16, 10, 1]:
+        if old < V('0.16.10.1'):
             self.update_config_to_016101()
-        if old < [0, 16, 10, 2] and new >= [0, 16, 10, 2]:
+        if old < V('0.16.10.2'):
             self.update_config_to_016102()
-        if old < [0, 16, 10, 4] and new >= [0, 16, 10, 4]:
+        if old < V('0.16.10.4'):
             self.update_config_to_016104()
-        if old < [0, 16, 10, 5] and new >= [0, 16, 10, 5]:
+        if old < V('0.16.10.5'):
             self.update_config_to_016105()
-        if old < [0, 98, 3] and new >= [0, 98, 3]:
+        if old < V('0.98.3'):
             self.update_config_to_0983()
-        if old < [1, 1, 93] and new >= [1, 1, 93]:
+        if old < V('1.1.93'):
             self.update_config_to_1193()
-        if old < [1, 1, 94] and new >= [1, 1, 94]:
+        if old < V('1.1.94'):
             self.update_config_to_1194()
+        if old < V('1.1.95'):
+            self.update_config_to_1195()
 
         app.config.set('version', new_version)
-
-        caps_cache.capscache.initialize_from_db()
-
-    @staticmethod
-    def update_ft_proxies(to_remove=None, to_add=None):
-        if to_remove is None:
-            to_remove = []
-        if to_add is None:
-            to_add = []
-        for account in app.config.get_per('accounts'):
-            proxies_str = app.config.get_per('accounts', account,
-                    'file_transfer_proxies')
-            proxies = [p.strip() for p in proxies_str.split(',')]
-            for wrong_proxy in to_remove:
-                if wrong_proxy in proxies:
-                    proxies.remove(wrong_proxy)
-            for new_proxy in to_add:
-                if new_proxy not in proxies:
-                    proxies.append(new_proxy)
-            proxies_str = ', '.join(proxies)
-            app.config.set_per('accounts', account, 'file_transfer_proxies',
-                    proxies_str)
 
     def update_config_to_01641(self):
         for account in self.old_values['accounts'].keys():
@@ -233,3 +208,18 @@ class OptionsParser:
                         app.config.del_per('accounts', account, 'proxy')
 
         app.config.set('version', '1.1.94')
+
+    def update_config_to_1195(self):
+        # Add account color for every account
+        for account in self.old_values['accounts'].keys():
+            username = self.old_values['accounts'][account]['name']
+            domain = self.old_values['accounts'][account]['hostname']
+            if not (username is None or domain is None):
+                account_string = '%s@%s' % (username, domain)
+                # We cannot get the preferred theme at this point
+                background = (1, 1, 1)
+                col_r, col_g, col_b = text_to_color(account_string, background)
+                rgba = Gdk.RGBA(red=col_r, green=col_g, blue=col_b)
+                color = rgba.to_string()
+                app.config.set_per('accounts', account, 'account_color', color)
+        app.config.set('version', '1.1.95')

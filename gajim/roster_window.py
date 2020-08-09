@@ -41,9 +41,7 @@ from gi.repository import Pango
 from gi.repository import GObject
 from gi.repository import GLib
 from gi.repository import Gio
-from nbxmpp.protocol import NS_ROSTERX
-from nbxmpp.protocol import NS_CONFERENCE
-from nbxmpp.protocol import NS_JINGLE_FILE_TRANSFER_5
+from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import MoodData
 from nbxmpp.structs import ActivityData
 
@@ -54,7 +52,6 @@ from gajim import gui_menu_builder
 
 from gajim.common import app
 from gajim.common import helpers
-from gajim.common import idle
 from gajim.common.exceptions import GajimGeneralException
 from gajim.common import i18n
 from gajim.common.helpers import save_roster_position
@@ -79,6 +76,7 @@ from gajim.gtk.service_registration import ServiceRegistration
 from gajim.gtk.discovery import ServiceDiscoveryWindow
 from gajim.gtk.tooltips import RosterTooltip
 from gajim.gtk.adhoc import AdHocCommand
+from gajim.gtk.status_selector import StatusSelector
 from gajim.gtk.util import get_icon_name
 from gajim.gtk.util import resize_window
 from gajim.gtk.util import restore_roster_position
@@ -250,26 +248,6 @@ class RosterWindow:
             return True
         return False
 
-    @staticmethod
-    def _status_cell_data_func(cell_layout, cell, tree_model, iter_):
-        if isinstance(cell, Gtk.CellRendererPixbuf):
-            icon_name = tree_model[iter_][1]
-            if icon_name is None:
-                return
-            if tree_model[iter_][2] == 'status':
-                cell.set_property('icon_name', icon_name)
-            else:
-                iconset_name = get_icon_name(icon_name)
-                cell.set_property('icon_name', iconset_name)
-        else:
-            show = tree_model[iter_][0]
-            id_ = tree_model[iter_][2]
-            if id_ not in ('status', 'desync'):
-                show = helpers.get_uf_show(show)
-            cell.set_property('text', show)
-
-
-
 #############################################################################
 ### Methods for adding and removing roster window items
 #############################################################################
@@ -293,13 +271,9 @@ class RosterWindow:
             show = helpers.get_connection_status(account)
             our_jid = app.get_jid_from_account(account)
 
-            tls_pixbuf = None
-            if app.account_is_securely_connected(account):
-                tls_pixbuf = 'changes-prevent'
-
             it = self.model.append(None, [get_icon_name(show),
                 GLib.markup_escape_text(account), 'account', our_jid,
-                account, None, None, None, None, None, tls_pixbuf, True] +
+                account, None, None, None, None, None, None, True] +
                 [None] * self.nb_ext_renderers)
             self._iters[account]['account'] = it
 
@@ -1012,15 +986,6 @@ class RosterWindow:
         if not child_iter:
             return
 
-        num_of_accounts = app.get_number_of_connected_accounts()
-        num_of_secured = app.get_number_of_securely_connected_accounts()
-
-        tls_pixbuf = None
-        if app.account_is_securely_connected(account) and not self.regroup or\
-        self.regroup and num_of_secured and num_of_secured == num_of_accounts:
-            tls_pixbuf = 'changes-prevent'
-            self.model[child_iter][Column.PADLOCK_PIXBUF] = tls_pixbuf
-
         if self.regroup:
             account_name = _('Merged accounts')
             accounts = []
@@ -1089,8 +1054,6 @@ class RosterWindow:
         else:
             accounts = [account]
         text = GLib.markup_escape_text(group)
-        if helpers.group_is_blocked(account, group):
-            text = '<span strikethrough="true">%s</span>' % text
         if app.config.get('show_contacts_number'):
             nbr_on, nbr_total = app.contacts.get_nb_online_total_contacts(
                     accounts=accounts, groups=[group])
@@ -1181,14 +1144,7 @@ class RosterWindow:
                 name = '%s [%s]' % (name, str(nb_unread))
 
         # Strike name if blocked
-        strike = False
-        if helpers.jid_is_blocked(account, jid):
-            strike = True
-        else:
-            for group in contact.get_shown_groups():
-                if helpers.group_is_blocked(account, group):
-                    strike = True
-                    break
+        strike = helpers.jid_is_blocked(account, jid)
         if strike:
             name = '<span strikethrough="true">%s</span>' % name
 
@@ -1428,7 +1384,7 @@ class RosterWindow:
                 if family:
                     # For metacontacts over several accounts:
                     # When we connect a new account existing brothers
-                    # must be redrawn (got removed and readded)
+                    # must be redrawn (got removed and added again)
                     for data in family:
                         self.draw_completely(data['jid'], data['account'])
                 else:
@@ -2060,7 +2016,7 @@ class RosterWindow:
     def set_connecting_state(self, account):
         self.set_state(account, 'connecting')
 
-    def send_status(self, account, status, txt, auto=False):
+    def send_status(self, account, status, txt):
         if status != 'offline':
             app.config.set_per('accounts', account, 'last_status', status)
             app.config.set_per('accounts', account, 'last_status_msg',
@@ -2068,7 +2024,7 @@ class RosterWindow:
             if not app.account_is_available(account):
                 self.set_connecting_state(account)
 
-        self.send_status_continue(account, status, txt, auto)
+        self.send_status_continue(account, status, txt)
 
     def send_pep(self, account, pep_dict):
         connection = app.connections[account]
@@ -2088,6 +2044,8 @@ class RosterWindow:
         else:
             connection.get_module('UserMood').set_mood(None)
 
+        connection.get_module('UserTune').set_tune(None)
+
     def delete_pep(self, jid, account):
         if jid == app.get_jid_from_account(account):
             app.connections[account].pep = {}
@@ -2101,18 +2059,12 @@ class RosterWindow:
         if ctrl:
             ctrl.update_all_pep_types()
 
-    def send_status_continue(self, account, status, txt, auto):
-        if app.account_is_available(account):
-            if status == 'online' and not idle.Monitor.is_unknown():
-                app.sleeper_state[account] = 'online'
-            elif app.sleeper_state[account] not in ('autoaway', 'autoxa') or \
-            status == 'offline':
-                app.sleeper_state[account] = 'off'
-
+    def send_status_continue(self, account, status, txt):
         if status == 'offline':
             self.delete_pep(app.get_jid_from_account(account), account)
 
-        app.connections[account].change_status(status, txt, auto)
+        app.connections[account].change_status(status, txt)
+        self._status_selector.update()
 
     def chg_contact_status(self, contact, show, status, account):
         """
@@ -2196,8 +2148,6 @@ class RosterWindow:
                 # No need to redraw contacts if we're quitting
                 if child_iterA:
                     self.model[child_iterA][Column.AVATAR_IMG] = None
-                if account in app.con_types:
-                    app.con_types[account] = None
                 for jid in list(app.contacts.get_jid_list(account)):
                     lcontact = app.contacts.get_contacts(account, jid)
                     ctrl = app.interface.msg_win_mgr.get_gc_control(jid,
@@ -2205,26 +2155,24 @@ class RosterWindow:
                     for contact in [c for c in lcontact if (
                     (c.show != 'offline' or c.is_transport()) and not ctrl)]:
                         self.chg_contact_status(contact, 'offline', '', account)
-        self.update_status_combobox()
+        if app.interface.systray_enabled:
+            app.interface.systray.change_status(show)
+        self._status_selector.update()
 
     def get_status_message(self, show, on_response, show_pep=True,
-                    always_ask=False):
+                           always_ask=False):
         """
         Get the status message by:
 
-        1/ looking in default status message
-        2/ asking to user if needed depending on ask_on(ff)line_status and
-                always_ask
+        asking to user if needed depending on ask_on(ff)line_status and
+            always_ask
         show_pep can be False to hide pep things from status message or True
         """
-        empty_pep = {'activity': '', 'subactivity': '', 'activity_text': '',
-            'mood': '', 'mood_text': ''}
-        if show in app.config.get_per('defaultstatusmsg'):
-            if app.config.get_per('defaultstatusmsg', show, 'enabled'):
-                msg = app.config.get_per('defaultstatusmsg', show, 'message')
-                msg = helpers.from_one_line(msg)
-                on_response(msg, empty_pep)
-                return
+        empty_pep = {'activity': '',
+                     'subactivity': '',
+                     'activity_text': '',
+                     'mood': '',
+                     'mood_text': ''}
         if not always_ask and ((show == 'online' and not app.config.get(
         'ask_online_status')) or (show == 'offline' and not \
         app.config.get('ask_offline_status'))):
@@ -2242,35 +2190,6 @@ class RosterWindow:
             self.send_status(account, status, message)
             self.send_pep(account, pep_dict)
         self.get_status_message(status, on_response)
-
-    def update_status_combobox(self):
-        # table to change index in connection.connected to index in combobox
-        table = {'offline':8, 'connecting':8, 'error': 8, 'online':0, 'chat':1, 'away':2,
-            'xa':3, 'dnd':4}
-
-        liststore = self.status_combobox.get_model()
-        # we check if there are more options in the combobox that it should
-        # if yes, we remove the first ones
-        while len(liststore) > len(table)+2:
-            titer = liststore.get_iter_first()
-            liststore.remove(titer)
-
-        show = helpers.get_global_show()
-        # temporarily block signal in order not to send status that we show
-        # in the combobox
-        self.combobox_callback_active = False
-        if helpers.statuses_unified():
-            self.status_combobox.set_active(table[show])
-        else:
-            uf_show = helpers.get_uf_show(show)
-            liststore.prepend(['SEPARATOR', None, '', True])
-            status_combobox_text = uf_show + ' (' + _("desynced") + ')'
-            liststore.prepend(
-                [status_combobox_text, show, 'desync', False])
-            self.status_combobox.set_active(0)
-        self.combobox_callback_active = True
-        if app.interface.systray_enabled:
-            app.interface.systray.change_status(show)
 
     def get_show(self, lcontact):
         prio = lcontact[0].priority
@@ -2449,7 +2368,9 @@ class RosterWindow:
             unread = app.events.get_nb_events()
 
             for event in app.events.get_all_events(['printed_gc_msg']):
-                if not app.config.notify_for_muc(event.jid):
+                contact = app.contacts.get_groupchat_contact(event.account,
+                                                             event.jid)
+                if contact is None or not contact.can_notify():
                     unread -= 1
 
             # check if we have recent messages
@@ -2567,19 +2488,12 @@ class RosterWindow:
         """
         self.rename_self_contact(obj.old_jid, obj.new_jid, obj.conn.name)
 
-    def _nec_our_show(self, obj):
-        model = self.status_combobox.get_model()
-        iter_ = model.get_iter_from_string('6')
-        if obj.show == 'offline':
-            # sensitivity for this menuitem
-            if app.get_number_of_connected_accounts() == 0:
-                model[iter_][3] = False
-            self.application.set_account_actions_state(obj.conn.name)
+    def _nec_our_show(self, event):
+        if event.show == 'offline':
+            self.application.set_account_actions_state(event.account)
             self.application.update_app_actions_state()
-        else:
-            # sensitivity for this menuitem
-            model[iter_][3] = True
-        self.on_status_changed(obj.conn.name, obj.show)
+
+        self.on_status_changed(event.account, event.show)
 
     def _nec_connection_type(self, obj):
         self.draw_account(obj.conn.name)
@@ -2758,55 +2672,40 @@ class RosterWindow:
         for jid in obj.changed:
             self.draw_contact(jid, obj.conn.name)
 
-    def on_block(self, widget, list_, group=None):
+    def on_block(self, widget, list_):
         """
         When clicked on the 'block' button in context menu. list_ is a list of
         (contact, account)
         """
-        def on_continue(msg, pep_dict):
-            if msg is None:
-                # user pressed Cancel to change status message dialog
-                return
+        def _block_it(is_checked=None, report=None):
+            if is_checked is not None:  # Dialog has been shown
+                if is_checked:
+                    app.config.set('confirm_block', 'no')
+                else:
+                    app.config.set('confirm_block', 'yes')
 
             accounts = []
             for _, account in list_:
                 con = app.connections[account]
-                if con.get_module('PrivacyLists').supported or (
-                        group is None and con.get_module('Blocking').supported):
+                if con.get_module('Blocking').supported:
                     accounts.append(account)
 
-            if group is None:
-                for acct in accounts:
-                    l_ = [i[0] for i in list_ if i[1] == acct]
-                    con = app.connections[acct]
-                    con.get_module('PrivacyLists').block_contacts(l_, msg)
-                    for contact in l_:
-                        ctrl = app.interface.msg_win_mgr.get_control(
-                            contact.jid, acct)
-                        if ctrl:
-                            ctrl.parent_win.remove_tab(
-                                ctrl, ctrl.parent_win.CLOSE_COMMAND, force=True)
-                        if contact.show == 'not in roster':
-                            self.remove_contact(contact.jid, acct, force=True,
-                                                backend=True)
-                            return
-                        self.draw_contact(contact.jid, acct)
-            else:
-                for acct in accounts:
-                    l_ = [i[0] for i in list_ if i[1] == acct]
-                    con = app.connections[acct]
-                    con.get_module('PrivacyLists').block_group(group, l_, msg)
-                    self.draw_group(group, acct)
-                    for contact in l_:
-                        self.draw_contact(contact.jid, acct)
-
-        def _block_it(is_checked=None):
-            if is_checked is not None: # dialog has been shown
-                if is_checked:  # user does not want to be asked again
-                    app.config.set('confirm_block', 'no')
-                else:
-                    app.config.set('confirm_block', 'yes')
-            self.get_status_message('offline', on_continue, show_pep=False)
+            for acct in accounts:
+                l_ = [i[0] for i in list_ if i[1] == acct]
+                con = app.connections[acct]
+                jid_list = [contact.jid for contact in l_]
+                con.get_module('Blocking').block(jid_list, report)
+                for contact in l_:
+                    ctrl = app.interface.msg_win_mgr.get_control(
+                        contact.jid, acct)
+                    if ctrl:
+                        ctrl.parent_win.remove_tab(
+                            ctrl, ctrl.parent_win.CLOSE_COMMAND, force=True)
+                    if contact.show == 'not in roster':
+                        self.remove_contact(contact.jid, acct, force=True,
+                                            backend=True)
+                        return
+                    self.draw_contact(contact.jid, acct)
 
         # Check if confirmation is needed for blocking
         confirm_block = app.config.get('confirm_block')
@@ -2814,61 +2713,39 @@ class RosterWindow:
             _block_it()
             return
 
-        # Set dialog's labels depending on if it is a group or a single contact
-        if group is None:
-            title = _('Block Contact')
-            pritext = _('Really block this contact?')
-            sectext = _('This contact will see you offline and you will not '
-                        'receive any messages sent to you by this contact.')
-            button_text = _('_Block Contact')
-        else:
-            title = _('Block Group')
-            pritext = _('Really block this group?')
-            sectext = _('All contacts of this group will see you as offline '
-                        'and you will not receive any messages sent to you '
-                        'by any one of these contacts.')
-            button_text = _('_Block Group')
-
         NewConfirmationCheckDialog(
-            title,
-            pritext,
-            sectext,
-            _('_Do not ask me again'),
+            _('Block Contact'),
+            _('Really block this contact?'),
+            _('You will appear offline for this contact and you '
+              'will not receive further messages.'),
+            _('_Do not ask again'),
             [DialogButton.make('Cancel'),
+             DialogButton.make('OK',
+                               text=_('_Report Spam'),
+                               callback=_block_it,
+                               kwargs={'report': 'spam'}),
              DialogButton.make('Remove',
-                               text=button_text,
+                               text=_('_Block'),
                                callback=_block_it)],
             modal=False).show()
 
-    def on_unblock(self, widget, list_, group=None):
+    def on_unblock(self, widget, list_):
         """
         When clicked on the 'unblock' button in context menu.
         """
         accounts = []
         for _, account in list_:
             con = app.connections[account]
-            if con.get_module('PrivacyLists').supported or (
-                    group is None and con.get_module('Blocking').supported):
+            if con.get_module('Blocking').supported:
                 accounts.append(account)
 
-        if group is None:
-            for acct in accounts:
-                l_ = [i[0] for i in list_ if i[1] == acct]
-                con = app.connections[acct]
-                con.get_module('PrivacyLists').unblock_contacts(l_)
-                for contact in l_:
-                    self.draw_contact(contact.jid, acct)
-        else:
-            for acct in accounts:
-                l_ = [i[0] for i in list_ if i[1] == acct]
-                con = app.connections[acct]
-                con.get_module('PrivacyLists').unblock_group(group, l_)
-                self.draw_group(group, acct)
-                for contact in l_:
-                    self.draw_contact(contact.jid, acct)
         for acct in accounts:
-            if 'privacy_list_block' in app.interface.instances[acct]:
-                del app.interface.instances[acct]['privacy_list_block']
+            l_ = [i[0] for i in list_ if i[1] == acct]
+            con = app.connections[acct]
+            jid_list = [contact.jid for contact in l_]
+            con.get_module('Blocking').unblock(jid_list)
+            for contact in l_:
+                self.draw_contact(contact.jid, acct)
 
     def on_rename(self, widget, row_type, jid, account):
         # This function is called either by F2 or by Rename menuitem
@@ -2964,15 +2841,6 @@ class RosterWindow:
             ctrl.leave()
         self.remove_groupchat(jid, account)
 
-    def on_reconnect(self, widget, jid, account):
-        """
-        When reconnect menuitem is activated: join the room
-        """
-        if jid in app.interface.minimized_controls[account]:
-            ctrl = app.interface.minimized_controls[account][jid]
-            app.interface.join_gc_room(account, jid, ctrl.nick,
-                app.gc_passwords.get(jid, ''))
-
     def on_send_single_message_menuitem_activate(self, widget, account,
     contact=None):
         if contact is None:
@@ -2990,24 +2858,24 @@ class RosterWindow:
         app.interface.instances['file_transfers'].show_file_send_request(
             account, contact)
 
-    def on_invite_to_room(self, widget, list_, room_jid, room_account,
-    resource=None):
+    def on_invite_to_room(self,
+                          _widget,
+                          list_,
+                          room_jid,
+                          room_account,
+                          resource=None):
         """
         Resource parameter MUST NOT be used if more than one contact in list
         """
-        for e in list_:
-            contact = e[0]
+        gc_control = app.get_groupchat_control(room_account, room_jid)
+        if gc_control is None:
+            return
+
+        for contact, _ in list_:
             contact_jid = contact.jid
             if resource: # we MUST have one contact only in list_
                 contact_jid += '/' + resource
-            con = app.connections[room_account]
-            con.get_module('MUC').invite(room_jid, contact_jid)
-            gc_control = app.interface.msg_win_mgr.get_gc_control(room_jid,
-                room_account)
-            if gc_control:
-                gc_control.add_info_message(
-                    _('%(jid)s has been invited to this group chat') % {
-                    'jid': contact_jid})
+            gc_control.invite(contact_jid)
 
     def on_all_groupchat_maximized(self, widget, group_list):
         for (contact, account) in group_list:
@@ -3160,20 +3028,18 @@ class RosterWindow:
     def accel_group_func(self, accel_group, acceleratable, keyval, modifier):
         # CTRL mask
         if modifier & Gdk.ModifierType.CONTROL_MASK:
-            if keyval == Gdk.KEY_s: # CTRL + s
-                model = self.status_combobox.get_model()
-                accounts = list(app.connections.keys())
-                status = model[self.previous_status_combobox_active][2]
-                def on_response(message, pep_dict):
-                    if message is not None: # None if user pressed Cancel
-                        for account in accounts:
-                            if not app.config.get_per('accounts', account,
-                            'sync_with_global_status'):
+            if keyval == Gdk.KEY_s:  # CTRL + s
+                show = helpers.get_global_show()
+                def _on_response(message, pep_dict):
+                    if message is not None:  # None if user pressed Cancel
+                        for account in app.contacts.get_accounts():
+                            sync_account = app.config.get_per(
+                                'accounts', account, 'sync_with_global_status')
+                            if not sync_account:
                                 continue
-                            current_show = app.connections[account].status
-                            self.send_status(account, current_show, message)
+                            self.send_status(account, show, message)
                             self.send_pep(account, pep_dict)
-                dialogs.ChangeStatusMessageDialog(on_response, status)
+                dialogs.ChangeStatusMessageDialog(_on_response, show)
                 return True
             if keyval == Gdk.KEY_k: # CTRL + k
                 self.enable_rfilter('')
@@ -3350,95 +3216,9 @@ class RosterWindow:
                  DialogButton.make('Remove',
                                    callback=on_ok2)]).show()
 
-    def on_status_combobox_changed(self, widget):
-        """
-        When we change our status via the combobox
-        """
-        model = self.status_combobox.get_model()
-        active = self.status_combobox.get_active()
-        if active == -1: # no active item
-            return
-        if not self.combobox_callback_active:
-            self.previous_status_combobox_active = active
-            return
-        accounts = list(app.connections.keys())
-        if not accounts:
-            ErrorDialog(_('No account available'),
-                _('You must create an account before you can chat with other '
-                'contacts.'))
-            self.update_status_combobox()
-            return
-        status = model[active][2]
-        # status "desync'ed" or not
-        statuses_unified = helpers.statuses_unified()
-        if (active == 7 and statuses_unified) or (active == 9 and \
-        not statuses_unified):
-            # 'Change status message' selected:
-            # do not change show, just show change status dialog
-            status = model[self.previous_status_combobox_active][2]
-            def on_response(message, pep_dict):
-                if message is not None: # None if user pressed Cancel
-                    for account in accounts:
-                        if not app.config.get_per('accounts', account,
-                        'sync_with_global_status'):
-                            continue
-                        current_show = app.connections[account].status
-                        self.send_status(account, current_show, message)
-                        self.send_pep(account, pep_dict)
-                self.combobox_callback_active = False
-                self.status_combobox.set_active(
-                    self.previous_status_combobox_active)
-                self.combobox_callback_active = True
-            dialogs.ChangeStatusMessageDialog(on_response, status)
-            return
-        # we are about to change show, so save this new show so in case
-        # after user chooses "Change status message" menuitem
-        # we can return to this show
-        self.previous_status_combobox_active = active
-
-        def on_continue(message, pep_dict):
-            if message is None:
-                # user pressed Cancel to change status message dialog
-                self.update_status_combobox()
-                return
-            global_sync_accounts = []
-            for acct in accounts:
-                if app.config.get_per('accounts', acct,
-                'sync_with_global_status'):
-                    global_sync_accounts.append(acct)
-            global_sync_connected_accounts = \
-                app.get_number_of_connected_accounts(global_sync_accounts)
-            for account in accounts:
-                if not app.config.get_per('accounts', account,
-                'sync_with_global_status'):
-                    continue
-                # we are connected (so we wanna change show and status)
-                # or no account is connected and we want to connect with new
-                # show and status
-
-                if not global_sync_connected_accounts > 0 or \
-                app.account_is_available(account):
-                    self.send_status(account, status, message)
-                    self.send_pep(account, pep_dict)
-            self.update_status_combobox()
-
-        self.get_status_message(status, on_continue)
-
     def on_publish_tune_toggled(self, widget, account):
         active = widget.get_active()
-        app.config.set_per('accounts', account, 'publish_tune', active)
-        if active:
-            app.interface.enable_music_listener()
-        else:
-            app.connections[account].get_module('UserTune').set_tune(None)
-            # disable music listener only if no other account uses it
-            for acc in app.connections:
-                if app.config.get_per('accounts', acc, 'publish_tune'):
-                    break
-            else:
-                app.interface.disable_music_listener()
-
-        app.connections[account].get_module('Caps').update_caps()
+        app.connections[account].get_module('UserTune').set_enabled(active)
 
     def on_publish_location_toggled(self, widget, account):
         active = widget.get_active()
@@ -3947,7 +3727,7 @@ class RosterWindow:
                         c_dest, was_big_brother, context, etime):
         type_ = 'message'
         if (c_dest.show not in ('offline', 'error') and
-                c_dest.supports(NS_ROSTERX)):
+                c_dest.supports(Namespace.ROSTERX)):
             type_ = 'iq'
         con = app.connections[account_dest]
         con.get_module('RosterItemExchange').send_contacts(
@@ -3974,7 +3754,7 @@ class RosterWindow:
                     app.config.set('confirm_metacontacts', 'yes')
 
             # We might have dropped on a metacontact.
-            # Remove it and readd later with updated family info
+            # Remove it and add it again later with updated family info
             dest_family = app.contacts.get_metacontacts_family(account_dest,
                 c_dest.jid)
             if dest_family:
@@ -3999,7 +3779,7 @@ class RosterWindow:
 
             # Remove old source contact(s)
             if was_big_brother:
-                # We have got little brothers. Readd them all
+                # We have got little brothers. Add them all back
                 self._remove_metacontact_family(old_family, account_source)
             else:
                 # We are only a little brother. Simply remove us from our big
@@ -4169,7 +3949,7 @@ class RosterWindow:
                 return
             c_dest = app.contacts.get_contact_with_highest_priority(
                 account_dest, jid_dest)
-            if not c_dest.supports(NS_JINGLE_FILE_TRANSFER_5):
+            if not c_dest.supports(Namespace.JINGLE_FILE_TRANSFER_5):
                 return
             uri = data.strip()
             uri_splitted = uri.split() # we may have more than one file dropped
@@ -4241,8 +4021,9 @@ class RosterWindow:
             if type_source != 'contact':
                 return
             contact_jid = data
-            con = app.connections[account_dest]
-            con.get_module('MUC').invite(jid_dest, contact_jid)
+            gc_control = app.get_groupchat_control(account_dest, jid_dest)
+            if gc_control is not None:
+                gc_control.invite(contact_jid)
             return
 
         if type_source == 'group':
@@ -4322,6 +4103,13 @@ class RosterWindow:
 
         # we may not add contacts from special_groups
         if grp_source in helpers.special_groups:
+            if grp_source == _('Not in contact list'):
+                AddNewContactWindow(
+                    account=account_dest,
+                    contact_jid=jid_source,
+                    user_nick=c_source.name,
+                    group=grp_dest)
+                return
             return
 
         # Is the contact we drag a meta contact?
@@ -4396,18 +4184,19 @@ class RosterWindow:
     def update_icons(self):
         # Update the roster
         self.setup_and_draw_roster()
-        # Update the status combobox
-        self.status_combobox.queue_draw()
+
         # Update the systray
         if app.interface.systray_enabled:
             app.interface.systray.set_img()
+            app.interface.systray.change_status(helpers.get_global_show())
 
         for win in app.interface.msg_win_mgr.windows():
             for ctrl in win.controls():
                 ctrl.update_ui()
                 win.redraw_tab(ctrl)
 
-        self.update_status_combobox()
+        self._status_selector.update()
+
 
     def set_account_status_icon(self, account):
         child_iterA = self._get_account_iter(account, self.model)
@@ -4715,7 +4504,7 @@ class RosterWindow:
             sub_menu = Gtk.Menu()
             status_menuitem.set_submenu(sub_menu)
 
-            for show in ('online', 'chat', 'away', 'xa', 'dnd'):
+            for show in ('online', 'away', 'xa', 'dnd'):
                 uf_show = helpers.get_uf_show(show, use_mnemonic=True)
                 item = Gtk.MenuItem.new_with_mnemonic(uf_show)
                 sub_menu.append(item)
@@ -4749,9 +4538,9 @@ class RosterWindow:
                 if sys.platform in ('win32', 'darwin'):
                     item.set_sensitive(False)
                 else:
-                    activ = app.config.get_per('accounts', account,
-                                               'publish_tune')
-                    item.set_active(activ)
+                    active = app.config.get_per('accounts', account,
+                                                'publish_tune')
+                    item.set_active(active)
                     item.connect('toggled', self.on_publish_tune_toggled,
                                  account)
 
@@ -4760,9 +4549,9 @@ class RosterWindow:
                 if not app.is_installed('GEOCLUE'):
                     item.set_sensitive(False)
                 else:
-                    activ = app.config.get_per('accounts', account,
-                                               'publish_location')
-                    item.set_active(activ)
+                    active = app.config.get_per('accounts', account,
+                                                'publish_location')
+                    item.set_active(active)
                     item.connect('toggled', self.on_publish_location_toggled,
                                  account)
 
@@ -4857,38 +4646,49 @@ class RosterWindow:
         menu.show_all()
         menu.popup(None, None, None, None, event_button, event.time)
 
-    def make_group_menu(self, event, titer):
+    def make_group_menu(self, event, iters):
         """
         Make group's popup menu
         """
         model = self.modelfilter
-        group = model[titer][Column.JID]
-        account = model[titer][Column.ACCOUNT]
+        groups = []
+        accounts = []
 
-        list_ = [] # list of (contact, account) tuples
-        list_online = [] # list of (contact, account) tuples
+        list_ = []  # list of (contact, account) tuples
+        list_online = []  # list of (contact, account) tuples
+
+        for titer in iters:
+            groups.append(model[titer][Column.JID])
+            accounts.append(model[titer][Column.ACCOUNT])
+            # Don't show menu if groups of more than one account are selected
+            if accounts[0] != model[titer][Column.ACCOUNT]:
+                return
+        account = accounts[0]
 
         show_bookmarked = True
-        group = model[titer][Column.JID]
         for jid in app.contacts.get_jid_list(account):
             contact = app.contacts.get_contact_with_highest_priority(account,
                 jid)
-            if group in contact.get_shown_groups():
-                if contact.show not in ('offline', 'error'):
-                    list_online.append((contact, account))
-                    # Check that all contacts support direct NUC invite
-                    if not contact.supports(NS_CONFERENCE):
-                        show_bookmarked = False
-                list_.append((contact, account))
+            for group in groups:
+                if group in contact.get_shown_groups():
+                    if contact.show not in ('offline', 'error'):
+                        list_online.append((contact, account))
+                        # Check that all contacts support direct NUC invite
+                        if not contact.supports(Namespace.CONFERENCE):
+                            show_bookmarked = False
+                    list_.append((contact, account))
         menu = Gtk.Menu()
 
         # Make special context menu if group is Groupchats
-        if group == _('Group chats'):
-            maximize_menuitem = Gtk.MenuItem.new_with_mnemonic(_(
-                '_Maximize All'))
-            maximize_menuitem.connect('activate',
-                self.on_all_groupchat_maximized, list_)
-            menu.append(maximize_menuitem)
+        if _('Group chats') in groups:
+            if len(groups) == 1:
+                maximize_menuitem = Gtk.MenuItem.new_with_mnemonic(
+                    _('_Maximize All'))
+                maximize_menuitem.connect('activate',
+                    self.on_all_groupchat_maximized, list_)
+                menu.append(maximize_menuitem)
+            else:
+                return
         else:
             # Send Group Message
             send_group_message_item = Gtk.MenuItem.new_with_mnemonic(
@@ -4913,10 +4713,9 @@ class RosterWindow:
                 self.on_send_single_message_menuitem_activate, account, list_)
 
             # Invite to
-            if group != _('Transports'):
-                invite_menuitem = Gtk.MenuItem.new_with_mnemonic(
-                    _('In_vite to'))
-
+            invite_menuitem = Gtk.MenuItem.new_with_mnemonic(
+                _('In_vite to'))
+            if _('Transports') not in groups:
                 gui_menu_builder.build_invite_submenu(invite_menuitem,
                     list_online, show_bookmarked=show_bookmarked)
                 menu.append(invite_menuitem)
@@ -4929,7 +4728,14 @@ class RosterWindow:
                 send_group_message_item.set_sensitive(False)
                 invite_menuitem.set_sensitive(False)
 
-        if not group in helpers.special_groups:
+        special_group = False
+        for group in groups:
+            if group in helpers.special_groups:
+                special_group = True
+                break
+
+        if not special_group and len(groups) == 1:
+            group = groups[0]
             item = Gtk.SeparatorMenuItem.new() # separator
             menu.append(item)
 
@@ -4938,28 +4744,6 @@ class RosterWindow:
             menu.append(rename_item)
             rename_item.connect('activate', self.on_rename, 'group', group,
                 account)
-
-            # Block group
-            is_blocked = False
-            if self.regroup:
-                for g_account in app.connections:
-                    if helpers.group_is_blocked(g_account, group):
-                        is_blocked = True
-            else:
-                if helpers.group_is_blocked(account, group):
-                    is_blocked = True
-
-            if is_blocked and app.connections[account].get_module('PrivacyLists').supported:
-                unblock_menuitem = Gtk.MenuItem.new_with_mnemonic(_('_Unblock'))
-                unblock_menuitem.connect('activate', self.on_unblock, list_,
-                    group)
-                menu.append(unblock_menuitem)
-            else:
-                block_menuitem = Gtk.MenuItem.new_with_mnemonic(_('_Block'))
-                block_menuitem.connect('activate', self.on_block, list_, group)
-                menu.append(block_menuitem)
-                if not app.connections[account].get_module('PrivacyLists').supported:
-                    block_menuitem.set_sensitive(False)
 
             # Remove group
             remove_item = Gtk.MenuItem.new_with_mnemonic(_('Remo_ve'))
@@ -5004,16 +4788,18 @@ class RosterWindow:
         list_ = [] # list of (jid, account) tuples
         one_account_offline = False
         is_blocked = True
-        privacy_rules_supported = True
+        blocking_supported = True
         for titer in iters:
             jid = model[titer][Column.JID]
             account = model[titer][Column.ACCOUNT]
             if not app.account_is_available(account):
                 one_account_offline = True
-            if not app.connections[account].get_module('PrivacyLists').supported:
-                privacy_rules_supported = False
-            contact = app.contacts.get_contact_with_highest_priority(account,
-                jid)
+
+            con = app.connections[account]
+            if not con.get_module('Blocking').supported:
+                blocking_supported = False
+            contact = app.contacts.get_contact_with_highest_priority(
+                account, jid)
             if not helpers.jid_is_blocked(account, jid):
                 is_blocked = False
             list_.append((contact, account))
@@ -5029,7 +4815,7 @@ class RosterWindow:
         show_bookmarked = True
         for (contact, current_account) in list_:
             # Check that all contacts support direct NUC invite
-            if not contact.supports(NS_CONFERENCE):
+            if not contact.supports(Namespace.CONFERENCE):
                 show_bookmarked = False
                 break
         if account is not None:
@@ -5064,7 +4850,7 @@ class RosterWindow:
         manage_contacts_submenu.append(item)
 
         # Block
-        if is_blocked and privacy_rules_supported:
+        if is_blocked and blocking_supported:
             unblock_menuitem = Gtk.MenuItem.new_with_mnemonic(_('_Unblock'))
             unblock_menuitem.connect('activate', self.on_unblock, list_)
             manage_contacts_submenu.append(unblock_menuitem)
@@ -5073,7 +4859,7 @@ class RosterWindow:
             block_menuitem.connect('activate', self.on_block, list_)
             manage_contacts_submenu.append(block_menuitem)
 
-            if not privacy_rules_supported:
+            if not blocking_supported:
                 block_menuitem.set_sensitive(False)
 
         # Remove
@@ -5126,12 +4912,6 @@ class RosterWindow:
                                     account)
             menu.append(rename_menuitem)
 
-        if not app.gc_connected[account].get(jid, False):
-            connect_menuitem = Gtk.MenuItem.new_with_mnemonic(_(
-                '_Reconnect'))
-            connect_menuitem.connect('activate', self.on_reconnect, jid,
-                account)
-            menu.append(connect_menuitem)
         disconnect_menuitem = Gtk.MenuItem.new_with_mnemonic(_(
             '_Leave'))
         disconnect_menuitem.connect('activate', self.on_disconnect, jid,
@@ -5165,75 +4945,6 @@ class RosterWindow:
         menu.show_all()
         menu.popup(None, None, None, None, event_button, event.time)
 
-    def get_and_connect_advanced_menuitem_menu(self, account):
-        """
-        Add FOR ACCOUNT options
-        """
-        xml = get_builder('advanced_menuitem_menu.ui')
-        advanced_menuitem_menu = xml.get_object('advanced_menuitem_menu')
-
-        xml_console_menuitem = xml.get_object('xml_console_menuitem')
-        archiving_preferences_menuitem = xml.get_object(
-            'archiving_preferences_menuitem')
-        privacy_lists_menuitem = xml.get_object('privacy_lists_menuitem')
-        administrator_menuitem = xml.get_object('administrator_menuitem')
-        send_server_message_menuitem = xml.get_object(
-            'send_server_message_menuitem')
-        set_motd_menuitem = xml.get_object('set_motd_menuitem')
-        update_motd_menuitem = xml.get_object('update_motd_menuitem')
-        delete_motd_menuitem = xml.get_object('delete_motd_menuitem')
-
-        xml_console_menuitem.connect('activate',
-            self.on_xml_console_menuitem_activate, account)
-
-        if app.connections[account]:
-            if app.connections[account].get_module('PrivacyLists').supported:
-                privacy_lists_menuitem.connect('activate',
-                    self.on_privacy_lists_menuitem_activate, account)
-            else:
-                privacy_lists_menuitem.set_sensitive(False)
-            if app.connections[account].get_module('MAM').available:
-                archiving_preferences_menuitem.connect(
-                    'activate',
-                    self.on_archiving_preferences_menuitem_activate, account)
-            else:
-                archiving_preferences_menuitem.set_sensitive(False)
-
-        if app.connections[account].is_zeroconf:
-            administrator_menuitem.set_sensitive(False)
-            send_server_message_menuitem.set_sensitive(False)
-            set_motd_menuitem.set_sensitive(False)
-            update_motd_menuitem.set_sensitive(False)
-            delete_motd_menuitem.set_sensitive(False)
-        else:
-            send_server_message_menuitem.connect('activate',
-                self.on_send_server_message_menuitem_activate, account)
-
-            set_motd_menuitem.connect('activate',
-                self.on_set_motd_menuitem_activate, account)
-
-            update_motd_menuitem.connect('activate',
-                self.on_update_motd_menuitem_activate, account)
-
-            delete_motd_menuitem.connect('activate',
-                self.on_delete_motd_menuitem_activate, account)
-
-        advanced_menuitem_menu.show_all()
-
-        return advanced_menuitem_menu
-
-    def add_history_manager_menuitem(self, menu):
-        """
-        Add a separator and History Manager menuitem BELOW for account menuitems
-        """
-        item = Gtk.SeparatorMenuItem.new() # separator
-        menu.append(item)
-
-        # History manager
-        item = Gtk.MenuItem.new_with_mnemonic(_('History Manager'))
-        menu.append(item)
-        item.connect('activate', self.on_history_manager_menuitem_activate)
-
     def show_appropriate_context_menu(self, event, iters):
         # iters must be all of the same type
         model = self.modelfilter
@@ -5241,8 +4952,8 @@ class RosterWindow:
         for titer in iters[1:]:
             if model[titer][Column.TYPE] != type_:
                 return
-        if type_ == 'group' and len(iters) == 1:
-            self.make_group_menu(event, iters[0])
+        if type_ == 'group':
+            self.make_group_menu(event, iters)
         if type_ == 'groupchat' and len(iters) == 1:
             self.make_groupchat_menu(event, iters[0])
         elif type_ == 'agent' and len(iters) == 1:
@@ -5376,7 +5087,7 @@ class RosterWindow:
         self.starting_filtering = False
         # Number of renderers plugins added
         self.nb_ext_renderers = 0
-        # When we quit, rememver if we already saved config once
+        # When we quit, remember if we already saved config once
         self.save_done = False
 
         # [icon, name, type, jid, account, editable, mood_pixbuf,
@@ -5447,20 +5158,9 @@ class RosterWindow:
         # accounts to draw next time we draw accounts.
         self.accounts_to_draw = []
 
-        # StatusComboBox
-        self.status_combobox = self.xml.get_object('status_combobox')
-        pixbuf_renderer, text_renderer = self.status_combobox.get_cells()
-        self.status_combobox.set_cell_data_func(
-            pixbuf_renderer, self._status_cell_data_func)
-        self.status_combobox.set_cell_data_func(
-            text_renderer, self._status_cell_data_func)
-        self.status_combobox.set_row_separator_func(self._iter_is_separator)
-
-        self.status_combobox.set_active(8)
-        # holds index to previously selected item so if
-        # "change status message..." is selected we can fallback to previously
-        # selected item and not stay with that item selected
-        self.previous_status_combobox_active = 8
+        # Status selector
+        self._status_selector = StatusSelector()
+        self.xml.roster_vbox2.add(self._status_selector)
 
         # Enable/Disable checkboxes at start
         if app.config.get('showoffline'):

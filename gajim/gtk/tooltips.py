@@ -35,10 +35,12 @@ from gi.repository import Pango
 
 from gajim.common import app
 from gajim.common import helpers
+from gajim.common.helpers import get_connection_status
 from gajim.common.const import AvatarSize
 from gajim.common.const import PEPEventType
 from gajim.common.i18n import Q_
 from gajim.common.i18n import _
+from gajim.gtkgui_helpers import add_css_class
 
 from gajim.gtk.util import get_builder
 from gajim.gtk.util import get_icon_name
@@ -46,6 +48,7 @@ from gajim.gtk.util import format_mood
 from gajim.gtk.util import format_activity
 from gajim.gtk.util import format_tune
 from gajim.gtk.util import format_location
+from gajim.gtk.util import get_css_show_class
 
 
 log = logging.getLogger('gajim.gtk.tooltips')
@@ -88,8 +91,7 @@ class StatusTable:
                           1)
         self.current_row += 1
 
-    def add_status_row(self, show, str_status, show_lock=False,
-                       indent=True, transport=None):
+    def add_status_row(self, show, str_status, indent=True, transport=None):
         """
         Append a new row with status icon to the table
         """
@@ -114,10 +116,6 @@ class StatusTable:
         status_label.set_ellipsize(Pango.EllipsizeMode.END)
         status_label.set_max_width_chars(30)
         self.table.attach(status_label, 3, self.current_row, 1, 1)
-        if show_lock:
-            lock_image = Gtk.Image()
-            lock_image.set_from_icon_name('dialog-password', Gtk.IconSize.MENU)
-            self.table.attach(lock_image, 4, self.current_row, 1, 1)
         self.current_row += 1
 
     def fill_table_with_accounts(self, accounts):
@@ -125,8 +123,6 @@ class StatusTable:
             message = acct['message']
             message = helpers.reduce_chars_newlines(message, 100, 1)
             message = GLib.markup_escape_text(message)
-            con_type = app.con_types.get(acct['name'])
-            show_lock = con_type in ('tls', 'ssl')
 
             account_label = GLib.markup_escape_text(acct['account_label'])
             if message:
@@ -134,10 +130,7 @@ class StatusTable:
             else:
                 status = account_label
 
-            self.add_status_row(acct['show'],
-                                status,
-                                show_lock=show_lock,
-                                indent=False)
+            self.add_status_row(acct['show'], status, indent=False)
 
             for line in acct['event_lines']:
                 self.add_text_row('  ' + line, 1)
@@ -206,7 +199,8 @@ class GCTooltip():
 
         # Status
         show = helpers.get_uf_show(contact.show.value)
-        self._ui.user_show.set_markup(colorize_status(show))
+        self._ui.user_show.set_text(show)
+        colorize_status(self._ui.user_show, contact.show.value)
         self._ui.user_show.show()
 
         # JID
@@ -220,8 +214,7 @@ class GCTooltip():
             uf_affiliation = \
                 _('%(owner_or_admin_or_member)s of this group chat') \
                 % {'owner_or_admin_or_member': uf_affiliation}
-            uf_affiliation = self.colorize_affiliation(uf_affiliation)
-            self._ui.affiliation.set_markup(uf_affiliation)
+            self._ui.affiliation.set_text(uf_affiliation)
             self._ui.affiliation.show()
 
         # Avatar
@@ -238,28 +231,9 @@ class GCTooltip():
         app.plugin_manager.gui_extension_point(
             'gc_tooltip_populate', self, contact, self._ui.tooltip_grid)
 
-    @staticmethod
-    def colorize_affiliation(affiliation):
-        """
-        Color the affiliation of a MUC participant inside the tooltip by
-        it's semantics. Color palette is the Tango.
-        """
-        formatted = "<span foreground='%s'>%s</span>"
-        color = None
-        if affiliation.startswith(Q_("?Group Chat Contact Affiliation:None")):
-            color = app.config.get('tooltip_affiliation_none_color')
-        elif affiliation.startswith(_("Member")):
-            color = app.config.get('tooltip_affiliation_member_color')
-        elif affiliation.startswith(_("Administrator")):
-            color = app.config.get('tooltip_affiliation_administrator_color')
-        elif affiliation.startswith(_("Owner")):
-            color = app.config.get('tooltip_affiliation_owner_color')
-        if color:
-            affiliation = formatted % (color, affiliation)
-        return affiliation
-
     def destroy(self):
         self._ui.tooltip_grid.destroy()
+
 
 class RosterTooltip(StatusTable):
     def __init__(self):
@@ -325,7 +299,7 @@ class RosterTooltip(StatusTable):
                 jid=jid,
                 account=account,
                 name=account_name,
-                show=connection.status,
+                show=get_connection_status(account),
                 status=connection.status_message,
                 resource=connection.get_own_jid().getResource(),
                 priority=connection.priority)
@@ -344,11 +318,8 @@ class RosterTooltip(StatusTable):
         name = GLib.markup_escape_text(self.prim_contact.get_shown_name())
 
         if app.config.get('mergeaccounts'):
-            color = app.config.get('tooltip_account_name_color')
-            account_name = GLib.markup_escape_text(
+            name = GLib.markup_escape_text(
                 self.prim_contact.account.name)
-            name += " <span foreground='{}'>({})</span>".format(
-                color, account_name)
 
         self._ui.name.set_markup(name)
         self._ui.name.show()
@@ -482,7 +453,6 @@ class RosterTooltip(StatusTable):
 
     def _set_idle_time(self, contact):
         if contact.idle_time:
-            idle_color = app.config.get('tooltip_idle_color')
             idle_time = contact.idle_time
             idle_time = time.localtime(contact.idle_time)
             idle_time = datetime(*(idle_time[:6]))
@@ -491,9 +461,7 @@ class RosterTooltip(StatusTable):
                 formatted = idle_time.strftime('%X')
             else:
                 formatted = idle_time.strftime('%c')
-            idle_markup = '<span foreground="{}">{}</span>'.format(
-                idle_color, formatted)
-            self._ui.idle_since.set_markup(idle_markup)
+            self._ui.idle_since.set_text(formatted)
             self._ui.idle_since.show()
             self._ui.idle_since_label.show()
 
@@ -507,7 +475,8 @@ class RosterTooltip(StatusTable):
                 else:
                     show = _('Disconnected')
 
-            self._ui.user_show.set_markup(colorize_status(show))
+            colorize_status(self._ui.user_show, contact.show)
+            self._ui.user_show.set_text(show)
             self._ui.user_show.show()
 
     @staticmethod
@@ -625,25 +594,9 @@ class FileTransfersTooltip():
         return Q_('?transfer status:Not started')
 
 
-def colorize_status(status):
+def colorize_status(widget, show):
     """
-    Colorize the status message inside the tooltip by it's
-    semantics. Color palette is the Tango.
+    Colorize the status message inside the tooltip by it's semantics.
     """
-    formatted = "<span foreground='%s'>%s</span>"
-    color = None
-    if status.startswith(Q_("?user status:Available")):
-        color = app.config.get('tooltip_status_online_color')
-    elif status.startswith(_("Free for Chat")):
-        color = app.config.get('tooltip_status_free_for_chat_color')
-    elif status.startswith(_("Away")):
-        color = app.config.get('tooltip_status_away_color')
-    elif status.startswith(_("Busy")):
-        color = app.config.get('tooltip_status_busy_color')
-    elif status.startswith(_("Not Available")):
-        color = app.config.get('tooltip_status_na_color')
-    elif status.startswith(_("Offline")):
-        color = app.config.get('tooltip_status_offline_color')
-    if color:
-        status = formatted % (color, status)
-    return status
+    css_class = get_css_show_class(show)[14:]
+    add_css_class(widget, css_class, prefix='gajim-status-')

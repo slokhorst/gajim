@@ -21,6 +21,7 @@ import socket
 from collections import deque
 
 import nbxmpp
+from nbxmpp.namespaces import Namespace
 
 from gi.repository import GLib
 
@@ -133,8 +134,8 @@ class JingleRTPContent(JingleContent):
 
     def add_remote_candidates(self, candidates):
         JingleContent.add_remote_candidates(self, candidates)
-        # FIXME: connectivity should not be etablished yet
-        # Instead, it should be etablished after session-accept!
+        # FIXME: connectivity should not be established yet
+        # Instead, it should be established after session-accept!
         if self.sent:
             self.p2pstream.add_remote_candidates(candidates)
 
@@ -169,7 +170,7 @@ class JingleRTPContent(JingleContent):
         self.p2psession.stop_telephony_event()
 
     def _fill_content(self, content):
-        content.addChild(nbxmpp.NS_JINGLE_RTP + ' description',
+        content.addChild(Namespace.JINGLE_RTP + ' description',
                          attrs={'media': self.media},
                          payload=list(self.iter_codecs()))
 
@@ -181,6 +182,7 @@ class JingleRTPContent(JingleContent):
         self.funnel.set_state(Gst.State.PLAYING)
 
     def _on_src_pad_added(self, stream, pad, codec):
+        log.info('Used codec: %s', codec.to_string())
         if not self.funnel:
             self._setup_funnel()
         pad.link(self.funnel.get_request_pad('sink_%u'))
@@ -346,13 +348,13 @@ class JingleAudio(JingleRTPContent):
 
     def set_mic_volume(self, vol):
         """
-        vol must be between 0 ans 1
+        vol must be between 0 and 1
         """
         self.mic_volume.set_property('volume', vol)
 
     def set_out_volume(self, vol):
         """
-        vol must be between 0 ans 1
+        vol must be between 0 and 1
         """
         self.out_volume.set_property('volume', vol)
 
@@ -468,4 +470,4 @@ def get_content(desc):
     if desc['media'] == 'video':
         return JingleVideo
 
-contents[nbxmpp.NS_JINGLE_RTP] = get_content
+contents[Namespace.JINGLE_RTP] = get_content

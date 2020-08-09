@@ -25,7 +25,7 @@
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
 try:
-    from gajim.common import caps_cache
+    from gajim.common import app
     from gajim.common.i18n import _
     from gajim.common.account import Account
     from gajim import common
@@ -47,7 +47,7 @@ class XMPPEntity:
 class CommonContact(XMPPEntity):
 
     def __init__(self, jid, account, resource, show, presence, status, name,
-                 chatstate, client_caps=None):
+                 chatstate):
 
         XMPPEntity.__init__(self, jid, account, resource)
 
@@ -55,8 +55,6 @@ class CommonContact(XMPPEntity):
         self._presence = presence
         self.status = status
         self.name = name
-
-        self.client_caps = client_caps or caps_cache.NullClientCaps()
 
         # this is contact's chatstate
         self._chatstate = chatstate
@@ -126,14 +124,23 @@ class CommonContact(XMPPEntity):
         if self.show == 'offline':
             # Unfortunately, if all resources are offline, the contact
             # includes the last resource that was online. Check for its
-            # show, so we can be sure it's existant. Otherwise, we still
+            # show, so we can be sure it's existent. Otherwise, we still
             # return caps for a contact that has no resources left.
             return False
-        return caps_cache.client_supports(self.client_caps, requested_feature)
+
+        disco_info = app.logger.get_last_disco_info(self.get_full_jid())
+        if disco_info is None:
+            return False
+
+        return disco_info.supports(requested_feature)
 
     @property
     def uses_phone(self):
-        return caps_cache.get_client_identity(self.client_caps) == 'phone'
+        disco_info = app.logger.get_last_disco_info(self.get_full_jid())
+        if disco_info is None:
+            return False
+
+        return disco_info.has_category('phone')
 
 
 class Contact(CommonContact):
@@ -141,7 +148,7 @@ class Contact(CommonContact):
     Information concerning a contact
     """
     def __init__(self, jid, account, name='', groups=None, show='', status='',
-    sub='', ask='', resource='', priority=0, client_caps=None,
+    sub='', ask='', resource='', priority=0,
     chatstate=None, idle_time=None, avatar_sha=None, groupchat=False,
     is_pm_contact=False):
         if not isinstance(jid, str):
@@ -150,10 +157,9 @@ class Contact(CommonContact):
             groups = []
 
         CommonContact.__init__(self, jid, account, resource, show,
-                               None, status, name,
-                               chatstate, client_caps=client_caps)
+                               None, status, name, chatstate)
 
-        self.contact_name = '' # nick choosen by contact
+        self.contact_name = '' # nick chosen by contact
         self.groups = [i if i else _('General') for i in set(groups)] # filter duplicate values
         self.avatar_sha = avatar_sha
         self._is_groupchat = groupchat
@@ -182,7 +188,6 @@ class Contact(CommonContact):
         return self.jid.split('@')[0]
 
     def _get_groupchat_name(self):
-        from gajim.common import app
         from gajim.common.helpers import get_groupchat_name
         con = app.connections[self.account.name]
         return get_groupchat_name(con, self.jid)
@@ -229,7 +234,6 @@ class Contact(CommonContact):
 
     @property
     def is_connected(self):
-        from gajim.common import app
         try:
             return app.gc_connected[self.account.name][self.jid]
         except Exception:
@@ -238,6 +242,14 @@ class Contact(CommonContact):
     def is_transport(self):
         # if not '@' or '@' starts the jid then contact is transport
         return self.jid.find('@') <= 0
+
+    def can_notify(self):
+        if not self.is_groupchat:
+            raise ValueError
+
+        all_ = app.config.get('notify_on_all_muc_messages')
+        room = app.config.get_per('rooms', self.jid, 'notify_on_all_messages')
+        return all_ or room
 
 
 class GC_Contact(CommonContact):
@@ -272,7 +284,7 @@ class GC_Contact(CommonContact):
         """
         return Contact(jid=self.get_full_jid(), account=self.account,
             name=self.name, groups=[], show=self.show, status=self.status,
-            sub='none', client_caps=self.client_caps, avatar_sha=self.avatar_sha,
+            sub='none', avatar_sha=self.avatar_sha,
             is_pm_contact=True)
 
 
@@ -312,7 +324,7 @@ class LegacyContactsAPI:
 
     def create_contact(self, jid, account, name='', groups=None, show='',
     status='', sub='', ask='', resource='', priority=0,
-    client_caps=None, chatstate=None, idle_time=None,
+    chatstate=None, idle_time=None,
     avatar_sha=None, groupchat=False):
         if groups is None:
             groups = []
@@ -320,7 +332,7 @@ class LegacyContactsAPI:
         account = self._accounts.get(account, account)
         return Contact(jid=jid, account=account, name=name, groups=groups,
             show=show, status=status, sub=sub, ask=ask, resource=resource,
-            priority=priority, client_caps=client_caps,
+            priority=priority,
             chatstate=chatstate, idle_time=idle_time, avatar_sha=avatar_sha,
             groupchat=groupchat)
 
@@ -349,7 +361,6 @@ class LegacyContactsAPI:
             name=contact.name, groups=contact.groups, show=contact.show,
             status=contact.status, sub=contact.sub, ask=contact.ask,
             resource=contact.resource, priority=contact.priority,
-            client_caps=contact.client_caps,
             chatstate=contact.chatstate_enum,
             idle_time=contact.idle_time, avatar_sha=contact.avatar_sha)
 
@@ -667,7 +678,7 @@ class Contacts():
         for _contact in self._contacts[old_jid]:
             _contact.jid = new_jid
             self._contacts[new_jid].append(_contact)
-            del self._contacts[old_jid]
+        del self._contacts[old_jid]
 
     def get_combined_chatstate(self, jid):
         if jid not in self._contacts:

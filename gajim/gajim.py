@@ -22,34 +22,35 @@ import signal
 import platform
 from ctypes import CDLL, byref, create_string_buffer
 from ctypes.util import find_library
-from distutils.version import LooseVersion as V
+from packaging.version import Version as V
 
 from gajim.common import i18n
 
-_MIN_NBXMPP_VER = '0.9.94'
+_MIN_NBXMPP_VER = '1.0.1'
 _MIN_GTK_VER = '3.22.27'
-_MIN_CAIRO_VER = '1.14.0'
+_MIN_CAIRO_VER = '1.16.0'
 _MIN_PYGOBJECT_VER = '3.32.0'
+_MIN_GLIB_VER = '2.60.0'
 
 
 def check_version(dep_name, current_ver, min_ver):
     if V(current_ver) < V(min_ver):
-        sys.exit('Gajim needs %s >= %s to run. '
-                 'Quitting...' % (dep_name, min_ver))
+        sys.exit('Gajim needs %s >= %s (found %s) to run. '
+                 'Quitting...' % (dep_name, min_ver, current_ver))
 
 
 def _check_required_deps():
-    error_message = 'Gajim needs %s to run. Quitting…'
+    error_message = 'Gajim needs %s to run. Quitting… (Error: %s)'
 
     try:
         import nbxmpp
-    except ImportError:
-        sys.exit(error_message % 'python-nbxmpp')
+    except ImportError as error:
+        sys.exit(error_message % ('python-nbxmpp', error))
 
     try:
         import gi
-    except ImportError:
-        sys.exit(error_message % 'pygobject')
+    except ImportError as error:
+        sys.exit(error_message % ('pygobject', error))
 
     try:
         gi.require_versions({'GLib': '2.0',
@@ -63,19 +64,25 @@ def _check_required_deps():
 
     try:
         import cairo
-    except ImportError:
-        sys.exit(error_message % 'python-cairo')
+    except ImportError as error:
+        sys.exit(error_message % ('python-cairo', error))
 
     from gi.repository import Gtk
     gtk_ver = '%s.%s.%s' % (Gtk.get_major_version(),
                             Gtk.get_minor_version(),
                             Gtk.get_micro_version())
 
+    from gi.repository import GLib
+    glib_ver = '.'.join(map(str, [GLib.MAJOR_VERSION,
+                                  GLib.MINOR_VERSION,
+                                  GLib.MICRO_VERSION]))
+
     check_version('python-nbxmpp', nbxmpp.__version__, _MIN_NBXMPP_VER)
     check_version('pygobject', gi.__version__, _MIN_PYGOBJECT_VER)
     check_version('libcairo', cairo.cairo_version_string(), _MIN_CAIRO_VER)
     check_version('python-cairo', cairo.version, _MIN_CAIRO_VER)
     check_version('gtk3', gtk_ver, _MIN_GTK_VER)
+    check_version('glib', glib_ver, _MIN_GLIB_VER)
 
 
 def _init_gui(gui):

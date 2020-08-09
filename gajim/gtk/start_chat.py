@@ -37,6 +37,7 @@ from gajim.gtk.groupchat_info import GroupChatInfoScrolled
 from gajim.gtk.util import get_builder
 from gajim.gtk.util import ensure_not_destroyed
 from gajim.gtk.util import get_icon_name
+from gajim.gtk.util import generate_account_badge
 
 
 class Search(IntEnum):
@@ -51,7 +52,7 @@ class StartChatDialog(Gtk.ApplicationWindow):
         self.set_application(app.app)
         self.set_position(Gtk.WindowPosition.CENTER)
         self.set_show_menubar(False)
-        self.set_title(_('Start New Conversation'))
+        self.set_title(_('Start / Join Chat'))
         self.set_default_size(-1, 400)
         self.ready_to_destroy = False
         self._parameter_form = None
@@ -95,6 +96,8 @@ class StartChatDialog(Gtk.ApplicationWindow):
         self._muc_info_box = GroupChatInfoScrolled()
         self._ui.info_box.add(self._muc_info_box)
 
+        self._ui.infobar.set_revealed(app.config.get('show_help_start_chat'))
+
         self.connect('key-press-event', self._on_key_press)
         self.connect('destroy', self._destroy)
 
@@ -136,8 +139,8 @@ class StartChatDialog(Gtk.ApplicationWindow):
             for bookmark in bookmarks:
                 jid = str(bookmark.jid)
                 name = get_groupchat_name(con, jid)
-                rows.append(ContactRow(account, None, jid,
-                                       name, show_account, True))
+                rows.append(ContactRow(account, None, jid, name, show_account,
+                                       groupchat=True))
 
     def _load_contacts(self, rows):
         generator = self._incremental_add(rows)
@@ -258,6 +261,11 @@ class StartChatDialog(Gtk.ApplicationWindow):
             self._ui.search_entry.grab_focus_without_selecting()
         return Gdk.EVENT_PROPAGATE
 
+    def _on_infobar_response(self, _widget, response):
+        if response == Gtk.ResponseType.CLOSE:
+            self._ui.infobar.set_revealed(False)
+            app.config.set('show_help_start_chat', False)
+
     def _start_new_chat(self, row):
         if row.new:
             try:
@@ -369,15 +377,17 @@ class StartChatDialog(Gtk.ApplicationWindow):
         return box == Search.GLOBAL
 
     def _on_global_search_toggle(self, button):
-        self._ui.search_entry.set_text('')
         self._ui.search_entry.grab_focus()
         image_style_context = button.get_children()[0].get_style_context()
         if button.get_active():
             image_style_context.add_class('selected-color')
             self._set_listbox(self._global_search_listbox)
+            if self._ui.search_entry.get_text():
+                self._start_search()
             self._remove_new_jid_row()
             self._ui.listbox.invalidate_filter()
         else:
+            self._ui.search_entry.set_text('')
             image_style_context.remove_class('selected-color')
             self._set_listbox(self._ui.listbox)
             self._global_search_listbox.remove_all()
@@ -401,7 +411,8 @@ class StartChatDialog(Gtk.ApplicationWindow):
             show_account = len(self._accounts) > 1
             row = ContactRow(account, None, '', None, show_account)
             self.new_contact_rows[account] = row
-            group_row = ContactRow(account, None, '', None, show_account, True)
+            group_row = ContactRow(account, None, '', None, show_account,
+                                   groupchat=True)
             self.new_groupchat_rows[account] = group_row
             self._ui.listbox.add(row)
             self._ui.listbox.add(group_row)
@@ -609,42 +620,43 @@ class ContactRow(Gtk.ListBoxRow):
         image.set_size_request(AvatarSize.CHAT, AvatarSize.CHAT)
         grid.add(image)
 
-        middle_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        middle_box.set_hexpand(True)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_hexpand(True)
 
         if self.name is None:
             if self.groupchat:
                 self.name = _('Join Group Chat')
             else:
-                self.name = _('Add Contact')
+                self.name = _('Start Chat')
 
         self.name_label = Gtk.Label(label=self.name)
         self.name_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.name_label.set_xalign(0)
-        self.name_label.set_width_chars(25)
+        self.name_label.set_width_chars(20)
         self.name_label.set_halign(Gtk.Align.START)
         self.name_label.get_style_context().add_class('bold16')
-        middle_box.add(self.name_label)
+        name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        name_box.add(self.name_label)
+        if show_account:
+            account_badge = generate_account_badge(account)
+            account_badge.set_tooltip_text(
+                _('Account: %s' % self.account_label))
+            account_badge.set_halign(Gtk.Align.END)
+            account_badge.set_valign(Gtk.Align.START)
+            account_badge.set_hexpand(True)
+            name_box.add(account_badge)
+        box.add(name_box)
 
         self.jid_label = Gtk.Label(label=jid)
+        self.jid_label.set_tooltip_text(jid)
         self.jid_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.jid_label.set_xalign(0)
-        self.jid_label.set_width_chars(25)
+        self.jid_label.set_width_chars(22)
         self.jid_label.set_halign(Gtk.Align.START)
         self.jid_label.get_style_context().add_class('dim-label')
-        middle_box.add(self.jid_label)
+        box.add(self.jid_label)
 
-        grid.add(middle_box)
-
-        if show_account:
-            account_label = Gtk.Label(label=self.account_label)
-            account_label.set_halign(Gtk.Align.START)
-            account_label.set_valign(Gtk.Align.START)
-
-            right_box = Gtk.Box()
-            right_box.set_vexpand(True)
-            right_box.add(account_label)
-            grid.add(right_box)
+        grid.add(box)
 
         self.add(grid)
         self.show_all()

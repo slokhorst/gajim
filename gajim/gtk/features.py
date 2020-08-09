@@ -23,7 +23,6 @@ import os
 import sys
 from collections import namedtuple
 
-import gi
 from gi.repository import Gtk
 from gi.repository import Gdk
 
@@ -49,7 +48,6 @@ class Features(Gtk.ApplicationWindow):
 
         self.feature_listbox = Gtk.ListBox()
         self.feature_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.feature_listbox.set_header_func(self._header_func, _('Features'))
 
         grid.attach(self.feature_listbox, 0, 0, 1, 1)
 
@@ -65,15 +63,6 @@ class Features(Gtk.ApplicationWindow):
             self._add_feature(feature)
 
         self.show_all()
-
-    @staticmethod
-    def _header_func(row, before, user_data):
-        if before:
-            row.set_header(None)
-        else:
-            label = Gtk.Label(label=user_data)
-            label.set_halign(Gtk.Align.START)
-            row.set_header(label)
 
     def _on_key_press(self, _widget, event):
         if event.keyval == Gdk.KEY_Escape:
@@ -137,11 +126,10 @@ class Features(Gtk.ApplicationWindow):
                     self._some_keyring_available(),
                     _('Enables Gajim to store Passwords securely instead of '
                       'storing them in plaintext'),
-                    _('Requires: libsecret and a provider (such as GNOME '
-                      'Keyring and KSecretService)'),
+                    _('Requires: gnome-keyring or kwallet'),
                     _('Windows Credential Vault is used for secure password '
                       'storage'),
-                    None),
+                    app.config.get('use_keyring')),
             Feature(_('Spell Checker'),
                     app.is_installed('GSPELL'),
                     _('Enables Gajim to spell check your messages while '
@@ -160,14 +148,9 @@ class Features(Gtk.ApplicationWindow):
 
     @staticmethod
     def _some_keyring_available():
-        if os.name == 'nt':
-            return True
-        try:
-            gi.require_version('Secret', '1')
-            from gi.repository import Secret  # pylint: disable=unused-import
-        except (ValueError, ImportError):
-            return False
-        return True
+        import keyring
+        backends = keyring.backend.get_all_keyring()
+        return any(keyring.core.recommended(backend) for backend in backends)
 
     @staticmethod
     def _idle_available():

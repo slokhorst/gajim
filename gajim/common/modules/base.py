@@ -20,7 +20,7 @@ import logging
 from functools import partial
 from unittest.mock import Mock
 
-import nbxmpp
+from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import StanzaHandler
 
 from gajim.common import app
@@ -58,7 +58,7 @@ class BaseModule(EventHelper):
                     key, self.__class__.__name__))
 
         if not app.account_is_connected(self._account):
-            self._log.warning('Account not connected, cant use %s', key)
+            self._log.warning('Account not connected, can’t use %s', key)
             return None
 
         module = self._con.connection.get_module(self._nbxmpp_extends)
@@ -70,7 +70,7 @@ class BaseModule(EventHelper):
 
     def _nbxmpp(self, module_name=None):
         if not app.account_is_connected(self._account):
-            self._log.warning('Account not connected, cant use nbxmpp method')
+            self._log.warning('Account not connected, can’t use nbxmpp method')
             return Mock()
 
         if module_name is None:
@@ -83,7 +83,7 @@ class BaseModule(EventHelper):
     def _register_pubsub_handler(self, callback):
         handler = StanzaHandler(name='message',
                                 callback=callback,
-                                ns=nbxmpp.NS_PUBSUB_EVENT,
+                                ns=Namespace.PUBSUB_EVENT,
                                 priority=49)
         self.handlers.append(handler)
 

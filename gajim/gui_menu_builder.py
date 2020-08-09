@@ -15,8 +15,7 @@
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
 from gi.repository import Gtk, Gio, GLib
-from nbxmpp.protocol import NS_COMMANDS
-from nbxmpp.protocol import NS_JINGLE_FILE_TRANSFER_5, NS_CONFERENCE
+from nbxmpp.namespaces import Namespace
 
 from gajim import gtkgui_helpers
 from gajim.common import app
@@ -102,17 +101,18 @@ show_bookmarked=False, force_resource=False):
         if acct not in connected_accounts:
             continue
         room_jid = gc_control.room_jid
+        room_name = gc_control.room_name
         if room_jid in ignore_rooms:
             continue
         if room_jid in app.gc_connected[acct] and \
         app.gc_connected[acct][room_jid] and \
         contacts_transport in ['jabber', None]:
-            rooms.append((room_jid, acct))
+            rooms.append((room_jid, room_name, acct))
     if rooms:
         item = Gtk.SeparatorMenuItem.new() # separator
         invite_to_submenu.append(item)
-        for (room_jid, account) in rooms:
-            menuitem = Gtk.MenuItem.new_with_label(room_jid.split('@')[0])
+        for (room_jid, room_name, account) in rooms:
+            menuitem = Gtk.MenuItem.new_with_label(room_name)
             if len(contact_list) > 1: # several resources
                 menuitem.set_submenu(build_resources_submenu(
                     contact_list, account, roster.on_invite_to_room, room_jid,
@@ -210,18 +210,18 @@ control=None, gc_contact=None, is_anonymous=True):
             contacts,
             account,
             roster.on_send_file_menuitem_activate,
-            cap=NS_JINGLE_FILE_TRANSFER_5))
+            cap=Namespace.JINGLE_FILE_TRANSFER_5))
         execute_command_menuitem.set_submenu(build_resources_submenu(
-                contacts, account, roster.on_execute_command, cap=NS_COMMANDS))
+                contacts, account, roster.on_execute_command, cap=Namespace.COMMANDS))
     else:
-        if contact.supports(NS_JINGLE_FILE_TRANSFER_5):
+        if contact.supports(Namespace.JINGLE_FILE_TRANSFER_5):
             send_file_menuitem.set_sensitive(True)
             send_file_menuitem.connect('activate',
                     roster.on_send_file_menuitem_activate, contact, account)
         else:
             send_file_menuitem.set_sensitive(False)
 
-        if contact.supports(NS_COMMANDS):
+        if contact.supports(Namespace.COMMANDS):
             execute_command_menuitem.set_sensitive(True)
             if gc_contact and gc_contact.jid and not is_anonymous:
                 execute_command_menuitem.connect('activate',
@@ -321,7 +321,7 @@ control=None, gc_contact=None, is_anonymous=True):
             bookmarked = False
             c_ = app.contacts.get_contact(account, gc_contact.jid,
                 gc_contact.resource)
-            if c_ and c_.supports(NS_CONFERENCE):
+            if c_ and c_.supports(Namespace.CONFERENCE):
                 bookmarked = True
             build_invite_submenu(invite_menuitem, [(gc_contact, account)],
                 show_bookmarked=bookmarked)
@@ -330,7 +330,7 @@ control=None, gc_contact=None, is_anonymous=True):
         if control and control.resource:
             force_resource = True
         build_invite_submenu(invite_menuitem, [(contact, account)],
-            show_bookmarked=contact.supports(NS_CONFERENCE),
+            show_bookmarked=contact.supports(Namespace.CONFERENCE),
             force_resource=force_resource)
 
     if app.account_is_disconnected(account):
@@ -391,13 +391,12 @@ control=None, gc_contact=None, is_anonymous=True):
 
 
     con = app.connections[account]
-    if con and (con.get_module('PrivacyLists').supported or
-                con.get_module('Blocking').supported):
+    if con.get_module('Blocking').supported:
         transport = app.get_transport_name_from_jid(jid, use_config_setting=False)
         if helpers.jid_is_blocked(account, jid):
             block_menuitem.set_no_show_all(True)
             block_menuitem.hide()
-            if transport != 'jabber':
+            if transport not in ('jabber', None):
                 unblock_menuitem.set_no_show_all(True)
                 unblock_menuitem.hide()
                 unignore_menuitem.set_no_show_all(False)
@@ -409,7 +408,7 @@ control=None, gc_contact=None, is_anonymous=True):
         else:
             unblock_menuitem.set_no_show_all(True)
             unblock_menuitem.hide()
-            if transport != 'jabber':
+            if transport not in ('jabber', None):
                 block_menuitem.set_no_show_all(True)
                 block_menuitem.hide()
                 ignore_menuitem.set_no_show_all(False)
@@ -515,13 +514,14 @@ def get_transport_menu(contact, account):
 
 def get_singlechat_menu(control_id, account, jid):
     singlechat_menu = [
-        (_('Send File…'), [
+        (_('Send File'), [
             ('win.send-file-httpupload-', _('Upload File…')),
             ('win.send-file-jingle-', _('Send File Directly…')),
             ]),
         (_('Send Chatstate'), ['chatstate']),
-        ('win.invite-contacts-', _('Invite Contacts')),
-        ('win.add-to-roster-', _('Add to Contact List')),
+        ('win.invite-contacts-', _('Invite Contacts…')),
+        ('win.add-to-roster-', _('Add to Contact List…')),
+        ('win.block-contact-', _('Block Contact…')),
         ('win.toggle-audio-', _('Voice Chat')),
         ('win.toggle-video-', _('Video Chat')),
         ('win.information-', _('Information')),
@@ -530,13 +530,13 @@ def get_singlechat_menu(control_id, account, jid):
 
     def build_chatstate_menu():
         menu = Gio.Menu()
-        entrys = [
+        entries = [
             (_('Disabled'), 'disabled'),
-            (_('Composing only'), 'composing_only'),
-            (_('All chat states'), 'all')
+            (_('Composing Only'), 'composing_only'),
+            (_('All Chat States'), 'all')
         ]
 
-        for entry in entrys:
+        for entry in entries:
             label, setting = entry
             action = 'win.send-chatstate-%s::%s' % (control_id, setting)
             menu.append(label, action)
@@ -572,27 +572,26 @@ def get_singlechat_menu(control_id, account, jid):
 def get_groupchat_menu(control_id, account, jid):
     groupchat_menu = [
         ('win.information-', _('Information')),
-        ('win.invite-', _('Invite Contact')),
         (_('Manage Group Chat'), [
-            ('win.rename-groupchat-', _('Rename Group Chat')),
-            ('win.change-subject-', _('Change Subject')),
-            ('win.configure-', _('Configure Group Chat')),
+            ('win.rename-groupchat-', _('Rename…')),
+            ('win.change-subject-', _('Change Subject…')),
             ('win.upload-avatar-', _('Upload Avatar…')),
-            ('win.destroy-', _('Destroy Group Chat')),
+            ('win.configure-', _('Configure…')),
+            ('win.destroy-', _('Destroy…')),
         ]),
         (_('Chat Settings'), [
-            ('win.print-join-left-', _('Show join/leave')),
-            ('win.print-status-', _('Show status changes')),
-            ('win.notify-on-message-', _('Notify on all messages')),
-            ('win.minimize-on-close-', _('Minimize on close')),
+            ('win.print-join-left-', _('Show Join/Leave')),
+            ('win.print-status-', _('Show Status Changes')),
+            ('win.notify-on-message-', _('Notify on all Messages')),
+            ('win.minimize-on-close-', _('Minimize on Close')),
             ('win.minimize-on-autojoin-',
-             _('Minimize when joining automatically')),
+             _('Minimize When Joining Automatically')),
             (_('Send Chatstate'), ['chatstate']),
         ]),
         (_('Sync Threshold'), ['sync']),
-        ('win.change-nickname-', _('Change Nickname')),
+        ('win.change-nickname-', _('Change Nickname…')),
         ('win.request-voice-', _('Request Voice')),
-        ('win.execute-command-', _('Execute command')),
+        ('win.execute-command-', _('Execute Command…')),
         ('app.browse-history', _('History')),
         ('win.disconnect-', _('Leave')),
     ]
@@ -647,13 +646,13 @@ def get_groupchat_menu(control_id, account, jid):
 
     def build_chatstate_menu():
         menu = Gio.Menu()
-        entrys = [
+        entries = [
             (_('Disabled'), 'disabled'),
             (_('Composing only'), 'composing_only'),
             (_('All chat states'), 'all')
         ]
 
-        for entry in entrys:
+        for entry in entries:
             label, setting = entry
             action = 'win.send-chatstate-%s::%s' % (control_id, setting)
             menu.append(label, action)
@@ -673,15 +672,14 @@ def get_account_menu(account):
         ('-add-contact', _('Add Contact…')),
         ('-profile', _('Profile')),
         ('-start-single-chat', _('Send Single Message…')),
-        ('-services', _('Discover Services')),
+        ('-services', _('Discover Services…')),
         ('-server-info', _('Server Info')),
         (_('Advanced'), [
             ('-archive', _('Archiving Preferences')),
             ('-blocking', _('Blocking List')),
             ('-bookmarks', _('Bookmarks')),
             ('-pep-config', _('PEP Configuration')),
-            ('-sync-history', _('Synchronise History')),
-            ('-privacylists', _('Privacy Lists')),
+            ('-sync-history', _('Synchronise History…')),
         ]),
         (_('Admin'), [
             ('-send-server-message', _('Send Server Message…')),
@@ -750,7 +748,8 @@ def build_accounts_menu():
 def get_encryption_menu(control_id, control_type, zeroconf=False):
     menu = Gio.Menu()
     menu.append(
-        'Disabled', 'win.set-encryption-{}::{}'.format(control_id, 'disabled'))
+        _('Disabled'),
+        'win.set-encryption-{}::{}'.format(control_id, 'disabled'))
     for name, plugin in app.plugin_manager.encryption_plugins.items():
         if control_type.is_groupchat:
             if not hasattr(plugin, 'allow_groupchat'):
@@ -846,7 +845,7 @@ def get_groupchat_roster_menu(account, control_id, self_contact, contact):
     item.set_detailed_action_name(action)
     menu.append(item)
 
-    item = Gtk.MenuItem(label=_('Add to Contact List'))
+    item = Gtk.MenuItem(label=_('Add to Contact List…'))
     action = 'app.{account}-add-contact(["{account}", "{jid}"])'.format(
         account=account, jid=contact.jid or '')
     if contact.jid is None:
@@ -864,23 +863,12 @@ def get_groupchat_roster_menu(account, control_id, self_contact, contact):
         item.set_sensitive(False)
     menu.append(item)
 
-    item = Gtk.MenuItem(label=_('Execute command'))
+    item = Gtk.MenuItem(label=_('Execute Command…'))
     action = 'win.execute-command-%s::%s' % (control_id, contact.name)
     item.set_detailed_action_name(action)
     menu.append(item)
 
     menu.append(Gtk.SeparatorMenuItem())
-
-    if helpers.jid_is_blocked(account, contact.get_full_jid()):
-        action = 'win.unblock-%s::%s' % (control_id, contact.name)
-        label = _('Unblock')
-    else:
-        action = 'win.block-%s::%s' % (control_id, contact.name)
-        label = _('Block')
-
-    item = Gtk.MenuItem(label=label)
-    item.set_detailed_action_name(action)
-    menu.append(item)
 
     item = Gtk.MenuItem(label=_('Kick'))
     action = 'win.kick-%s::%s' % (control_id, contact.name)

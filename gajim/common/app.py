@@ -46,12 +46,12 @@ from gajim.common import configpaths
 from gajim.common import ged as ged_module
 from gajim.common.i18n import LANG
 from gajim.common.const import Display
-from gajim.common.contacts import LegacyContactsAPI
 from gajim.common.events import Events
 from gajim.common.types import NetworkEventsControllerT  # pylint: disable=unused-import
 from gajim.common.types import InterfaceT  # pylint: disable=unused-import
 from gajim.common.types import LoggerT  # pylint: disable=unused-import
 from gajim.common.types import ConnectionT  # pylint: disable=unused-import
+from gajim.common.types import LegacyContactsAPIT  # pylint: disable=unused-import
 
 interface = cast(InterfaceT, None)
 thread_interface = lambda *args: None # Interface to run a thread and then a callback
@@ -71,15 +71,13 @@ logger = cast(LoggerT, None)
 
 css_config = None
 
-os_info = None # used to cache os information
-
 transport_type = {}  # type: Dict[str, str]
 
 # dict of time of the latest incoming message per jid
 # {acct1: {jid1: time1, jid2: time2}, }
 last_message_time = {}  # type: Dict[str, Dict[str, float]]
 
-contacts = LegacyContactsAPI()
+contacts = cast(LegacyContactsAPIT, None)
 
 # tell if we are connected to the room or not
 # {acct: {room_jid: True}}
@@ -89,7 +87,7 @@ gc_connected = {}  # type: Dict[str, Dict[str, bool]]
 # {room_jid: password}
 gc_passwords = {}  # type: Dict[str, str]
 
-# dict of rooms that must be automaticaly configured
+# dict of rooms that must be automatically configured
 # and for which we have a list of invities
 # {account: {room_jid: {'invities': []}}}
 automatic_rooms = {}  # type: Dict[str, Dict[str, Dict[str, List[str]]]]
@@ -117,24 +115,11 @@ nicks = {}  # type: Dict[str, str]
 # from this transport
 block_signed_in_notifications = {}  # type: Dict[str, bool]
 
- # type of each connection (ssl, tls, tcp, ...)
-con_types = {}  # type: Dict[str, Optional[str]]
-
-# whether we pass auto away / xa or not
-#'off': don't use sleeper for this account
-#'online': online and use sleeper
-#'autoaway': autoaway and use sleeper
-#'autoxa': autoxa and use sleeper
-sleeper_state = {}  # type: Dict[str, str]
-
-status_before_autoaway = {}  # type: Dict[str, str]
-
 proxy65_manager = None
 
 cert_store = None
 
-SHOW_LIST = ['offline', 'connecting', 'online', 'chat', 'away', 'xa', 'dnd',
-             'error']
+task_manager = None
 
 # zeroconf account name
 ZEROCONF_ACC_NAME = 'Local'
@@ -155,11 +140,14 @@ _dependencies = {
     'AV': False,
     'GEOCLUE': False,
     'UPNP': False,
-    'PYCURL': False,
     'GSOUND': False,
     'GSPELL': False,
     'IDLE': False,
 }
+
+
+def get_client(account):
+    return connections[account]
 
 
 def is_installed(dependency):
@@ -248,13 +236,6 @@ def detect_dependencies():
         gupnp_igd = GUPnPIgd.SimpleIgd()
         _dependencies['UPNP'] = True
     except ValueError:
-        pass
-
-    # PYCURL
-    try:
-        import pycurl  # pylint: disable=unused-import
-        _dependencies['PYCURL'] = True
-    except ImportError:
         pass
 
     # IDLE
@@ -415,8 +396,9 @@ def get_accounts_sorted():
     '''
     account_list = config.get_per('accounts')
     account_list.sort(key=str.lower)
-    account_list.remove('Local')
-    account_list.insert(0, 'Local')
+    if 'Local' in account_list:
+        account_list.remove('Local')
+        account_list.insert(0, 'Local')
     return account_list
 
 def get_enabled_accounts_with_labels(exclude_local=True, connected_only=False,
@@ -473,21 +455,6 @@ def in_groupchat(account, room_jid):
     if room_jid not in gc_connected[account]:
         return False
     return gc_connected[account][room_jid]
-
-def get_number_of_securely_connected_accounts():
-    """
-    Return the number of the accounts that are SSL/TLS connected
-    """
-    num_of_secured = 0
-    for account in connections:
-        if account_is_securely_connected(account):
-            num_of_secured += 1
-    return num_of_secured
-
-def account_is_securely_connected(account):
-    if not account_is_connected(account):
-        return False
-    return con_types.get(account) in ('tls', 'ssl')
 
 def get_transport_name_from_jid(jid, use_config_setting=True):
     """
@@ -670,3 +637,12 @@ def get_stored_bob_data(algo_hash: str) -> Optional[bytes]:
                 data = file.read()
             return data
     return None
+
+def get_groupchat_control(account, jid):
+    control = app.interface.msg_win_mgr.get_gc_control(jid, account)
+    if control is not None:
+        return control
+    try:
+        return app.interface.minimized_controls[account][jid]
+    except Exception:
+        return None

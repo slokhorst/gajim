@@ -23,9 +23,6 @@ from gajim.common.const import KindConstant
 URI = namedtuple('URI', 'type action data')
 URI.__new__.__defaults__ = (None, None)  # type: ignore
 
-CapsData = namedtuple('CapsData', 'identities features dataforms')
-CapsIdentity = namedtuple('CapsIdentity', 'category type name lang')
-
 
 class MUCData:
     def __init__(self, room_jid, nick, password, config=None):
@@ -66,9 +63,9 @@ class OutgoingMessage:
                  control=None,
                  attention=None,
                  correct_id=None,
-                 automatic_message=False,
                  oob_url=None,
-                 xhtml=None):
+                 xhtml=None,
+                 nodes=None):
 
         if type_ not in ('chat', 'groupchat', 'normal', 'headline'):
             raise ValueError('Unknown message type: %s' % type_)
@@ -101,7 +98,6 @@ class OutgoingMessage:
         self.control = control
         self.attention = attention
         self.correct_id = correct_id
-        self.automatic_message = automatic_message
 
         self.oob_url = oob_url
 
@@ -112,6 +108,8 @@ class OutgoingMessage:
 
         if xhtml is not None:
             self.additional_data.set_value('gajim', 'xhtml', xhtml)
+
+        self.nodes = nodes
 
         self.timestamp = None
         self.message_id = None

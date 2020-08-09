@@ -17,17 +17,21 @@
 
 # XEP-0115: Entity Capabilities
 
-import nbxmpp
+import weakref
+from collections import defaultdict
+
+from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import StanzaHandler
 from nbxmpp.structs import DiscoIdentity
 from nbxmpp.util import is_error_result
 from nbxmpp.util import compute_caps_hash
 
-from gajim.common import caps_cache
 from gajim.common import app
 from gajim.common.const import COMMON_FEATURES
+from gajim.common.const import Entity
 from gajim.common.helpers import get_optional_features
 from gajim.common.nec import NetworkEvent
+from gajim.common.task_manager import Task
 from gajim.common.modules.base import BaseModule
 
 
@@ -45,17 +49,43 @@ class Caps(BaseModule):
         self.handlers = [
             StanzaHandler(name='presence',
                           callback=self._entity_caps,
-                          ns=nbxmpp.NS_CAPS,
+                          ns=Namespace.CAPS,
                           priority=51),
         ]
-
-        self._capscache = caps_cache.capscache
-        self._create_suitable_client_caps = \
-            caps_cache.create_suitable_client_caps
 
         self._identities = [
             DiscoIdentity(category='client', type='pc', name='Gajim')
         ]
+
+        self._queued_tasks_by_hash = defaultdict(set)
+        self._queued_tasks_by_jid = {}
+
+    def _queue_task(self, task):
+        old_task = self._get_task(task.entity.jid)
+        if old_task is not None:
+            self._remove_task(old_task)
+
+        self._log.info('Queue query for hash %s', task.entity.hash)
+        self._queued_tasks_by_hash[task.entity.hash].add(task)
+        self._queued_tasks_by_jid[task.entity.jid] = task
+        app.task_manager.add_task(task)
+
+    def _get_task(self, jid):
+        return self._queued_tasks_by_jid.get(jid)
+
+    def _get_similar_tasks(self, task):
+        return self._queued_tasks_by_hash.pop(task.entity.hash)
+
+    def _remove_task(self, task):
+        task.set_obsolete()
+        del self._queued_tasks_by_jid[task.entity.jid]
+        self._queued_tasks_by_hash[task.entity.hash].discard(task)
+
+    def _remove_all_tasks(self):
+        for task in self._queued_tasks_by_jid.values():
+            task.set_obsolete()
+        self._queued_tasks_by_jid.clear()
+        self._queued_tasks_by_hash.clear()
 
     def _entity_caps(self, _con, _stanza, properties):
         if properties.type.is_error or properties.type.is_unavailable:
@@ -64,94 +94,73 @@ class Caps(BaseModule):
         if properties.is_self_presence:
             return
 
+        if properties.entity_caps is None:
+            return
+
+        task = EntityCapsTask(self._account, properties, self._execute_task)
+
+        self._log.info('Received %s', task.entity)
+
+        disco_info = app.logger.get_caps_entry(task.entity.method,
+                                               task.entity.hash)
+        if disco_info is None:
+            self._queue_task(task)
+            return
+
         jid = str(properties.jid)
-
-        hash_method = properties.entity_caps.hash
-        node = properties.entity_caps.node
-        caps_hash = properties.entity_caps.ver
-
-        self._log.info(
-            'Received from %s, type: %s, method: %s, node: %s, hash: %s',
-            jid, properties.type, hash_method, node, caps_hash)
-
-        client_caps = self._create_suitable_client_caps(
-            node, caps_hash, hash_method, jid)
-
-        # Type is None means 'available'
-        if properties.type.is_available and client_caps.hash_method == 'no':
-            self._capscache.forget_caps(client_caps)
-            client_caps = self._create_suitable_client_caps(
-                node, caps_hash, hash_method)
-        else:
-            self._capscache.query_client_of_jid_if_unknown(
-                self._con, jid, client_caps)
-
-        self._update_client_caps_of_contact(properties.jid, client_caps)
-
+        app.logger.set_last_disco_info(jid, disco_info, cache_only=True)
         app.nec.push_incoming_event(
             NetworkEvent('caps-update',
                          account=self._account,
                          fjid=jid,
                          jid=properties.jid.getBare()))
 
-    def _update_client_caps_of_contact(self, from_, client_caps):
-        contact = self._get_contact_or_gc_contact_for_jid(from_)
-        if contact is not None:
-            contact.client_caps = client_caps
-        else:
-            self._log.info('Received Caps from unknown contact %s', from_)
+    def _execute_task(self, task):
+        self._log.info('Request %s from %s', task.entity.hash, task.entity.jid)
+        self._con.get_module('Discovery').disco_info(
+            task.entity.jid,
+            node=f'{task.entity.node}#{task.entity.hash}',
+            callback=self._on_disco_info)
 
-    def _get_contact_or_gc_contact_for_jid(self, from_):
-        contact = app.contacts.get_contact_from_full_jid(self._account,
-                                                         str(from_))
-
-        if contact is None:
-            room_jid, resource = from_.getStripped(), from_.getResource()
-            contact = app.contacts.get_gc_contact(
-                self._account, room_jid, resource)
-        return contact
-
-    def contact_info_received(self, info):
-        """
-        callback to update our caps cache with queried information after
-        we have retrieved an unknown caps hash via a disco
-        """
-
-        if is_error_result(info):
-            self._log.info(info)
+    def _on_disco_info(self, disco_info):
+        task = self._get_task(disco_info.jid)
+        if task is None:
+            self._log.info('Task not found for %s', disco_info.jid)
             return
 
-        bare_jid = info.jid.getBare()
-
-        contact = self._get_contact_or_gc_contact_for_jid(info.jid)
-        if not contact:
-            self._log.info('Received Disco from unknown contact %s', info.jid)
+        if is_error_result(disco_info):
+            self._remove_task(task)
+            self._log.info(disco_info)
             return
 
-        lookup = contact.client_caps.get_cache_lookup_strategy()
-        cache_item = lookup(self._capscache)
-
-        if cache_item.is_valid():
-            # we already know that the hash is fine and have already cached
-            # the identities and features
-            return
+        self._log.info('Disco Info received: %s', disco_info.jid)
 
         try:
-            compute_caps_hash(info)
+            compute_caps_hash(disco_info)
         except Exception as error:
+            self._remove_task(task)
             self._log.warning('Disco info malformed: %s %s',
-                              contact.get_full_jid(), error)
-            node = caps_hash = hash_method = None
-            contact.client_caps = self._create_suitable_client_caps(
-                node, caps_hash, hash_method)
-        else:
-            cache_item.set_and_store(info)
+                              disco_info.jid, error)
+            return
 
-        app.nec.push_incoming_event(
-            NetworkEvent('caps-update',
-                         account=self._account,
-                         fjid=str(info.jid),
-                         jid=bare_jid))
+        app.logger.add_caps_entry(
+            str(disco_info.jid),
+            task.entity.method,
+            disco_info.get_caps_hash(),
+            disco_info)
+
+        self._log.info('Finished query for %s', task.entity.hash)
+
+        tasks = self._get_similar_tasks(task)
+
+        for task in tasks:
+            self._remove_task(task)
+            self._log.info('Update %s', task.entity.jid)
+            app.nec.push_incoming_event(
+                NetworkEvent('caps-update',
+                             account=self._account,
+                             fjid=str(task.entity.jid),
+                             jid=task.entity.jid.getBare()))
 
     def update_caps(self):
         if not app.account_is_connected(self._account):
@@ -168,6 +177,51 @@ class Caps(BaseModule):
         app.connections[self._account].change_status(
             app.connections[self._account].status,
             app.connections[self._account].status_message)
+
+    def cleanup(self):
+        self._remove_all_tasks()
+        BaseModule.cleanup(self)
+
+
+class EntityCapsTask(Task):
+    def __init__(self, account, properties, callback):
+        Task.__init__(self)
+        self._account = account
+        self._callback = weakref.WeakMethod(callback)
+
+        self.entity = Entity(jid=properties.jid,
+                             node=properties.entity_caps.node,
+                             hash=properties.entity_caps.ver,
+                             method=properties.entity_caps.hash)
+
+        self._from_muc = properties.from_muc
+
+    def execute(self):
+        callback = self._callback()
+        if callback is not None:
+            callback(self)
+
+    def preconditions_met(self):
+        try:
+            client = app.get_client(self._account)
+        except Exception:
+            return False
+
+        if self._from_muc:
+            muc = client.get_module('MUC').get_manager().get(
+                self.entity.jid.getBare())
+
+            if muc is None or not muc.state.is_joined:
+                self.set_obsolete()
+                return False
+
+        return client.state.is_available
+
+    def __repr__(self):
+        return f'Entity Caps ({self.entity.jid} {self.entity.hash})'
+
+    def __hash__(self):
+        return hash(self.entity)
 
 
 def get_instance(*args, **kwargs):

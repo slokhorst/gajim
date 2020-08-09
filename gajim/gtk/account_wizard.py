@@ -22,6 +22,7 @@ from gi.repository import Gio
 
 from nbxmpp.client import Client
 from nbxmpp.protocol import JID
+from nbxmpp.protocol import validate_domainpart
 from nbxmpp.const import Mode
 from nbxmpp.const import StreamError
 from nbxmpp.const import ConnectionProtocol
@@ -31,6 +32,7 @@ from nbxmpp.util import is_error_result
 from gajim.common import app
 from gajim.common import configpaths
 from gajim.common import helpers
+from gajim.common.nec import NetworkEvent
 from gajim.common.helpers import open_uri
 from gajim.common.helpers import validate_jid
 from gajim.common.helpers import get_proxy
@@ -60,7 +62,8 @@ class AccountWizard(Assistant):
                         css_class='suggested-action')
         self.add_button('connect', _('Connect'), css_class='suggested-action')
         self.add_button('next', _('Next'), css_class='suggested-action')
-        self.add_button('login', _('Log In'), css_class='suggested-action')
+        self.add_button('login', _('Log In'), complete=True,
+                        css_class='suggested-action')
         self.add_button('back', _('Back'))
 
         self.add_pages({'login': Login(self._on_button_clicked),
@@ -135,17 +138,29 @@ class AccountWizard(Assistant):
                 if self.get_page('signup').is_advanced():
                     self.show_page('advanced',
                                    Gtk.StackTransitionType.SLIDE_LEFT)
+
+                elif self.get_page('signup').is_anonymous():
+                    self._test_anonymous_server()
+
                 else:
                     self._register_with_server()
 
             elif page == 'advanced':
-                self._register_with_server()
+                if self.get_page('signup').is_anonymous():
+                    self._test_anonymous_server()
+                else:
+                    self._register_with_server()
 
             elif page == 'security-warning':
                 if self.get_page('security-warning').trust_certificate:
                     app.cert_store.add_certificate(
                         self.get_page('security-warning').cert)
-                self._register_with_server(ignore_all_errors=True)
+
+                if self.get_page('signup').is_anonymous():
+                    self._test_anonymous_server(ignore_all_errors=True)
+
+                else:
+                    self._register_with_server(ignore_all_errors=True)
 
             elif page == 'form':
                 self._show_progress_page(_('Creating Account...'),
@@ -154,8 +169,6 @@ class AccountWizard(Assistant):
 
         elif button_name == 'connect':
             if page == 'success':
-                # if self.get_page('success').is_update():
-                #     app.interface.show_vcard_when_connect.append(self.account)
                 app.interface.enable_account(self.get_page('success').account)
                 self.destroy()
 
@@ -236,6 +249,8 @@ class AccountWizard(Assistant):
 
         client.subscribe('disconnected', self._on_disconnected)
         client.subscribe('connection-failed', self._on_connection_failed)
+        client.subscribe('stanza-sent', self._on_stanza_sent)
+        client.subscribe('stanza-received', self._on_stanza_received)
         return client
 
     def _disconnect(self):
@@ -244,6 +259,18 @@ class AccountWizard(Assistant):
         self._client.remove_subscriptions()
         self._client.disconnect()
         self._client = None
+
+    @staticmethod
+    def _on_stanza_sent(_client, _signal_name, stanza):
+        app.nec.push_incoming_event(NetworkEvent('stanza-sent',
+                                                 account='AccountWizard',
+                                                 stanza=stanza))
+
+    @staticmethod
+    def _on_stanza_received(_client, _signal_name, stanza):
+        app.nec.push_incoming_event(NetworkEvent('stanza-received',
+                                                 account='AccountWizard',
+                                                 stanza=stanza))
 
     def _test_credentials(self, ignore_all_errors=False):
         self._show_progress_page(_('Connecting...'),
@@ -262,6 +289,23 @@ class AccountWizard(Assistant):
         self._client.set_password(password)
         self._client.subscribe('login-successful', self._on_login_successful)
 
+        self._client.connect()
+
+    def _test_anonymous_server(self, ignore_all_errors=False):
+        self._show_progress_page(_('Connecting...'),
+                                 _('Connecting to server...'))
+        domain = self.get_page('signup').get_server()
+        advanced = self.get_page('signup').is_advanced()
+
+        self._client = self._get_base_client(
+            domain,
+            None,
+            Mode.ANONYMOUS_TEST,
+            advanced,
+            ignore_all_errors)
+
+        self._client.subscribe('anonymous-supported',
+                               self._on_anonymous_supported)
         self._client.connect()
 
     def _register_with_server(self, ignore_all_errors=False):
@@ -300,12 +344,34 @@ class AccountWizard(Assistant):
         client.get_module('Register').request_register_form(
             callback=self._on_register_form)
 
+    def _on_anonymous_supported(self, client, _signal_name):
+        account = self._generate_account_name(client.domain)
+        proxy_name = None
+        if client.proxy is not None:
+            proxy_name = self.get_page('advanced').get_proxy()
+
+        app.interface.create_account(account,
+                                     None,
+                                     client.domain,
+                                     client.password,
+                                     proxy_name,
+                                     client.custom_host,
+                                     anonymous=True)
+        self.get_page('success').set_account(account)
+        self.show_page('success', Gtk.StackTransitionType.SLIDE_LEFT)
+
     def _on_disconnected(self, client, _signal_name):
         domain, error, text = client.get_error()
         if domain == StreamError.SASL:
-            self._show_error_page(_('Authentication failed'),
-                                  SASL_ERRORS.get(error),
-                                  text or '')
+            if error == 'anonymous-not-supported':
+                self._show_error_page(_('Anonymous login not supported'),
+                                      _('Anonymous login not supported'),
+                                      _('This server does not support '
+                                        'anonymous login.'))
+            else:
+                self._show_error_page(_('Authentication failed'),
+                                      SASL_ERRORS.get(error),
+                                      text or '')
 
         elif domain == StreamError.BAD_CERTIFICATE:
             self.get_page('security-warning').set_warning(
@@ -424,9 +490,11 @@ class AccountWizard(Assistant):
         self._disconnect()
 
     def _on_register_error(self, result):
-        self._show_error_page(_('Error'),
-                              _('Error'),
-                              result.get_text())
+        error_text = result.get_text()
+        if not error_text:
+            error_text = _('The server rejected the registration '
+                           'without an error message')
+        self._show_error_page(_('Error'), _('Error'), error_text)
 
         register_data = result.get_data()
         if register_data is None:
@@ -610,38 +678,16 @@ class Signup(Page):
         open_uri(server)
         return Gdk.EVENT_STOP
 
-    def _check_port_entry(self):
-        port = self._ui.custom_port_entry.get_text()
-        if port == '':
-            self._show_icon(False)
-            return False
-        try:
-            port = int(port)
-        except Exception:
-            self._show_icon(True)
-            self._ui.custom_port_entry.set_icon_tooltip_text(
-                Gtk.EntryIconPosition.SECONDARY, _('Must be a port number'))
-            return False
-
-        if port not in range(0, 65535):
-            self._show_icon(True)
-            self._ui.custom_port_entry.set_icon_tooltip_text(
-                Gtk.EntryIconPosition.SECONDARY,
-                _('Port must be a number between 0 and 65535'))
-            return False
-
-        self._show_icon(False)
-        return True
-
-    def _show_icon(self, show):
-        icon = 'dialog-warning-symbolic' if show else None
-        self._ui.log_in_address_entry.set_icon_from_icon_name(
-            Gtk.EntryIconPosition.SECONDARY, icon)
-
     def _set_complete(self, *args):
-        server = self._ui.server_comboboxtext_sign_up_entry.get_text()
-        self._ui.visit_server_button.set_visible(server)
-        self.complete = server
+        try:
+            self.get_server()
+        except Exception:
+            self.complete = False
+            self._ui.visit_server_button.set_visible(False)
+        else:
+            self.complete = True
+            self._ui.visit_server_button.set_visible(True)
+
         self.get_toplevel().update_page_complete()
 
     def is_anonymous(self):
@@ -651,7 +697,8 @@ class Signup(Page):
         return self._ui.sign_up_advanced_checkbutton.get_active()
 
     def get_server(self):
-        return self._ui.server_comboboxtext_sign_up_entry.get_text()
+        return validate_domainpart(
+            self._ui.server_comboboxtext_sign_up_entry.get_text())
 
     @staticmethod
     def _on_activate_link(_label, uri):
@@ -665,10 +712,13 @@ class AdvancedSettings(Page):
     def __init__(self):
         Page.__init__(self)
         self.title = _('Advanced settings')
+        self.complete = False
 
         self._ui = get_builder('account_wizard.ui')
         self._ui.manage_proxies_button.connect('clicked',
                                                self._on_proxy_manager)
+        self._ui.custom_host_entry.connect('changed', self._set_complete)
+        self._ui.custom_port_entry.connect('changed', self._set_complete)
         self.pack_start(self._ui.advanced_grid, True, True, 0)
 
         self.show_all()
@@ -705,6 +755,59 @@ class AdvancedSettings(Page):
         return ('%s:%s' % (host, port),
                 protocol,
                 ConnectionType(con_type))
+
+    def _show_host_icon(self, show):
+        icon = 'dialog-warning-symbolic' if show else None
+        self._ui.custom_host_entry.set_icon_from_icon_name(
+            Gtk.EntryIconPosition.SECONDARY, icon)
+
+    def _show_port_icon(self, show):
+        icon = 'dialog-warning-symbolic' if show else None
+        self._ui.custom_port_entry.set_icon_from_icon_name(
+            Gtk.EntryIconPosition.SECONDARY, icon)
+
+    def _validate_host(self):
+        host = self._ui.custom_host_entry.get_text()
+        try:
+            validate_domainpart(host)
+        except Exception:
+            self._show_host_icon(True)
+            self._ui.custom_host_entry.set_icon_tooltip_text(
+                Gtk.EntryIconPosition.SECONDARY, _('Invalid domain name'))
+            return False
+
+        self._show_host_icon(False)
+        return True
+
+    def _validate_port(self):
+        port = self._ui.custom_port_entry.get_text()
+        if not port:
+            self._show_port_icon(False)
+            return False
+
+        try:
+            port = int(port)
+        except Exception:
+            self._show_port_icon(True)
+            self._ui.custom_port_entry.set_icon_tooltip_text(
+                Gtk.EntryIconPosition.SECONDARY, _('Must be a port number'))
+            return False
+
+        if port not in range(0, 65535):
+            self._show_port_icon(True)
+            self._ui.custom_port_entry.set_icon_tooltip_text(
+                Gtk.EntryIconPosition.SECONDARY,
+                _('Port must be a number between 0 and 65535'))
+            return False
+
+        self._show_port_icon(False)
+        return True
+
+    def _set_complete(self, *args):
+        port_valid = self._validate_port()
+        host_valid = self._validate_host()
+        self.complete = port_valid and host_valid
+        self.get_toplevel().update_page_complete()
 
 
 class SecurityWarning(Page):

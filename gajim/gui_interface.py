@@ -35,23 +35,26 @@ import os
 import sys
 import re
 import time
+import json
 import logging
 from functools import partial
 from threading import Thread
+from datetime import datetime
 from importlib.util import find_spec
+from packaging.version import Version as V
 
 from gi.repository import Gtk
 from gi.repository import GLib
 from gi.repository import Gio
+from gi.repository import Soup
 from nbxmpp import idlequeue
 from nbxmpp import Hashes2
-from nbxmpp.structs import TuneData
 
 from gajim.common import app
 from gajim.common import events
 from gajim.common.dbus import location
-from gajim.common.dbus import music_track
 from gajim.common.dbus import logind
+from gajim.common.dbus import music_track
 
 from gajim import gui_menu_builder
 from gajim import dialogs
@@ -76,6 +79,7 @@ from gajim.common.structs import MUCData
 from gajim.common.nec import NetworkEvent
 from gajim.common.i18n import _
 from gajim.common.client import Client
+from gajim.common.const import Display
 
 from gajim.common.file_props import FilesProp
 
@@ -91,6 +95,7 @@ from gajim.gtk.dialogs import ErrorDialog
 from gajim.gtk.dialogs import WarningDialog
 from gajim.gtk.dialogs import InformationDialog
 from gajim.gtk.dialogs import NewConfirmationDialog
+from gajim.gtk.dialogs import NewConfirmationCheckDialog
 from gajim.gtk.dialogs import InputDialog
 from gajim.gtk.dialogs import PassphraseDialog
 from gajim.gtk.dialogs import InvitationReceivedDialog
@@ -105,6 +110,7 @@ from gajim.gtk.util import get_show_in_systray
 from gajim.gtk.util import open_window
 from gajim.gtk.util import get_app_window
 from gajim.gtk.util import get_app_windows
+from gajim.gtk.util import get_color_for_account
 from gajim.gtk.const import ControlType
 
 
@@ -200,48 +206,21 @@ class Interface:
     def unblock_signed_in_notifications(account):
         app.block_signed_in_notifications[account] = False
 
-    def handle_event_status(self, obj): # OUR status
-        #('STATUS', account, show)
-        account = obj.conn.name
-        if obj.show in ('offline', 'error'):
+    def handle_event_status(self, event):
+        if event.show in ('offline', 'error'):
             # TODO: Close all account windows
             pass
 
-        if obj.show == 'offline':
-            app.block_signed_in_notifications[account] = True
+        if event.show == 'offline':
+            app.block_signed_in_notifications[event.account] = True
         else:
             # 30 seconds after we change our status to sth else than offline
             # we stop blocking notifications of any kind
             # this prevents from getting the roster items as 'just signed in'
             # contacts. 30 seconds should be enough time
-            GLib.timeout_add_seconds(30, self.unblock_signed_in_notifications,
-                account)
-
-        if account in self.show_vcard_when_connect and obj.show not in (
-        'offline', 'error'):
-            action = '%s-profile' % account
-            app.app.activate_action(action, GLib.Variant('s', account))
-            self.show_vcard_when_connect.remove(account)
-
-    @staticmethod
-    def handle_gc_error(gc_control, pritext, sectext):
-        if gc_control and gc_control.autorejoin is not None:
-            if gc_control.error_dialog:
-                gc_control.error_dialog.destroy()
-            def on_close(dummy):
-                gc_control.error_dialog.destroy()
-                gc_control.error_dialog = None
-            gc_control.error_dialog = ErrorDialog(pritext, sectext,
-                on_response_ok=on_close, on_response_cancel=on_close)
-            gc_control.error_dialog.set_modal(False)
-            if gc_control.parent_win:
-                gc_control.error_dialog.set_transient_for(
-                    gc_control.parent_win.window)
-        else:
-            d = ErrorDialog(pritext, sectext)
-            if gc_control and gc_control.parent_win:
-                d.set_transient_for(gc_control.parent_win.window)
-            d.set_modal(False)
+            GLib.timeout_add_seconds(30,
+                                     self.unblock_signed_in_notifications,
+                                     event.account)
 
     def handle_event_presence(self, obj):
         # 'NOTIFY' (account, (jid, status, status message, resource,
@@ -351,7 +330,8 @@ class Interface:
         jid = contact.jid
         NewConfirmationDialog(
             _('Subscription Removed'),
-            _('%s (%s) has removed subscription from you') % (name, jid),
+            _('%(name)s (%(jid)s) has removed subscription from you') % {
+                'name': name, 'jid': jid},
             _('You will always see this contact as offline.\n'
               'Do you want to remove them from your contact list?'),
             [DialogButton.make('Cancel',
@@ -821,23 +801,9 @@ class Interface:
 
         pep_supported = obj.conn.get_module('PEP').supported
 
-        if not idle.Monitor.is_unknown() and obj.conn.status in ('online', 'chat'):
-            # we go online or free for chat, so we activate auto status
-            app.sleeper_state[account] = 'online'
-        elif not ((idle.Monitor.is_away() and obj.conn.status == 'away') or \
-        (idle.Monitor.is_xa() and obj.conn.status == 'xa')):
-            # If we are autoaway/xa and come back after a disconnection, do
-            # nothing
-            # Else disable autoaway
-            app.sleeper_state[account] = 'off'
-
         if obj.conn.get_module('MAM').available:
             obj.conn.get_module('MAM').request_archive_on_signin()
 
-        # send currently played music
-        if (pep_supported and sys.platform not in ('win32', 'darwin') and
-                app.config.get_per('accounts', account, 'publish_tune')):
-            self.enable_music_listener()
         # enable location listener
         if (pep_supported and app.is_installed('GEOCLUE') and
                 app.config.get_per('accounts', account, 'publish_location')):
@@ -1092,7 +1058,7 @@ class Interface:
             'file-completed': 'ft_finished'}
         event_type = event_types.get(event.type_)
         show_in_roster = get_show_in_roster(event_type, jid)
-        show_in_systray = get_show_in_systray(event_type, jid)
+        show_in_systray = get_show_in_systray(event_type, account, jid)
         event.show_in_roster = show_in_roster
         event.show_in_systray = show_in_systray
         app.events.add_event(account, jid, event)
@@ -1537,117 +1503,6 @@ class Interface:
 ### Other Methods
 ################################################################################
 
-
-    def enable_music_listener(self):
-        listener = music_track.MusicTrackListener.get()
-        if not self.music_track_changed_signal:
-            self.music_track_changed_signal = listener.connect(
-                'music-track-changed', self.music_track_changed)
-            listener.start()
-
-    def disable_music_listener(self):
-        listener = music_track.MusicTrackListener.get()
-        listener.disconnect(self.music_track_changed_signal)
-        self.music_track_changed_signal = None
-        listener.stop()
-
-    @staticmethod
-    def music_track_changed(unused_listener, music_track_info, account=None):
-        if not account:
-            accounts = app.connections.keys()
-        else:
-            accounts = [account]
-
-        if music_track_info is None or music_track_info.paused:
-            artist = title = source = ''
-        else:
-            artist = music_track_info.artist
-            title = music_track_info.title
-            source = music_track_info.album
-        for acct in accounts:
-            if not app.account_is_available(acct):
-                continue
-            if not app.connections[acct].get_module('PEP').supported:
-                continue
-            if not app.config.get_per('accounts', acct, 'publish_tune'):
-                continue
-            if app.connections[acct].music_track_info == music_track_info:
-                continue
-            app.connections[acct].get_module('UserTune').set_tune(
-                TuneData(artist=artist, title=title, source=source))
-            app.connections[acct].music_track_info = music_track_info
-
-    def read_sleepy(self):
-        """
-        Check idle status and change that status if needed
-        """
-        if not idle.Monitor.poll():
-            # idle detection is not supported in that OS
-            return False # stop looping in vain
-
-        for account in app.connections:
-            if account not in app.sleeper_state or \
-            not app.sleeper_state[account]:
-                continue
-            if idle.Monitor.is_awake():
-                if app.sleeper_state[account] in ('autoaway', 'autoxa'):
-                    # we go online
-                    self.roster.send_status(account, 'online',
-                        app.status_before_autoaway[account])
-                    app.status_before_autoaway[account] = ''
-                    app.sleeper_state[account] = 'online'
-                if app.sleeper_state[account] == 'idle':
-                    # we go to the previous state
-                    status = app.connections[account].status
-                    self.roster.send_status(account, status,
-                        app.status_before_autoaway[account])
-                    app.status_before_autoaway[account] = ''
-                    app.sleeper_state[account] = 'off'
-            elif idle.Monitor.is_away() and app.config.get('autoaway'):
-                if app.sleeper_state[account] == 'online':
-                    # we save out online status
-                    app.status_before_autoaway[account] = \
-                        app.connections[account].status_message
-                    # we go away (no auto status) [we pass True to auto param]
-                    auto_message = app.config.get('autoaway_message')
-                    if not auto_message:
-                        auto_message = app.connections[account].status
-                    else:
-                        auto_message = auto_message.replace('$S', '%(status)s')
-                        auto_message = auto_message.replace('$T', '%(time)s')
-                        auto_message = auto_message % {
-                            'status': app.status_before_autoaway[account],
-                            'time': app.config.get('autoawaytime')
-                        }
-                    self.roster.send_status(account, 'away', auto_message,
-                        auto=True)
-                    app.sleeper_state[account] = 'autoaway'
-                elif app.sleeper_state[account] == 'off':
-                    # we save out online status
-                    app.status_before_autoaway[account] = \
-                        app.connections[account].status
-                    status = app.connections[account].status
-                    self.roster.send_status(account, status,
-                        app.status_before_autoaway[account], auto=True)
-                    app.sleeper_state[account] = 'idle'
-            elif idle.Monitor.is_xa() and \
-            app.sleeper_state[account] in ('online', 'autoaway',
-            'autoaway-forced') and app.config.get('autoxa'):
-                # we go extended away [we pass True to auto param]
-                auto_message = app.config.get('autoxa_message')
-                if not auto_message:
-                    auto_message = app.connections[account].status
-                else:
-                    auto_message = auto_message.replace('$S', '%(status)s')
-                    auto_message = auto_message.replace('$T', '%(time)s')
-                    auto_message = auto_message % {
-                            'status': app.status_before_autoaway[account],
-                            'time': app.config.get('autoxatime')
-                            }
-                self.roster.send_status(account, 'xa', auto_message, auto=True)
-                app.sleeper_state[account] = 'autoxa'
-        return True # renew timeout (loop for ever)
-
     @staticmethod
     def create_account(account,
                        username,
@@ -1657,20 +1512,20 @@ class Interface:
                        custom_host,
                        anonymous=False):
 
-        if not account or not username or not domain:
-            log.error('Creating account failed: '
-                      'account: %s, username: %s, domain: %s',
-                      account, username, domain)
-            return
+        account_label = f'{username}@{domain}'
+        if anonymous:
+            username = 'anon'
+            account_label = f'anon@{domain}'
 
         config = {}
         config['active'] = False
         config['name'] = username
         config['resource'] = 'gajim.%s' % helpers.get_random_string(8)
-        config['account_label'] = '%s@%s' % (username, domain)
+        config['account_label'] = account_label
+        config['account_color'] = get_color_for_account(
+            '%s@%s' % (username, domain))
         config['hostname'] = domain
         config['savepass'] = True
-        config['password'] = password
         config['anonymous_auth'] = anonymous
         config['autoconnect'] = True
         config['sync_with_global_status'] = True
@@ -1682,7 +1537,7 @@ class Interface:
         config['use_custom_host'] = use_custom_host
         if custom_host:
             host, _protocol, type_ = custom_host
-            host, port = host.split(':')
+            host, port = host.rsplit(':', maxsplit=1)
             config['custom_port'] = int(port)
             config['custom_host'] = host
             config['custom_type'] = type_.value
@@ -1691,9 +1546,14 @@ class Interface:
         for opt in config:
             app.config.set_per('accounts', account, opt, config[opt])
 
-        # refresh accounts window
+        # Password module depends on existing config
+        passwords.save_password(account, password)
+
+        app.css_config.refresh()
+
         # Action must be added before account window is updated
         app.app.add_account_actions(account)
+
         window = get_app_window('AccountsWindow')
         if window is not None:
             window.add_account(account)
@@ -1725,9 +1585,7 @@ class Interface:
             app.nicks[account] = app.config.get_per(
                 'accounts', account, 'name')
         app.block_signed_in_notifications[account] = True
-        app.sleeper_state[account] = 'off'
         app.last_message_time[account] = {}
-        app.status_before_autoaway[account] = ''
         # refresh roster
         if len(app.connections) >= 2:
             # Do not merge accounts if only one exists
@@ -1767,9 +1625,7 @@ class Interface:
         del app.automatic_rooms[account]
         del app.to_be_removed[account]
         del app.newly_added[account]
-        del app.sleeper_state[account]
         del app.last_message_time[account]
-        del app.status_before_autoaway[account]
         if len(app.connections) >= 2:
             # Do not merge accounts if only one exists
             self.roster.regroup = app.config.get('mergeaccounts')
@@ -1828,12 +1684,14 @@ class Interface:
         return False
 
     def show_systray(self):
-        self.systray_enabled = True
-        self.systray.show_icon()
+        if not app.is_display(Display.WAYLAND):
+            self.systray_enabled = True
+            self.systray.show_icon()
 
     def hide_systray(self):
-        self.systray_enabled = False
-        self.systray.hide_icon()
+        if not app.is_display(Display.WAYLAND):
+            self.systray_enabled = False
+            self.systray.hide_icon()
 
     def process_connections(self):
         """
@@ -1986,6 +1844,81 @@ class Interface:
         app.config.set_per('accounts', app.ZEROCONF_ACC_NAME,
                 'active', False)
 
+    def check_for_updates(self):
+        if not app.config.get('check_for_update'):
+            return
+
+        now = datetime.now()
+        last_check = app.config.get('last_update_check')
+        if not last_check:
+            def _on_cancel():
+                app.config.set('check_for_update', False)
+
+            def _on_check():
+                self._get_latest_release()
+
+            NewConfirmationDialog(
+                _('Update Check'),
+                _('Gajim Update Check'),
+                _('Search for Gajim updates periodically?'),
+                [DialogButton.make('Cancel',
+                                   text=_('_No'),
+                                   callback=_on_cancel),
+                 DialogButton.make('Accept',
+                                   text=_('_Search Periodically'),
+                                   callback=_on_check)]).show()
+            return
+
+        last_check_time = datetime.strptime(last_check, '%Y-%m-%d %H:%M')
+        if (now - last_check_time).days < 7:
+            return
+
+        self._get_latest_release()
+
+    def _get_latest_release(self):
+        log.info('Checking for Gajim updates')
+        session = Soup.Session()
+        session.props.user_agent = 'Gajim %s' % app.version
+        message = Soup.Message.new('GET', 'https://gajim.org/current-version.json')
+        session.queue_message(message, self._on_update_checked)
+
+    def _on_update_checked(self, _session, message):
+        now = datetime.now()
+        app.config.set('last_update_check', now.strftime('%Y-%m-%d %H:%M'))
+
+        body = message.props.response_body.data
+        if not body:
+            log.warning('Could not reach gajim.org for update check')
+            return
+
+        data = json.loads(body)
+        latest_version = data['current_version']
+
+        if V(latest_version) > V(app.version):
+            def _on_cancel(is_checked):
+                if is_checked:
+                    app.config.set('check_for_update', False)
+
+            def _on_update(is_checked):
+                if is_checked:
+                    app.config.set('check_for_update', False)
+                helpers.open_uri('https://gajim.org/download')
+
+            NewConfirmationCheckDialog(
+                _('Update Available'),
+                _('Gajim Update Available'),
+                _('There is an update available for Gajim '
+                  '(latest version: %s)' % str(latest_version)),
+                _('_Do not show again'),
+                [DialogButton.make('Cancel',
+                                    text=_('_Later'),
+                                    callback=_on_cancel),
+                 DialogButton.make('Accept',
+                                    text=_('_Update Now'),
+                                    callback=_on_update)]).show()
+        else:
+            log.info('Gajim is up to date')
+
     def run(self, application):
         if app.config.get('trayicon') != 'never':
             self.show_systray()
@@ -2018,8 +1951,6 @@ class Interface:
             GLib.timeout_add_seconds(timeout, self.process_connections)
         else:
             GLib.timeout_add(timeout, self.process_connections)
-        GLib.timeout_add_seconds(app.config.get(
-                'check_idle_every_foo_seconds'), self.read_sleepy)
 
         def remote_init():
             if app.config.get('remote_control'):
@@ -2053,11 +1984,7 @@ class Interface:
 
         self.avatar_storage = AvatarStorage()
 
-        cfg_was_read = parser.read()
-
-        if not cfg_was_read:
-            # enable plugin_installer by default when creating config file
-            app.config.set_per('plugins', 'plugin_installer', 'active', True)
+        parser.read()
 
         # Load CSS files
         app.load_css_config()
@@ -2120,11 +2047,11 @@ class Interface:
         self.create_core_handlers_list()
         self.register_core_handlers()
 
-        self.create_zeroconf_default_config()
-        if app.config.get_per('accounts', app.ZEROCONF_ACC_NAME, 'active') \
-        and app.is_installed('ZEROCONF'):
-            app.connections[app.ZEROCONF_ACC_NAME] = \
-                connection_zeroconf.ConnectionZeroconf(app.ZEROCONF_ACC_NAME)
+        # self.create_zeroconf_default_config()
+        # if app.config.get_per('accounts', app.ZEROCONF_ACC_NAME, 'active') \
+        # and app.is_installed('ZEROCONF'):
+        #     app.connections[app.ZEROCONF_ACC_NAME] = \
+        #         connection_zeroconf.ConnectionZeroconf(app.ZEROCONF_ACC_NAME)
 
         for account in app.config.get_per('accounts'):
             if not app.config.get_per('accounts', account, 'is_zeroconf') and\
@@ -2145,22 +2072,22 @@ class Interface:
             app.to_be_removed[a] = []
             app.nicks[a] = app.config.get_per('accounts', a, 'name')
             app.block_signed_in_notifications[a] = True
-            app.sleeper_state[a] = 0
             app.last_message_time[a] = {}
-            app.status_before_autoaway[a] = ''
 
         if sys.platform not in ('win32', 'darwin'):
             logind.enable()
-
-        self.show_vcard_when_connect = []
+            music_track.enable()
+        else:
+            GLib.timeout_add_seconds(20, self.check_for_updates)
 
         idle.Monitor.set_interval(app.config.get('autoawaytime') * 60,
                                   app.config.get('autoxatime') * 60)
 
         self.systray_enabled = False
 
-        from gajim.gtk import statusicon
-        self.systray = statusicon.StatusIcon()
+        if not app.is_display(Display.WAYLAND):
+            from gajim.gtk import statusicon
+            self.systray = statusicon.StatusIcon()
 
         # Init emoji_chooser
         from gajim.gtk.emoji_chooser import emoji_chooser
@@ -2171,8 +2098,6 @@ class Interface:
         app.transport_type = app.logger.get_transports_type()
 
         self.last_ftwindow_update = 0
-
-        self.music_track_changed_signal = None
 
         self._network_monitor = Gio.NetworkMonitor.get_default()
         self._network_monitor.connect('notify::network-available',

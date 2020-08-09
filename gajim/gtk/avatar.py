@@ -28,12 +28,13 @@ from gajim.common import configpaths
 from gajim.common.helpers import Singleton
 from gajim.common.helpers import get_groupchat_name
 from gajim.common.const import AvatarSize
+from gajim.common.const import StyleAttr
 
 from gajim.gtk.util import load_pixbuf
 from gajim.gtk.util import text_to_color
 from gajim.gtk.util import scale_with_ratio
-from gajim.gtk.const import SHOW_COLORS
-
+from gajim.gtk.util import get_css_show_class
+from gajim.gtk.util import convert_rgb_string_to_float
 
 log = logging.getLogger('gajim.gtk.avatar')
 
@@ -51,7 +52,7 @@ def generate_avatar(letters, color, size, scale):
     font_size = size * 0.5
 
     # Set up surface
-    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    surface = cairo.ImageSurface(cairo.Format.ARGB32, width, height)
     context = cairo.Context(surface)
 
     context.set_source_rgb(color_r, color_g, color_b)
@@ -60,26 +61,20 @@ def generate_avatar(letters, color, size, scale):
 
     # Draw letters
     context.select_font_face('sans-serif',
-                             cairo.FONT_SLANT_NORMAL,
-                             cairo.FONT_WEIGHT_NORMAL)
+                             cairo.FontSlant.NORMAL,
+                             cairo.FontWeight.NORMAL)
     context.set_font_size(font_size)
     extends = context.text_extents(letters)
-    if isinstance(extends, tuple):
-        # For cairo < 1.15
-        x_bearing, y_bearing, ex_width, ex_height = extends[0:4]
-    else:
-        x_bearing = extends.x_bearing
-        y_bearing = extends.y_bearing
-        ex_width = extends.width
-        ex_height = extends.height
+    x_bearing = extends.x_bearing
+    y_bearing = extends.y_bearing
+    ex_width = extends.width
+    ex_height = extends.height
 
     x_pos = width / 2 - (ex_width / 2 + x_bearing)
     y_pos = height / 2 - (ex_height / 2 + y_bearing)
     context.move_to(x_pos, y_pos)
     context.set_source_rgb(0.95, 0.95, 0.95)
-    # use cairo.OPERATOR_OVER legacy constant because its
-    # compatible with cairo < 1.13
-    context.set_operator(cairo.OPERATOR_OVER)
+    context.set_operator(cairo.Operator.OVER)
     context.show_text(letters)
 
     return context.get_target()
@@ -89,7 +84,7 @@ def add_status_to_avatar(surface, show):
     width = surface.get_width()
     height = surface.get_height()
 
-    new_surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    new_surface = cairo.ImageSurface(cairo.Format.ARGB32, width, height)
     new_surface.set_device_scale(*surface.get_device_scale())
 
     scale = surface.get_device_scale()[0]
@@ -102,19 +97,34 @@ def add_status_to_avatar(surface, show):
     width = width / scale
     height = height / scale
 
-    clip_size = width / 6.5
+    clip_radius = width / 5.5
+    center_x = width - clip_radius
+    center_y = height - clip_radius
+
     context.set_source_rgb(255, 255, 255)
     context.set_operator(cairo.Operator.CLEAR)
-    context.arc(width - clip_size, height - clip_size, clip_size, 0, 2 * pi)
+    context.arc(center_x, center_y, clip_radius, 0, 2 * pi)
     context.fill()
 
-    color = SHOW_COLORS[show]
-    show_size = width / 6.5
-    show_radius = show_size * 0.80
+    css_color = get_css_show_class(show)
+    color = convert_rgb_string_to_float(
+        app.css_config.get_value(css_color, StyleAttr.COLOR))
+
+    show_radius = clip_radius * 0.75
+
     context.set_source_rgb(*color)
     context.set_operator(cairo.Operator.OVER)
-    context.arc(width - show_size, height - show_size, show_radius, 0, 2 * pi)
+    context.arc(center_x, center_y, show_radius, 0, 2 * pi)
     context.fill()
+
+    if show == 'dnd':
+        line_length = clip_radius / 2
+        context.move_to(center_x - line_length, center_y)
+        context.line_to(center_x + line_length, center_y)
+
+        context.set_source_rgb(255, 255, 255)
+        context.set_line_width(clip_radius / 4)
+        context.stroke()
 
     return context.get_target()
 
@@ -125,7 +135,7 @@ def square(surface, size):
     if width == height:
         return surface
 
-    new_surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+    new_surface = cairo.ImageSurface(cairo.Format.ARGB32, size, size)
     new_surface.set_device_scale(*surface.get_device_scale())
     context = cairo.Context(new_surface)
 
@@ -144,7 +154,7 @@ def square(surface, size):
 
 
 def clip_circle(surface):
-    new_surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+    new_surface = cairo.ImageSurface(cairo.Format.ARGB32,
                                      surface.get_width(),
                                      surface.get_height())
 

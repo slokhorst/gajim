@@ -39,7 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
-import nbxmpp
+from nbxmpp.namespaces import Namespace
 from nbxmpp import JID
 from nbxmpp.protocol import InvalidJid
 from gi.repository import Gio
@@ -52,9 +52,10 @@ from gajim.common import ged
 from gajim.common import configpaths
 from gajim.common import logging_helpers
 from gajim.common import exceptions
-from gajim.common import caps_cache
 from gajim.common import logger
 from gajim.common.i18n import _
+from gajim.common.contacts import LegacyContactsAPI
+from gajim.common.task_manager import TaskManager
 
 
 class GajimApplication(Gtk.Application):
@@ -151,33 +152,16 @@ class GajimApplication(Gtk.Application):
             GLib.OptionArg.NONE,
             _('Start a new chat'))
 
-        self.add_main_option(
-            'simulate-network-lost',
-            0,
-            GLib.OptionFlags.NONE,
-            GLib.OptionArg.NONE,
-            _('Simulate loss of connectivity'))
-
-        self.add_main_option(
-            'simulate-network-connected',
-            0,
-            GLib.OptionFlags.NONE,
-            GLib.OptionArg.NONE,
-            _('Simulate regaining connectivity'))
-
-
         self.add_main_option_entries(self._get_remaining_entry())
 
         self.connect('handle-local-options', self._handle_local_options)
         self.connect('command-line', self._handle_remote_options)
         self.connect('startup', self._startup)
         self.connect('activate', self._activate)
-        if sys.platform not in ('win32', 'darwin'):
-            self.connect("notify::screensaver-active", self._screensaver_active)
 
         self.interface = None
 
-        GLib.set_prgname('gajim')
+        GLib.set_prgname('org.gajim.Gajim')
         if GLib.get_application_name() != 'Gajim':
             GLib.set_application_name('Gajim')
 
@@ -199,7 +183,7 @@ class GajimApplication(Gtk.Application):
         configpaths.create_paths()
         try:
             app.logger = logger.Logger()
-            caps_cache.initialize(app.logger)
+            app.contacts = LegacyContactsAPI()
         except exceptions.DatabaseMalformed as error:
             dlg = Gtk.MessageDialog(
                 transient_for=None,
@@ -218,6 +202,7 @@ class GajimApplication(Gtk.Application):
 
         from gajim.common.cert_store import CertificateStore
         app.cert_store = CertificateStore()
+        app.task_manager = TaskManager()
 
         # Set Application Menu
         app.app = self
@@ -326,14 +311,6 @@ class GajimApplication(Gtk.Application):
             if options.contains(cmd):
                 self.activate_action(cmd)
                 return 0
-
-        if options.contains('simulate-network-lost'):
-            app.interface.network_status_changed(None, False)
-            return 0
-
-        if options.contains('simulate-network-connected'):
-            app.interface.network_status_changed(None, True)
-            return 0
 
         if remaining is not None:
             self._open_uris(remaining.unpack())
@@ -496,7 +473,6 @@ class GajimApplication(Gtk.Application):
             ('-archive', a.on_mam_preferences, 'feature', 's'),
             ('-pep-config', a.on_pep_config, 'online', 's'),
             ('-sync-history', a.on_history_sync, 'online', 's'),
-            ('-privacylists', a.on_privacy_lists, 'feature', 's'),
             ('-blocking', a.on_blocking_list, 'feature', 's'),
             ('-send-server-message', a.on_send_server_message, 'online', 's'),
             ('-set-motd', a.on_set_motd, 'online', 's'),
@@ -545,13 +521,13 @@ class GajimApplication(Gtk.Application):
     def _set_shortcuts(self):
         shortcuts = {
             'app.quit': ['<Primary>Q'],
+            'app.shortcuts': ['<Primary>question'],
             'app.preferences': ['<Primary>P'],
             'app.plugins': ['<Primary>E'],
             'app.xml-console': ['<Primary><Shift>X'],
             'app.file-transfer': ['<Primary>T'],
             'app.ipython': ['<Primary><Alt>I'],
             'app.start-chat::': ['<Primary>N'],
-            'app.accounts::': ['<Alt>A'],
             'app.create-groupchat::': ['<Primary>G'],
             'win.show-roster': ['<Primary>R'],
             'win.show-offline': ['<Primary>O'],
@@ -568,12 +544,10 @@ class GajimApplication(Gtk.Application):
             'win.close-tab': ['<Control>w'],
             'win.move-tab-up': ['<Control><Shift>Page_Up'],
             'win.move-tab-down': ['<Control><Shift>Page_Down'],
-            'win.switch-next-tab': ['<Alt>Right'],
-            'win.switch-prev-tab': ['<Alt>Left'],
-            'win.switch-next-unread-tab-right': ['<Control>Tab',
-                                                 '<Control>Page_Down'],
-            'win.switch-next-unread-tab-left': ['<Control>ISO_Left_Tab',
-                                                '<Control>Page_Up'],
+            'win.switch-next-tab': ['<Control>Page_Down'],
+            'win.switch-prev-tab': ['<Control>Page_Up'],
+            'win.switch-next-unread-tab-right': ['<Control>Tab'],
+            'win.switch-next-unread-tab-left': ['<Control>ISO_Left_Tab'],
             'win.switch-tab-1': ['<Alt>1', '<Alt>KP_1'],
             'win.switch-tab-2': ['<Alt>2', '<Alt>KP_2'],
             'win.switch-tab-3': ['<Alt>3', '<Alt>KP_3'],
@@ -590,58 +564,12 @@ class GajimApplication(Gtk.Application):
             self.set_accels_for_action(action, accels)
 
     def _on_feature_discovered(self, event):
-        if event.feature == nbxmpp.NS_VCARD:
+        if event.feature == Namespace.VCARD:
             action = '%s-profile' % event.account
             self.lookup_action(action).set_enabled(True)
-        elif event.feature == nbxmpp.NS_MAM_2:
+        elif event.feature == Namespace.MAM_2:
             action = '%s-archive' % event.account
             self.lookup_action(action).set_enabled(True)
-        elif event.feature == nbxmpp.NS_PRIVACY:
-            action = '%s-privacylists' % event.account
-            self.lookup_action(action).set_enabled(True)
-        elif event.feature == nbxmpp.NS_BLOCKING:
+        elif event.feature == Namespace.BLOCKING:
             action = '%s-blocking' % event.account
             self.lookup_action(action).set_enabled(True)
-
-    def _screensaver_active(self, _application, _param):
-        '''Signal handler for screensaver active change'''
-
-        active = self.get_property('screensaver-active')
-
-        roster = app.interface.roster
-
-        if not active:
-            for account in app.connections:
-                if app.account_is_available(account) and \
-                        app.sleeper_state[account] == 'autoaway-forced':
-                    # We came back online after screensaver autoaway
-                    roster.send_status(account, 'online',
-                                       app.status_before_autoaway[account])
-                    app.status_before_autoaway[account] = ''
-                    app.sleeper_state[account] = 'online'
-            return
-        if not app.config.get('autoaway'):
-            # Don't go auto away if user disabled the option
-            return
-        for account in app.connections:
-            if (account not in app.sleeper_state or
-                    not app.sleeper_state[account]):
-                continue
-            if app.sleeper_state[account] == 'online':
-                if not app.account_is_available(account):
-                    continue
-                # we save our online status
-                app.status_before_autoaway[account] = \
-                    app.connections[account].status
-                # we go away (no auto status) [we pass True to auto param]
-                auto_message = app.config.get('autoaway_message')
-                if not auto_message:
-                    auto_message = app.connections[account].status
-                else:
-                    auto_message = auto_message.replace('$S', '%(status)s')
-                    auto_message = auto_message.replace('$T', '%(time)s')
-                    auto_message = auto_message % {
-                        'status': app.status_before_autoaway[account],
-                        'time': app.config.get('autoxatime')}
-                roster.send_status(account, 'away', auto_message, auto=True)
-                app.sleeper_state[account] = 'autoaway-forced'

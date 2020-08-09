@@ -8,7 +8,7 @@
     <name>Gajim</name>
     <short-name>gajim</short-name>
 
-    <shortdesc xml:lang="en">XMPP Chat Client</shortdesc>
+    <shortdesc xml:lang="en">A fully-featured XMPP chat client</shortdesc>
     <description xml:lang="en">
       Gajim aims to be an easy to use and fully-featured XMPP client.
       Just chat with your friends or family, easily share pictures and thoughts or discuss the news with your groups.
@@ -17,7 +17,7 @@
     </description>
 
     <homepage rdf:resource="https://gajim.org/" />
-    <wiki rdf:resource="https://dev.gajim.org/gajim/gajim/wikis/home" />
+    <wiki rdf:resource="https://dev.gajim.org/gajim/gajim/-/wikis/home" />
     <bug-database rdf:resource="https://dev.gajim.org/gajim/gajim/issues" />
     <category rdf:resource="https://linkmauve.fr/ns/xmpp-doap#category-client" />
     <category rdf:resource="http://api.gnome.org/doap-extensions#apps" />
@@ -44,13 +44,6 @@
         <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0004.html" />
         <xmpp:status>complete</xmpp:status>
         <xmpp:version>2.9</xmpp:version>
-      </xmpp:SupportedXep>
-    </implements>
-    <implements>
-      <xmpp:SupportedXep>
-        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0016.html" />
-        <xmpp:status>complete</xmpp:status>
-        <xmpp:version>1.6</xmpp:version>
       </xmpp:SupportedXep>
     </implements>
     <implements>
@@ -181,6 +174,20 @@
     </implements>
     <implements>
       <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0080.html" />
+        <xmpp:status>complete</xmpp:status>
+        <xmpp:version>1.9</xmpp:version>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0082.html" />
+        <xmpp:status>complete</xmpp:status>
+        <xmpp:version>1.1</xmpp:version>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
         <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0084.html" />
         <xmpp:status>complete</xmpp:status>
         <xmpp:version>1.1.1</xmpp:version>
@@ -277,6 +284,13 @@
         <xmpp:status>partial</xmpp:status>
         <xmpp:version>1.1.2</xmpp:version>
         <xmpp:note>Only DNS method.</xmpp:note>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0157.html" />
+        <xmpp:status>complete</xmpp:status>
+        <xmpp:version>1.1.0</xmpp:version>
       </xmpp:SupportedXep>
     </implements>
     <implements>
@@ -392,6 +406,13 @@
         <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0223.html" />
         <xmpp:status>complete</xmpp:status>
         <xmpp:version>1.1</xmpp:version>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0224.html" />
+        <xmpp:status>complete</xmpp:status>
+        <xmpp:version>1.0</xmpp:version>
       </xmpp:SupportedXep>
     </implements>
     <implements>
@@ -516,6 +537,14 @@
         <xmpp:status>complete</xmpp:status>
         <xmpp:version>0.4.0</xmpp:version>
         <xmpp:note>OpenPGP plugin.</xmpp:note>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0377.html" />
+        <xmpp:status>partial</xmpp:status>
+        <xmpp:version>0.2</xmpp:version>
+        <xmpp:note>Basic Spam/Abuse reporting via XEP-0191</xmpp:note>
       </xmpp:SupportedXep>
     </implements>
     <implements>

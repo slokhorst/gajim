@@ -24,6 +24,7 @@ finish-args:
   - --talk-name=org.gnome.Mutter.IdleMonitor
   # Keyring
   - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.kwalletd5
   # GnuPG
   - --filesystem=~/.gnupg
   # camera access
@@ -49,6 +50,24 @@ cleanup:
   - '*.la'
 
 modules:
+  - name: python3-pyparsing
+    buildsystem: simple
+    build-commands:
+      - pip3 install --prefix=/app pyparsing-2.4.7-py2.py3-none-any.whl
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/8a/bb/488841f56197b13700afd5658fc279a2025a39e22449b7cf29864669b15d/pyparsing-2.4.7-py2.py3-none-any.whl
+        sha256: ef9d7589ef3c200abe66653d3f1ab1033c3c419ae9b9bdb1240a85b024efc88b
+
+  - name: python3-packaging
+    buildsystem: simple
+    build-commands:
+      - pip3 install --prefix=/app packaging-20.4-py2.py3-none-any.whl
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/46/19/c5ab91b1b05cfe63cccd5cfc971db9214c6dd6ced54e33c30d5af1d2bc43/packaging-20.4-py2.py3-none-any.whl
+        sha256: 998416ba6962ae7fbd6596850b80e17859a5753ba17c32284f67bfff33784181
+
   - name: python3-pycparser
     buildsystem: simple
     build-commands:
@@ -79,11 +98,11 @@ modules:
   - name: python3-idna
     buildsystem: simple
     build-commands:
-      - pip3 install --prefix=/app idna-2.9-py2.py3-none-any.whl
+      - pip3 install --prefix=/app idna-2.10-py2.py3-none-any.whl
     sources:
       - type: file
-        url: https://files.pythonhosted.org/packages/89/e3/afebe61c546d18fb1709a61bee788254b40e736cff7271c7de5de2dc4128/idna-2.9-py2.py3-none-any.whl
-        sha256: a068a21ceac8a4d63dbfd964670474107f541babbd2250d61922f029858365fa
+        url: https://files.pythonhosted.org/packages/a2/38/928ddce2273eaa564f6f50de919327bf3a00f091b5baba8dfa9460f3a8a8/idna-2.10-py2.py3-none-any.whl
+        sha256: b97d804b1e9b523befed77c48dacec60e6dcb0b5391d57af6a65a312a90648c0
 
   - name: python3-cryptography
     buildsystem: simple
@@ -91,8 +110,8 @@ modules:
       - python3 setup.py install --prefix=/app
     sources:
       - type: archive
-        url: https://files.pythonhosted.org/packages/be/60/da377e1bed002716fb2d5d1d1cab720f298cb33ecff7bf7adea72788e4e4/cryptography-2.8.tar.gz
-        sha256: 3cda1f0ed8747339bbdf71b9f38ca74c7b592f24f65cdb3ab3765e4b02871651
+        url: https://files.pythonhosted.org/packages/56/3b/78c6816918fdf2405d62c98e48589112669f36711e50158a0c15d804c30d/cryptography-2.9.2.tar.gz
+        sha256: a0c30272fb4ddda5f5ffc1089d7405b7a71b0b0f51993cb4e5dbb4590b2fc229
 
   - name: python3-pyopenssl
     buildsystem: simple
@@ -142,22 +161,22 @@ modules:
   - name: python3-importlib_metadata
     buildsystem: simple
     build-commands:
-      - pip3 install --prefix=/app importlib_metadata-1.5.0-py2.py3-none-any.whl
+      - pip3 install --prefix=/app importlib_metadata-1.7.0-py2.py3-none-any.whl
     sources:
       - type: file
-        url: https://files.pythonhosted.org/packages/8b/03/a00d504808808912751e64ccf414be53c29cad620e3de2421135fcae3025/importlib_metadata-1.5.0-py2.py3-none-any.whl
-        sha256: b97607a1a18a5100839aec1dc26a1ea17ee0d93b20b0f008d80a5a050afb200b
+        url: https://files.pythonhosted.org/packages/8e/58/cdea07eb51fc2b906db0968a94700866fc46249bdc75cac23f9d13168929/importlib_metadata-1.7.0-py2.py3-none-any.whl
+        sha256: dc15b2969b4ce36305c51eebe62d418ac7791e9a157911d58bfb1f9ccd8e2070
 
   - name: python3-keyring
     buildsystem: simple
     build-commands:
-      - pip3 install --prefix=/app keyring-21.2.0-py3-none-any.whl
+      - pip3 install --prefix=/app keyring-21.2.1-py3-none-any.whl
     cleanup:
       - /bin
     sources:
       - type: file
-        url: https://files.pythonhosted.org/packages/04/21/42d92822959a37ccc390742c2706c8b06cc6a29c10a5ef2e8d22cf0e2e33/keyring-21.2.0-py3-none-any.whl
-        sha256: 8179b1cdcdcbc221456b5b74e6b7cfa06f8dd9f239eb81892166d9223d82c5ba
+        url: https://files.pythonhosted.org/packages/a8/5e/d13b9feb235d042321a239ac8bc85e90cf3bbe49090c6f1383ac3fd53e0e/keyring-21.2.1-py3-none-any.whl
+        sha256: 3401234209015144a5d75701e71cb47239e552b0882313e9f51e8976f9e27843
 
   - name: python3-css-parser
     buildsystem: simple
@@ -220,6 +239,7 @@ modules:
         commands:
           - sed -i "s+<id>org.gajim.Gajim</id>+<id>org.gajim.Gajim.Devel</id>+" data/org.gajim.Gajim.appdata.xml.in
           - sed -i "s+<name>Gajim</name>+<name>Gajim (Nightly)</name>+" data/org.gajim.Gajim.appdata.xml.in
+          - sed -i "s+Exec=gajim+Exec=gajim-devel+" data/org.gajim.Gajim.desktop.in
           - mv gajim/data/icons/hicolor/scalable/apps/org.gajim.Gajim{.Devel,}.svg
     post-install:
       - install -d /app/plugins

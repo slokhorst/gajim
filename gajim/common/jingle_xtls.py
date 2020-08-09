@@ -18,6 +18,7 @@ import os
 from OpenSSL import SSL, crypto
 
 import nbxmpp
+from nbxmpp.namespaces import Namespace
 from nbxmpp.util import generate_id
 from gajim.common import app
 from gajim.common import configpaths
@@ -146,7 +147,7 @@ def send_cert(con, jid_from, sid):
     iq.setAttr('id', sid)
 
     pubkey = iq.setTag('pubkeys')
-    pubkey.setNamespace(nbxmpp.NS_PUBKEY_PUBKEY)
+    pubkey.setNamespace(Namespace.PUBKEY_PUBKEY)
 
     keyinfo = pubkey.setTag('keyinfo')
     name = keyinfo.setTag('name')
@@ -192,7 +193,7 @@ def send_cert_request(con, to_jid):
     id_ = generate_id()
     iq.setAttr('id', id_)
     pubkey = iq.setTag('pubkeys')
-    pubkey.setNamespace(nbxmpp.NS_PUBKEY_PUBKEY)
+    pubkey.setNamespace(Namespace.PUBKEY_PUBKEY)
     con.connection.send(iq)
     return str(id_)
 
@@ -241,7 +242,7 @@ def createCertificate(req, issuerCert, issuerKey, serial, notBefore, notAfter, d
     """
     Generate a certificate given a certificate request.
 
-    Arguments: req        - Certificate reqeust to use
+    Arguments: req        - Certificate request to use
                issuerCert - The certificate of the issuer
                issuerKey  - The private key of the issuer
                serial     - Serial number for the certificate

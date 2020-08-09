@@ -14,6 +14,7 @@
 
 import logging
 import os
+import sys
 
 from gi.repository import GLib
 from gi.repository import Gtk
@@ -28,7 +29,6 @@ except Exception:
 from gajim.common import app
 from gajim.common import configpaths
 from gajim.common import helpers
-from gajim.common import config as c_config
 from gajim.common import idle
 from gajim.common.nec import NetworkEvent
 from gajim.common.i18n import _
@@ -44,7 +44,6 @@ from gajim.gtk.util import get_builder
 from gajim.gtk.util import get_icon_name
 from gajim.gtk.util import get_available_iconsets
 from gajim.gtk.util import open_window
-from gajim.gtk.dialogs import AspellDictError
 from gajim.gtk.sounds import ManageSounds
 from gajim.gtk.const import ControlType
 from gajim.gtk import gstreamer
@@ -69,20 +68,12 @@ class Preferences(Gtk.ApplicationWindow):
         ### General tab ###
         ## Behavior of Windows and Tabs
         # Set default for single window type
-        choices = c_config.opt_one_window_types
-        type_ = app.config.get('one_message_window')
-        if type_ in choices:
-            self._ui.one_window_type_combobox.set_active(choices.index(type_))
-        else:
-            self._ui.one_window_type_combobox.set_active(0)
+        self._ui.one_window_type_combobox.set_active_id(
+            app.config.get('one_message_window'))
 
         # Show roster on startup
-        choices = c_config.opt_show_roster_on_startup
-        type_ = app.config.get('show_roster_on_startup')
-        if type_ in choices:
-            self._ui.show_roster_on_startup.set_active(choices.index(type_))
-        else:
-            self._ui.show_roster_on_startup.set_active(0)
+        self._ui.show_roster_on_startup.set_active_id(
+            app.config.get('show_roster_on_startup'))
 
         # Quit on roster x
         st = app.config.get('quit_on_roster_x_button')
@@ -99,11 +90,11 @@ class Preferences(Gtk.ApplicationWindow):
         else: # right
             self._ui.tabs_placement.set_active(3)
 
-        # Show avatar in tabs
-        st = app.config.get('show_avatar_in_tabs')
-        self._ui.show_avatar_in_tabs_checkbutton.set_active(st)
-
         ## Contact List Appearance
+        # Merge accounts
+        st = app.config.get('mergeaccounts')
+        self._ui.merge_accounts_checkbutton.set_active(st)
+
         # Display avatars in roster
         st = app.config.get('show_avatars_in_roster')
         self._ui.show_avatars_in_roster_checkbutton.set_active(st)
@@ -161,7 +152,8 @@ class Preferences(Gtk.ApplicationWindow):
 
         # Group chat settings
         threshold_model = self._ui.sync_threshold_combobox.get_model()
-        days = app.config.get_options('threshold_options', return_type=int)
+        options = app.config.get('threshold_options').split(',')
+        days = [int(option.strip()) for option in options]
         for day in days:
             if day == 0:
                 label = _('No threshold')
@@ -278,9 +270,6 @@ class Preferences(Gtk.ApplicationWindow):
         st = app.config.get('ask_offline_status')
         self._ui.prompt_offline_status_message_checkbutton.set_active(st)
 
-        # Default status messages
-        self.fill_default_msg_treeview()
-
         # Status messages
         renderer = Gtk.CellRendererText()
         renderer.connect('edited', self.on_msg_cell_edited)
@@ -370,9 +359,12 @@ class Preferences(Gtk.ApplicationWindow):
             self._ui.av_dependencies_infobar.set_no_show_all(True)
             self._ui.av_dependencies_infobar.hide()
 
-            create_av_combobox('audio_input', AudioInputManager().get_devices())
-            create_av_combobox('audio_output', AudioOutputManager().get_devices())
-            create_av_combobox('video_input', VideoInputManager().get_devices())
+            create_av_combobox(
+                'audio_input', AudioInputManager().get_devices())
+            create_av_combobox(
+                'audio_output', AudioOutputManager().get_devices())
+            create_av_combobox(
+                'video_input', VideoInputManager().get_devices())
 
             create_av_combobox(
                 'video_framerate',
@@ -394,99 +386,22 @@ class Preferences(Gtk.ApplicationWindow):
             st = app.config.get('video_see_self')
             self._ui.video_see_self_checkbutton.set_active(st)
 
-            def on_av_map(tab):
-                label = self._ui.selected_video_output
-                sink, widget, name = gstreamer.create_gtk_widget()
-                if sink is None:
-                    log.error('Failed to obtain a working Gstreamer GTK+ sink, '
-                              'video support will be disabled')
-                    self._ui.video_input_combobox.set_sensitive(False)
-                    label.set_markup(
-                        _('<span color="red" font-weight="bold">'
-                          'Unavailable</span>, video support will be disabled'))
-                    return
-
-                text = ''
-                if name == 'gtkglsink':
-                    text = _('<span color="green" font-weight="bold">'
-                             'OpenGL</span> accelerated')
-                elif name == 'gtksink':
-                    text = _('<span color="yellow" font-weight="bold">'
-                             'Unaccelerated</span>')
-                label.set_markup(text)
-                if self.av_pipeline is None:
-                    self.av_pipeline = Gst.Pipeline.new('preferences-pipeline')
-                else:
-                    self.av_pipeline.set_state(Gst.State.NULL)
-                self.av_pipeline.add(sink)
-                self.av_sink = sink
-                if self.av_widget is not None:
-                    tab.remove(self.av_widget)
-                tab.add(widget)
-                self.av_widget = widget
-
-                src_name = app.config.get('video_input_device')
-                try:
-                    self.av_src = Gst.parse_bin_from_description(src_name, True)
-                except GLib.Error:
-                    log.error('Failed to parse "%s" as Gstreamer element,'
-                              ' falling back to autovideosrc', src_name)
-                    self.av_src = None
-                if self.av_src is not None:
-                    self.av_pipeline.add(self.av_src)
-                    self.av_src.link(self.av_sink)
-                    self.av_pipeline.set_state(Gst.State.PLAYING)
-                else:
-                    # Parsing the pipeline stored in video_input_device failed,
-                    # let’s try the default one.
-                    self.av_src = Gst.ElementFactory.make('autovideosrc', None)
-                    if self.av_src is None:
-                        log.error('Failed to obtain a working Gstreamer source,'
-                                  ' video will be disabled.')
-                        self._ui.video_input_combobox.set_sensitive(False)
-                        return
-                    # Great, this succeeded, let’s store it back into the
-                    # config and use it. We’ve made autovideosrc the first
-                    # element in the combobox so we can pick index 0 without
-                    # worry.
-                    combobox = self._ui.video_input_combobox
-                    combobox.set_active(0)
-
-            def on_av_unmap(tab):
-                if self.av_pipeline is not None:
-                    self.av_pipeline.set_state(Gst.State.NULL)
-                if self.av_src is not None:
-                    self.av_pipeline.remove(self.av_src)
-                    self.av_src = None
-                if self.av_sink is not None:
-                    self.av_pipeline.remove(self.av_sink)
-                    self.av_sink = None
-                if self.av_widget is not None:
-                    tab.remove(self.av_widget)
-                    self.av_widget = None
-                self.av_pipeline = None
-
             self.av_pipeline = None
             self.av_src = None
             self.av_sink = None
             self.av_widget = None
-            tab = self._ui.audio_video_tab
-            tab.connect('map', on_av_map)
-            tab.connect('unmap', on_av_unmap)
-
         else:
             for opt_name in ('audio_input', 'audio_output', 'video_input',
                              'video_framerate', 'video_size'):
                 combobox = self._ui.get_object(opt_name + '_combobox')
                 combobox.set_sensitive(False)
+            self._ui.live_preview_checkbutton.set_sensitive(False)
 
         # STUN
         st = app.config.get('use_stun_server')
         self._ui.stun_checkbutton.set_active(st)
-
+        self._ui.stun_server_entry.set_sensitive(st)
         self._ui.stun_server_entry.set_text(app.config.get('stun_server'))
-        if not st:
-            self._ui.stun_server_entry.set_sensitive(False)
 
         ### Advanced tab ###
 
@@ -498,8 +413,16 @@ class Preferences(Gtk.ApplicationWindow):
         st = app.config.get('log_contact_status_changes')
         self._ui.log_show_changes_checkbutton.set_active(st)
 
+        st = app.config.get('use_keyring')
+        self._ui.use_keyring_checkbutton.set_active(st)
+
         self._ui.enable_logging.set_active(app.get_debug_mode())
         self._ui.enable_logging.show()
+
+        if sys.platform in ('win32', 'darwin'):
+            st = app.config.get('check_for_update')
+            self._ui.update_check.set_active(st)
+            self._ui.update_check.show()
 
         self._ui.connect_signals(self)
         self.connect('key-press-event', self._on_key_press)
@@ -508,8 +431,6 @@ class Preferences(Gtk.ApplicationWindow):
                                 self.on_msg_treemodel_row_changed)
         self._ui.msg_treeview.get_model().connect('row-deleted',
                                 self.on_msg_treemodel_row_deleted)
-        self._ui.default_msg_treeview.get_model().connect('row-changed',
-                                self.on_default_msg_treemodel_row_changed)
 
         self.sounds_preferences = None
         self.theme_preferences = None
@@ -569,16 +490,12 @@ class Preferences(Gtk.ApplicationWindow):
                 yield ctrl
 
     ### General tab ###
-    def on_one_window_type_combo_changed(self, widget):
-        active = widget.get_active()
-        config_type = c_config.opt_one_window_types[active]
-        app.config.set('one_message_window', config_type)
+    def on_one_window_type_combo_changed(self, combobox):
+        app.config.set('one_message_window', combobox.get_active_id())
         app.interface.msg_win_mgr.reconfig()
 
-    def on_show_roster_on_startup_changed(self, widget):
-        active = widget.get_active()
-        config_type = c_config.opt_show_roster_on_startup[active]
-        app.config.set('show_roster_on_startup', config_type)
+    def on_show_roster_on_startup_changed(self, combobox):
+        app.config.set('show_roster_on_startup', combobox.get_active_id())
 
     def on_quit_on_roster_x_checkbutton_toggled(self, widget):
         self.on_checkbutton_toggled(widget, 'quit_on_roster_x_button')
@@ -594,8 +511,9 @@ class Preferences(Gtk.ApplicationWindow):
         else: # right
             app.config.set('tabs_position', 'right')
 
-    def on_show_avatar_in_tabs_checkbutton_toggled(self, widget):
-        self.on_checkbutton_toggled(widget, 'show_avatar_in_tabs')
+    def on_merge_accounts_toggled(self, widget):
+        self.on_checkbutton_toggled(widget, 'mergeaccounts')
+        app.app.activate_action('merge')
 
     def on_show_avatars_in_roster_checkbutton_toggled(self, widget):
         self.on_checkbutton_toggled(widget, 'show_avatars_in_roster')
@@ -637,13 +555,8 @@ class Preferences(Gtk.ApplicationWindow):
         gspell_lang = Gspell.language_lookup(lang)
         if gspell_lang is None:
             gspell_lang = Gspell.language_get_default()
-        if gspell_lang is None:
-            AspellDictError(lang)
-            app.config.set('use_speller', False)
-            widget.set_active(False)
-        else:
-            app.config.set('speller_language', gspell_lang.get_code())
-            self.apply_speller()
+        app.config.set('speller_language', gspell_lang.get_code())
+        self.apply_speller()
 
     def apply_speller(self):
         for ctrl in self._get_all_controls():
@@ -690,16 +603,13 @@ class Preferences(Gtk.ApplicationWindow):
         active = widget.get_active()
         if active == 0:
             app.config.set('trayicon', 'never')
-            app.interface.systray_enabled = False
-            app.interface.systray.hide_icon()
+            app.interface.hide_systray()
         elif active == 1:
             app.config.set('trayicon', 'on_event')
-            app.interface.systray_enabled = True
-            app.interface.systray.show_icon()
+            app.interface.show_systray()
         else:
             app.config.set('trayicon', 'always')
-            app.interface.systray_enabled = True
-            app.interface.systray.show_icon()
+            app.interface.show_systray()
 
     def on_event_received_combobox_changed(self, widget):
         active = widget.get_active()
@@ -776,38 +686,6 @@ class Preferences(Gtk.ApplicationWindow):
 
     def on_prompt_offline_status_message_checkbutton_toggled(self, widget):
         self.on_checkbutton_toggled(widget, 'ask_offline_status')
-
-    def fill_default_msg_treeview(self):
-        model = self._ui.default_msg_treeview.get_model()
-        model.clear()
-        status = []
-        for status_ in app.config.get_per('defaultstatusmsg'):
-            status.append(status_)
-        status.sort()
-        for status_ in status:
-            msg = app.config.get_per('defaultstatusmsg', status_, 'message')
-            msg = helpers.from_one_line(msg)
-            enabled = app.config.get_per('defaultstatusmsg', status_, 'enabled')
-            iter_ = model.append()
-            uf_show = helpers.get_uf_show(status_)
-            model.set(iter_, 0, status_, 1, uf_show, 2, msg, 3, enabled)
-
-    def on_default_msg_cell_edited(self, cell, row, new_text):
-        model = self._ui.default_msg_treeview.get_model()
-        iter_ = model.get_iter_from_string(row)
-        model.set_value(iter_, 2, new_text)
-
-    def default_msg_toggled_cb(self, cell, path):
-        model = self._ui.default_msg_treeview.get_model()
-        model[path][3] = not model[path][3]
-
-    def on_default_msg_treemodel_row_changed(self, model, path, iter_):
-        status = model[iter_][0]
-        message = model[iter_][2]
-        message = helpers.to_one_line(message)
-        app.config.set_per('defaultstatusmsg', status, 'enabled',
-                model[iter_][3])
-        app.config.set_per('defaultstatusmsg', status, 'message', message)
 
     def save_status_messages(self, model):
         for msg in app.config.get_per('statusmsg'):
@@ -1002,14 +880,88 @@ class Preferences(Gtk.ApplicationWindow):
             widget.set_active(0)
             return
 
-        self.av_pipeline.set_state(Gst.State.NULL)
-        if self.av_src is not None:
-            self.av_pipeline.remove(self.av_src)
-        self.av_pipeline.add(src)
-        src.link(self.av_sink)
-        self.av_src = src
-        self.av_pipeline.set_state(Gst.State.PLAYING)
+        if self._ui.live_preview_checkbutton.get_active():
+            self.av_pipeline.set_state(Gst.State.NULL)
+            if self.av_src is not None:
+                self.av_pipeline.remove(self.av_src)
+            self.av_pipeline.add(src)
+            src.link(self.av_sink)
+            self.av_src = src
+            self.av_pipeline.set_state(Gst.State.PLAYING)
         app.config.set('video_input_device', device)
+
+    def _on_live_preview_toggled(self, widget):
+        if widget.get_active():
+            sink, widget, name = gstreamer.create_gtk_widget()
+            if sink is None:
+                log.error('Failed to obtain a working Gstreamer GTK+ sink, '
+                          'video support will be disabled')
+                self._ui.video_input_combobox.set_sensitive(False)
+                self._ui.selected_video_output.set_markup(
+                    _('<span color="red" font-weight="bold">'
+                      'Unavailable</span>, video support will be disabled'))
+                return
+
+            text = ''
+            if name == 'gtkglsink':
+                text = _('<span color="green" font-weight="bold">'
+                         'OpenGL</span> accelerated')
+            elif name == 'gtksink':
+                text = _('<span color="yellow" font-weight="bold">'
+                         'Unaccelerated</span>')
+            self._ui.selected_video_output.set_markup(text)
+            if self.av_pipeline is None:
+                self.av_pipeline = Gst.Pipeline.new('preferences-pipeline')
+            else:
+                self.av_pipeline.set_state(Gst.State.NULL)
+            self.av_pipeline.add(sink)
+            self.av_sink = sink
+
+            if self.av_widget is not None:
+                self._ui.av_preview_box.remove(self.av_widget)
+            self._ui.av_preview_placeholder.set_visible(False)
+            self._ui.av_preview_box.add(widget)
+            self.av_widget = widget
+
+            src_name = app.config.get('video_input_device')
+            try:
+                self.av_src = Gst.parse_bin_from_description(src_name, True)
+            except GLib.Error:
+                log.error('Failed to parse "%s" as Gstreamer element, '
+                          'falling back to autovideosrc', src_name)
+                self.av_src = None
+            if self.av_src is not None:
+                self.av_pipeline.add(self.av_src)
+                self.av_src.link(self.av_sink)
+                self.av_pipeline.set_state(Gst.State.PLAYING)
+            else:
+                # Parsing the pipeline stored in video_input_device failed,
+                # let’s try the default one.
+                self.av_src = Gst.ElementFactory.make('autovideosrc', None)
+                if self.av_src is None:
+                    log.error('Failed to obtain a working Gstreamer source, '
+                              'video will be disabled.')
+                    self._ui.video_input_combobox.set_sensitive(False)
+                    return
+                # Great, this succeeded, let’s store it back into the
+                # config and use it. We’ve made autovideosrc the first
+                # element in the combobox so we can pick index 0 without
+                # worry.
+                self._ui.video_input_combobox.set_active(0)
+        else:
+            if self.av_pipeline is not None:
+                self.av_pipeline.set_state(Gst.State.NULL)
+            if self.av_src is not None:
+                self.av_pipeline.remove(self.av_src)
+                self.av_src = None
+            if self.av_sink is not None:
+                self.av_pipeline.remove(self.av_sink)
+                self.av_sink = None
+            if self.av_widget is not None:
+                self._ui.av_preview_box.remove(self.av_widget)
+                self._ui.av_preview_placeholder.set_visible(True)
+                self.av_widget = None
+            self.av_pipeline = None
 
     def on_video_framerate_combobox_changed(self, widget):
         self.on_av_combobox_changed(widget, 'video_framerate')
@@ -1060,12 +1012,27 @@ class Preferences(Gtk.ApplicationWindow):
     def on_log_show_changes_checkbutton_toggled(self, widget):
         self.on_checkbutton_toggled(widget, 'log_contact_status_changes')
 
+    # Use system’s keyring
+    def _on_use_keyring_toggled(self, widget):
+        self.on_checkbutton_toggled(widget, 'use_keyring')
+
     # Enable debug logging
     def on_enable_logging_toggled(self, widget):
         app.set_debug_mode(widget.get_active())
 
     def _on_debug_folder_clicked(self, _widget):
         open_file(configpaths.get('DEBUG'))
+
+    def _on_update_check_toggled(self, widget):
+        self.on_checkbutton_toggled(widget, 'check_for_update')
+
+    def _on_reset_help_clicked(self, widget):
+        widget.set_sensitive(False)
+        helping_hints = [
+            'start_chat',
+        ]
+        for hint in helping_hints:
+            app.config.set('show_help_%s' % hint, True)
 
     def on_open_advanced_editor_button_clicked(self, _widget):
         open_window('AdvancedConfig')

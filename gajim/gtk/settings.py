@@ -88,6 +88,7 @@ class SettingsBox(Gtk.ListBox):
             SettingKind.SPIN: SpinSetting,
             SettingKind.DIALOG: DialogSetting,
             SettingKind.ENTRY: EntrySetting,
+            SettingKind.COLOR: ColorSetting,
             SettingKind.ACTION: ActionSetting,
             SettingKind.LOGIN: LoginSetting,
             SettingKind.FILECHOOSER: FileChooserSetting,
@@ -97,8 +98,7 @@ class SettingsBox(Gtk.ListBox):
             SettingKind.HOSTNAME: CutstomHostnameSetting,
             SettingKind.CHANGEPASSWORD: ChangePasswordSetting,
             SettingKind.COMBO: ComboSetting,
-            SettingKind.CHATSTATE_COMBO: ChatstateComboSetting,
-            }
+        }
 
         if extend is not None:
             for setting, callback in extend:
@@ -336,6 +336,37 @@ class EntrySetting(GenericSetting):
         self.entry.grab_focus()
 
 
+class ColorSetting(GenericSetting):
+
+    __gproperties__ = {
+        "setting-value": (str, 'Color Value', '', '',
+                          GObject.ParamFlags.READWRITE),
+    }
+
+    def __init__(self, *args):
+        GenericSetting.__init__(self, *args)
+
+        rgba = Gdk.RGBA()
+        rgba.parse(self.setting_value)
+        self.color_button = Gtk.ColorButton()
+        self.color_button.set_rgba(rgba)
+        self.color_button.connect('color-set', self.on_color_set)
+        self.color_button.set_valign(Gtk.Align.CENTER)
+        self.color_button.set_halign(Gtk.Align.END)
+
+        self.setting_box.pack_end(self.color_button, True, True, 0)
+
+        self.show_all()
+
+    def on_color_set(self, button):
+        rgba = button.get_rgba()
+        self.set_value(rgba.to_string())
+        app.css_config.refresh()
+
+    def on_row_activated(self):
+        self.color_button.grab_focus()
+
+
 class DialogSetting(GenericSetting):
 
     __gproperties__ = {
@@ -543,15 +574,6 @@ class ComboSetting(GenericSetting):
         pass
 
 
-class ChatstateComboSetting(ComboSetting):
-    def on_value_change(self, combo):
-        self.set_value(combo.get_active_id())
-        if 'muc' in self.value:
-            app.config.del_all_per('rooms', 'send_chatstate')
-        else:
-            app.config.del_all_per('contacts', 'send_chatstate')
-
-
 class ProxyComboSetting(GenericSetting):
 
     __gproperties__ = {
@@ -642,5 +664,6 @@ class ChangePasswordSetting(DialogSetting):
         activatable = False
         if self.account in app.connections:
             con = app.connections[self.account]
-            activatable = con.state.is_available and con.register_supported
+            activatable = (con.state.is_available and
+                           con.get_module('Register').supported)
         self.set_activatable(activatable)

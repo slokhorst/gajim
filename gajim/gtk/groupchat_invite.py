@@ -26,6 +26,7 @@ from gajim.common.const import AvatarSize
 from gajim.common.helpers import validate_jid
 
 from gajim.gtk.util import get_builder
+from gajim.gtk.util import generate_account_badge
 
 
 class GroupChatInvite(Gtk.Box):
@@ -53,8 +54,6 @@ class GroupChatInvite(Gtk.Box):
 
         self._new_contact_row_visible = False
         self._room_jid = room_jid
-
-        self.update()
 
         self._ui.search_entry.connect('search-changed',
                                       self._on_search_changed)
@@ -254,7 +253,7 @@ class GroupChatInvite(Gtk.Box):
 
         return locale.strcoll(name1.lower(), name2.lower())
 
-    def update(self):
+    def load_contacts(self):
         self._ui.contacts_listbox.foreach(self._ui.contacts_listbox.remove)
         self._ui.invitees_listbox.foreach(self._ui.invitees_listbox.remove)
         self._accounts = app.get_enabled_accounts_with_labels()
@@ -298,8 +297,8 @@ class ContactRow(Gtk.ListBoxRow):
         image.set_size_request(AvatarSize.ROSTER, AvatarSize.ROSTER)
         grid.add(image)
 
-        middle_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        middle_box.set_hexpand(True)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_hexpand(True)
 
         if self.name is None:
             self.name = _('Invite New Contact')
@@ -307,30 +306,32 @@ class ContactRow(Gtk.ListBoxRow):
         self.name_label = Gtk.Label(label=self.name)
         self.name_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.name_label.set_xalign(0)
-        self.name_label.set_width_chars(25)
+        self.name_label.set_width_chars(20)
         self.name_label.set_halign(Gtk.Align.START)
         self.name_label.get_style_context().add_class('bold16')
-        middle_box.add(self.name_label)
-
-        self.jid_label = Gtk.Label(label=jid)
-        self.jid_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self.jid_label.set_xalign(0)
-        self.jid_label.set_width_chars(25)
-        self.jid_label.set_halign(Gtk.Align.START)
-        self.jid_label.get_style_context().add_class('dim-label')
-        middle_box.add(self.jid_label)
-
-        grid.add(middle_box)
+        name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        name_box.add(self.name_label)
 
         if show_account:
-            account_label = Gtk.Label(label=self.account_label)
-            account_label.set_halign(Gtk.Align.START)
-            account_label.set_valign(Gtk.Align.START)
+            account_badge = generate_account_badge(account)
+            account_badge.set_tooltip_text(
+                _('Account: %s' % self.account_label))
+            account_badge.set_halign(Gtk.Align.END)
+            account_badge.set_valign(Gtk.Align.START)
+            account_badge.set_hexpand(True)
+            name_box.add(account_badge)
+        box.add(name_box)
 
-            right_box = Gtk.Box()
-            right_box.set_vexpand(True)
-            right_box.add(account_label)
-            grid.add(right_box)
+        self.jid_label = Gtk.Label(label=jid)
+        self.jid_label.set_tooltip_text(jid)
+        self.jid_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.jid_label.set_xalign(0)
+        self.jid_label.set_width_chars(22)
+        self.jid_label.set_halign(Gtk.Align.START)
+        self.jid_label.get_style_context().add_class('dim-label')
+        box.add(self.jid_label)
+
+        grid.add(box)
 
         self.add(grid)
         self.show_all()

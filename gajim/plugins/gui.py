@@ -30,7 +30,6 @@ from gi.repository import GdkPixbuf
 from gi.repository import Gdk
 
 from gajim.common import app
-from gajim.common import configpaths
 from gajim.common import ged
 from gajim.common.exceptions import PluginsystemError
 from gajim.common.helpers import open_uri
@@ -167,10 +166,9 @@ class PluginsWindow(Gtk.ApplicationWindow, EventHelper):
 
         self._ui.description.set_text(plugin.description)
 
-        self._ui.uninstall_plugin_button.set_sensitive(
-            configpaths.get('PLUGINS_USER') in plugin.__path__)
+        self._ui.uninstall_plugin_button.set_sensitive(True)
         self._ui.configure_plugin_button.set_sensitive(
-            plugin.config_dialog is not None)
+            plugin.config_dialog is not None and plugin.active)
 
     def _clear_installed_plugin_info(self):
         self._ui.plugin_name_label.set_text('')
@@ -219,6 +217,7 @@ class PluginsWindow(Gtk.ApplicationWindow, EventHelper):
                               transient_for=self)
                 return
 
+        self._ui.configure_plugin_button.set_sensitive(not is_active)
         self.installed_plugins_model[path][Column.ACTIVE] = not is_active
 
     def _on_configure_plugin(self, _widget):
@@ -278,7 +277,7 @@ class PluginsWindow(Gtk.ApplicationWindow, EventHelper):
         def _on_plugin_exists(zip_filename):
             def _on_yes():
                 plugin = app.plugin_manager.install_from_zip(zip_filename,
-                                                             True)
+                                                             overwrite=True)
                 if not plugin:
                     _show_warn_dialog()
                     return

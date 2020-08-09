@@ -57,7 +57,7 @@ class SettingKind(IntEnum):
     FILECHOOSER = 10
     CHANGEPASSWORD = 11
     COMBO = 12
-    CHATSTATE_COMBO = 13
+    COLOR = 13
 
 
 @unique
@@ -90,17 +90,6 @@ class ControlType(Enum):
         return self.value
 
 
-SHOW_COLORS = {
-    'online': (102/255, 191/255, 16/255),
-    'offline': (154/255, 154/255, 154/255),
-    'not in roster': (154/255, 154/255, 154/255),
-    'chat': (102/255, 191/255, 16/255),
-    'away': (255/255, 133/255, 51/255),
-    'dnd': (230/255, 46/255, 0),
-    'xa': (106/255, 0, 242/255)
-}
-
-
 WINDOW_MODULES = {
     'AccountsWindow': 'gajim.gtk.accounts',
     'HistorySyncAssistant': 'gajim.gtk.history_sync',
@@ -111,7 +100,6 @@ WINDOW_MODULES = {
     'StartChatDialog': 'gajim.gtk.start_chat',
     'AddNewContactWindow': 'gajim.gtk.add_contact',
     'SingleMessageWindow': 'gajim.gtk.single_message',
-    'PrivacyListsWindow': 'gajim.gtk.privacy_list',
     'Bookmarks': 'gajim.gtk.bookmarks',
     'AccountWizard': 'gajim.gtk.account_wizard',
     'HistoryWindow': 'gajim.gtk.history',

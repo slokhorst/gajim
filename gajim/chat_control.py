@@ -35,12 +35,7 @@ from gi.repository import Pango
 from gi.repository import GLib
 from gi.repository import Gdk
 
-from nbxmpp.protocol import NS_XHTML_IM
-from nbxmpp.protocol import NS_MUC
-from nbxmpp.protocol import NS_JINGLE_RTP_AUDIO
-from nbxmpp.protocol import NS_JINGLE_RTP_VIDEO
-from nbxmpp.protocol import NS_JINGLE_ICE_UDP
-from nbxmpp.protocol import NS_JINGLE_FILE_TRANSFER_5
+from nbxmpp.namespaces import Namespace
 
 from gajim.common import app
 from gajim.common import helpers
@@ -65,7 +60,6 @@ from gajim import dialogs
 from gajim.gtk.dialogs import DialogButton
 from gajim.gtk.dialogs import NewConfirmationDialog
 from gajim.gtk.add_contact import AddNewContactWindow
-from gajim.gtk.util import get_icon_name
 from gajim.gtk.util import get_cursor
 from gajim.gtk.util import format_mood
 from gajim.gtk.util import format_activity
@@ -239,7 +233,7 @@ class ChatControl(ChatControlBase):
         ])
 
         if self._type.is_chat:
-            # Dont connect this when PrivateChatControl is used
+            # Don’t connect this when PrivateChatControl is used
             self.register_event('update-roster-avatar', ged.GUI1, self._on_update_roster_avatar)
         # pylint: enable=line-too-long
 
@@ -257,8 +251,9 @@ class ChatControl(ChatControlBase):
         actions = [
             ('invite-contacts-', self._on_invite_contacts),
             ('add-to-roster-', self._on_add_to_roster),
+            ('block-contact-', self._on_block_contact),
             ('information-', self._on_information),
-            ]
+        ]
 
         for action in actions:
             action_name, func = action
@@ -306,6 +301,11 @@ class ChatControl(ChatControlBase):
             win.lookup_action(
                 'add-to-roster-' + self.control_id).set_enabled(False)
 
+        # Block contact
+        win.lookup_action(
+            'block-contact-' + self.control_id).set_enabled(
+                online and con.get_module('Blocking').supported)
+
         # Audio
         win.lookup_action('toggle-audio-' + self.control_id).set_enabled(
             online and self.jingle['audio'].available)
@@ -321,7 +321,7 @@ class ChatControl(ChatControlBase):
             online and con.get_module('HTTPUpload').available)
 
         # Send file (Jingle)
-        jingle_support = self.contact.supports(NS_JINGLE_FILE_TRANSFER_5)
+        jingle_support = self.contact.supports(Namespace.JINGLE_FILE_TRANSFER_5)
         jingle_conditions = jingle_support and self.contact.show != 'offline'
         jingle = win.lookup_action('send-file-jingle-' + self.control_id)
         jingle.set_enabled(online and jingle_conditions)
@@ -343,7 +343,7 @@ class ChatControl(ChatControlBase):
             win.lookup_action(
                 'invite-contacts-' + self.control_id).set_enabled(False)
         else:
-            if self.contact.supports(NS_MUC) and online:
+            if self.contact.supports(Namespace.MUC) and online:
                 win.lookup_action(
                     'invite-contacts-' + self.control_id).set_enabled(True)
             else:
@@ -381,6 +381,33 @@ class ChatControl(ChatControlBase):
 
     def _on_add_to_roster(self, _action, _param):
         AddNewContactWindow(self.account, self.contact.jid)
+
+    def _on_block_contact(self, _action, _param):
+        def _block_contact(report=None):
+            con = app.connections[self.account]
+            con.get_module('Blocking').block([self.contact.jid], report=report)
+
+            self.parent_win.remove_tab(self, None, force=True)
+            if _('Not in contact list') in self.contact.get_shown_groups():
+                app.interface.roster.remove_contact(
+                    self.contact.jid, self.account, force=True, backend=True)
+                return
+            app.interface.roster.draw_contact(self.contact.jid, self.account)
+
+        NewConfirmationDialog(
+            _('Block Contact'),
+            _('Really block this contact?'),
+            _('You will appear offline for this contact and you will '
+              'not receive further messages.'),
+            [DialogButton.make('Cancel'),
+             DialogButton.make('OK',
+                               text=_('_Report Spam'),
+                               callback=_block_contact,
+                               kwargs={'report': 'spam'}),
+             DialogButton.make('Remove',
+                               text=_('_Block'),
+                               callback=_block_contact)],
+            modal=False).show()
 
     def _on_information(self, _action, _param):
         app.interface.roster.on_info(None, self.contact, self.account)
@@ -423,7 +450,7 @@ class ChatControl(ChatControlBase):
     def _update_toolbar(self):
         # Formatting
         # TODO: find out what encryption allows for xhtml and which not
-        if self.contact.supports(NS_XHTML_IM):
+        if self.contact.supports(Namespace.XHTML_IM):
             self.xml.formattings_button.set_sensitive(True)
             self.xml.formattings_button.set_tooltip_text(_(
                 'Show a list of formattings'))
@@ -435,10 +462,12 @@ class ChatControl(ChatControlBase):
         # Jingle detection
         jingle_audio = self.jingle['audio']
         jingle_video = self.jingle['video']
-        if self.contact.supports(NS_JINGLE_ICE_UDP) and \
+        if self.contact.supports(Namespace.JINGLE_ICE_UDP) and \
         app.is_installed('FARSTREAM') and self.contact.resource:
-            jingle_audio.available = self.contact.supports(NS_JINGLE_RTP_AUDIO)
-            jingle_video.available = self.contact.supports(NS_JINGLE_RTP_VIDEO)
+            jingle_audio.available = self.contact.supports(
+                Namespace.JINGLE_RTP_AUDIO)
+            jingle_video.available = self.contact.supports(
+                Namespace.JINGLE_RTP_VIDEO)
         else:
             if jingle_video.available or jingle_audio.available:
                 self.stop_jingle()
@@ -736,7 +765,7 @@ class ChatControl(ChatControlBase):
         new_sid = None
         if jingle_state == self.JINGLE_STATE_NULL:
             new_sid = None
-        if state in ('connection_received', 'connecting'):
+        if state in ('connection_received', 'connecting', 'connected'):
             new_sid = sid
 
         jingle.state = jingle_state
@@ -806,36 +835,14 @@ class ChatControl(ChatControlBase):
         name, jid
         """
         contact = self.contact
-        jid = contact.jid
-
         name = contact.get_shown_name()
         if self.resource:
             name += '/' + self.resource
         if self._type.is_privatechat:
-            name = i18n.direction_mark +  _(
+            name = i18n.direction_mark + _(
                 '%(nickname)s from group chat %(room_name)s') % \
                 {'nickname': name, 'room_name': self.room_name}
         name = i18n.direction_mark + GLib.markup_escape_text(name)
-
-        # We know our contacts nick, but if another contact has the same nick
-        # in another account we need to also display the account.
-        # except if we are talking to two different resources of the
-        # same contact
-        acct_info = ''
-        for account in app.contacts.get_accounts():
-            if account == self.account:
-                continue
-            if acct_info: # We already found a contact with same nick
-                break
-            for jid in app.contacts.get_jid_list(account):
-                other_contact_ = \
-                    app.contacts.get_first_contact_from_jid(account, jid)
-                if other_contact_.get_shown_name() == \
-                self.contact.get_shown_name():
-                    acct_info = i18n.direction_mark + ' (%s)' % \
-                        GLib.markup_escape_text(
-                            app.get_account_label(self.account))
-                    break
 
         status = contact.status
         if status is not None:
@@ -853,17 +860,12 @@ class ChatControl(ChatControlBase):
         if app.config.get('show_chatstate_in_banner'):
             chatstate = helpers.get_uf_chatstate(cs)
 
-            label_text = '<span>%s</span><span size="x-small" weight="light">%s %s</span>' \
-                % (name, acct_info, chatstate)
-            if acct_info:
-                acct_info = i18n.direction_mark + ' ' + acct_info
-            label_tooltip = '%s%s %s' % (name, acct_info, chatstate)
+            label_text = '<span>%s</span><span size="x-small" weight="light"> %s</span>' % \
+                (name, chatstate)
+            label_tooltip = '%s %s' % (name, chatstate)
         else:
-            label_text = '<span>%s</span><span size="x-small" weight="light">%s</span>' % \
-                    (name, acct_info)
-            if acct_info:
-                acct_info = i18n.direction_mark + ' ' + acct_info
-            label_tooltip = '%s%s' % (name, acct_info)
+            label_text = '<span>%s</span>' % name
+            label_tooltip = name
 
         if status_escaped:
             status_text = make_href_markup(status_escaped)
@@ -886,9 +888,6 @@ class ChatControl(ChatControlBase):
         if not jingle.sid:
             return
 
-        jingle.sid = None
-        jingle.state = self.JINGLE_STATE_NULL
-
         con = app.connections[self.account]
         session = con.get_module('Jingle').get_jingle_session(
             self.contact.get_full_jid(), jingle.sid)
@@ -896,6 +895,10 @@ class ChatControl(ChatControlBase):
             content = session.get_content(jingle_type)
             if content:
                 session.remove_content(content.creator, content.name)
+
+        jingle.sid = None
+        jingle.state = self.JINGLE_STATE_NULL
+
         var = GLib.Variant.new_boolean(False)
 
         jingle.action.change_state(var)
@@ -1028,7 +1031,7 @@ class ChatControl(ChatControlBase):
             jid = self.contact.jid
         num_unread = len(app.events.get_events(
             self.account, jid, ['printed_%s' % self._type, str(self._type)]))
-        if num_unread == 1 and not app.config.get('show_unread_tab_icon'):
+        if num_unread == 1:
             unread = '*'
         elif num_unread > 1:
             unread = '[' + str(num_unread) + ']'
@@ -1041,42 +1044,13 @@ class ChatControl(ChatControlBase):
             label_str = '<b>' + unread + label_str + '</b>'
         return label_str
 
-    def get_tab_image(self, count_unread=True):
-        if self.resource:
-            jid = self.contact.get_full_jid()
-        else:
-            jid = self.contact.jid
-
-        if app.config.get('show_avatar_in_tabs'):
-            scale = self.parent_win.window.get_scale_factor()
-            surface = app.contacts.get_avatar(
-                self.account, jid, AvatarSize.TAB, scale)
-            if surface is not None:
-                return surface
-
-        if count_unread:
-            num_unread = len(app.events.get_events(
-                self.account,
-                jid,
-                ['printed_%s' % self._type, str(self._type)]))
-        else:
-            num_unread = 0
-
-        transport = None
-        if app.jid_is_transport(jid):
-            transport = app.get_transport_name_from_jid(jid)
-
-        if num_unread and app.config.get('show_unread_tab_icon'):
-            icon_name = get_icon_name('event', transport=transport)
-        else:
-            contact = app.contacts.get_contact_with_highest_priority(
-                self.account, self.contact.jid)
-            if not contact or self.resource:
-                # For transient contacts
-                contact = self.contact
-            icon_name = get_icon_name(contact.show, transport=transport)
-
-        return icon_name
+    def get_tab_image(self):
+        scale = self.parent_win.window.get_scale_factor()
+        return app.contacts.get_avatar(self.account,
+                                       self.contact.jid,
+                                       AvatarSize.ROSTER,
+                                       scale,
+                                       self.contact.show)
 
     def prepare_context_menu(self, hide_buttonbar_items=False):
         """
@@ -1284,7 +1258,7 @@ class ChatControl(ChatControlBase):
 
     def read_queue(self):
         """
-        Read queue and print messages containted in it
+        Read queue and print messages contained in it
         """
         jid = self.contact.jid
         jid_with_resource = jid

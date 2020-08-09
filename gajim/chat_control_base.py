@@ -42,6 +42,7 @@ from gajim.common import i18n
 from gajim.common.i18n import _
 from gajim.common.nec import EventHelper
 from gajim.common.helpers import AdditionalDataDict
+from gajim.common.helpers import event_filter
 from gajim.common.contacts import GC_Contact
 from gajim.common.const import Chatstate
 from gajim.common.structs import OutgoingMessage
@@ -60,6 +61,7 @@ from gajim.gtk.util import get_show_in_roster
 from gajim.gtk.util import get_show_in_systray
 from gajim.gtk.util import get_hardware_key_codes
 from gajim.gtk.util import get_builder
+from gajim.gtk.util import generate_account_badge
 from gajim.gtk.const import ControlType  # pylint: disable=unused-import
 from gajim.gtk.emoji_chooser import emoji_chooser
 
@@ -138,7 +140,18 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                 self.on_banner_label_populate_popup)
             self.handlers[id_] = self.xml.banner_label
 
-        # Init DND
+        self._accounts = app.get_enabled_accounts_with_labels()
+        if len(self._accounts) > 1:
+            account_badge = generate_account_badge(self.account)
+            account_badge.set_tooltip_text(
+                _('Account: %s') % app.get_account_label(self.account))
+            self.xml.account_badge.add(account_badge)
+            account_badge.show()
+
+        # Drag and drop
+        self.xml.overlay.add_overlay(self.xml.drop_area)
+        self.xml.drop_area.hide()
+
         self.TARGET_TYPE_URI_LIST = 80
         uri_entry = Gtk.TargetEntry.new(
             'text/uri-list',
@@ -146,39 +159,32 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             self.TARGET_TYPE_URI_LIST)
         dst_targets = Gtk.TargetList.new([uri_entry])
         dst_targets.add_text_targets(0)
-        self.dnd_list = [uri_entry,
-                         Gtk.TargetEntry.new(
-                             'MY_TREE_MODEL_ROW',
-                             Gtk.TargetFlags.SAME_APP,
-                             0)]
-        id_ = self.widget.connect('drag_data_received',
-                                  self._on_drag_data_received)
-        self.handlers[id_] = self.widget
-        self.widget.drag_dest_set(
+        self._dnd_list = [uri_entry,
+                          Gtk.TargetEntry.new(
+                              'MY_TREE_MODEL_ROW',
+                              Gtk.TargetFlags.SAME_APP,
+                              0)]
+
+        id_ = self.xml.overlay.connect('drag_data_received',
+                                       self._on_drag_data_received)
+
+        self.handlers[id_] = self.xml.overlay
+        id_ = self.xml.overlay.connect('drag_motion', self._on_drag_motion)
+        self.handlers[id_] = self.xml.overlay
+        id_ = self.xml.overlay.connect('drag_leave', self._on_drag_leave)
+        self.handlers[id_] = self.xml.overlay
+
+        self.xml.overlay.drag_dest_set(
             Gtk.DestDefaults.ALL,
-            self.dnd_list,
-            Gdk.DragAction.COPY)
-        self.widget.drag_dest_set_target_list(dst_targets)
+            self._dnd_list,
+            Gdk.DragAction.COPY | Gdk.DragAction.MOVE)
+        self.xml.overlay.drag_dest_set_target_list(dst_targets)
 
         # Create textviews and connect signals
         self.conv_textview = ConversationTextview(self.account)
+        self.conv_textview.tv.drag_dest_unset()
         id_ = self.conv_textview.connect('quote', self.on_quote)
         self.handlers[id_] = self.conv_textview.tv
-
-        # FIXME: DND on non editable TextView, find a better way
-        self.drag_entered = False
-        id_ = self.conv_textview.tv.connect('drag_data_received',
-                                            self._on_drag_data_received)
-        self.handlers[id_] = self.conv_textview.tv
-        id_ = self.conv_textview.tv.connect('drag_motion', self._on_drag_motion)
-        self.handlers[id_] = self.conv_textview.tv
-        id_ = self.conv_textview.tv.connect('drag_leave', self._on_drag_leave)
-        self.handlers[id_] = self.conv_textview.tv
-        self.conv_textview.tv.drag_dest_set(
-            Gtk.DestDefaults.ALL,
-            self.dnd_list,
-            Gdk.DragAction.COPY)
-        self.conv_textview.tv.drag_dest_set_target_list(dst_targets)
 
         id_ = self.conv_textview.tv.connect('grab-focus',
                                             self._on_html_textview_grab_focus)
@@ -393,9 +399,8 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         # Return a markup'd label and optional Gtk.Color in a tuple like:
         # return (label_str, None)
 
-    def get_tab_image(self, count_unread=True):
+    def get_tab_image(self):
         # Return a suitable tab image for display.
-        # None clears any current label.
         return None
 
     def prepare_context_menu(self, hide_buttonbar_items=False):
@@ -426,14 +431,12 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         self.session.control = None
         self.session = None
 
-    def _nec_our_status(self, obj):
-        if self.account != obj.conn.name:
+    @event_filter(['account'])
+    def _nec_our_status(self, event):
+        if event.show == 'connecting':
             return
 
-        if obj.show == 'connecting':
-            return
-
-        if obj.show == 'offline':
+        if event.show == 'offline':
             self.got_disconnected()
         else:
             self.got_connected()
@@ -613,9 +616,6 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             return
 
         gspell_lang = self.get_speller_language()
-        if gspell_lang is None:
-            return
-
         spell_checker = Gspell.Checker.new(gspell_lang)
         spell_buffer = Gspell.TextBuffer.get_from_gtk_text_buffer(
             self.msg_textview.get_buffer())
@@ -848,11 +848,11 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             position = message_buffer.get_insert()
             end = message_buffer.get_iter_at_mark(position)
             text = message_buffer.get_text(start, end, False)
-            splitted = text.split()
+            split = text.split()
             if (text.startswith(self.COMMAND_PREFIX) and
                     not text.startswith(self.COMMAND_PREFIX * 2) and
-                    len(splitted) == 1):
-                text = splitted[0]
+                    len(split) == 1):
+                text = split[0]
                 bare = text.lstrip(self.COMMAND_PREFIX)
                 if len(text) == 1:
                     self.command_hits = []
@@ -934,14 +934,12 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         """
 
     def _on_drag_leave(self, *args):
-        # FIXME: DND on non editable TextView, find a better way
-        self.drag_entered = False
-        self.conv_textview.tv.set_editable(False)
+        self.xml.drop_area.set_no_show_all(True)
+        self.xml.drop_area.hide()
 
     def _on_drag_motion(self, *args):
-        # FIXME: DND on non editable TextView, find a better way
-        if not self.drag_entered:
-            self.conv_textview.tv.set_editable(True)
+        self.xml.drop_area.set_no_show_all(False)
+        self.xml.drop_area.show_all()
 
     def drag_data_file_transfer(self, selection):
         # we may have more than one file dropped
@@ -1006,7 +1004,6 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                                    control=self,
                                    attention=attention,
                                    correct_id=correct_id,
-                                   automatic_message=False,
                                    xhtml=xhtml)
 
         con.send_message(message_)
@@ -1074,9 +1071,9 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         else:
             self.received_history_pos = pos
 
-    def add_info_message(self, text):
+    def add_info_message(self, text, message_id=None):
         self.conv_textview.print_conversation_line(
-            text, 'info', '', None, graphics=False)
+            text, 'info', '', None, message_id=message_id, graphics=False)
 
     def add_status_message(self, text):
         self.conv_textview.print_conversation_line(
@@ -1141,7 +1138,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
 
         if kind == 'incoming':
             if (not self._type.is_groupchat or
-                    app.config.notify_for_muc(jid) or
+                    self.contact.can_notify() or
                     'marked' in other_tags_for_text):
                 # it's a normal message, or a muc message with want to be
                 # notified about if quitting just after
@@ -1179,7 +1176,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                     event = 'message_received'
                 show_in_roster = get_show_in_roster(event, self.session)
                 show_in_systray = get_show_in_systray(
-                    event_type.type_, self.contact.jid)
+                    event_type.type_, self.account, self.contact.jid)
 
                 event = event_type(text,
                                    subject,
@@ -1419,7 +1416,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                         direction = Gdk.ScrollDirection.RIGHT
                 else:
                     app.log('autoscroll').warning(
-                        'Scroll directions cant be determined')
+                        'Scroll directions can’t be determined')
 
             if direction != Gdk.ScrollDirection.UP:
                 return

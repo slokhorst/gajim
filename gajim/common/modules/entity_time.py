@@ -17,6 +17,7 @@
 import time
 
 import nbxmpp
+from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import StanzaHandler
 from nbxmpp.modules.date_and_time import parse_datetime
 from nbxmpp.modules.date_and_time import create_tzinfo
@@ -34,7 +35,7 @@ class EntityTime(BaseModule):
             StanzaHandler(name='iq',
                           callback=self._answer_request,
                           typ='get',
-                          ns=nbxmpp.NS_TIME_REVISED),
+                          ns=Namespace.TIME_REVISED),
         ]
 
     def request_entity_time(self, jid, resource):
@@ -44,7 +45,7 @@ class EntityTime(BaseModule):
         if resource:
             jid += '/' + resource
         iq = nbxmpp.Iq(to=jid, typ='get')
-        iq.addChild('time', namespace=nbxmpp.NS_TIME_REVISED)
+        iq.addChild('time', namespace=Namespace.TIME_REVISED)
 
         self._log.info('Requested: %s', jid)
 
@@ -83,7 +84,7 @@ class EntityTime(BaseModule):
         utc_time = time_.getTag('utc').getData()
         date_time = parse_datetime(utc_time, check_utc=True)
         if date_time is None:
-            self._log.warning('Wrong timezone defintion: %s %s',
+            self._log.warning('Wrong timezone definition: %s %s',
                               utc_time, stanza.getFrom())
             return None
 
@@ -94,7 +95,7 @@ class EntityTime(BaseModule):
         self._log.info('%s asked for the time', stanza.getFrom())
         if app.config.get_per('accounts', self._account, 'send_time_info'):
             iq = stanza.buildReply('result')
-            time_ = iq.setTag('time', namespace=nbxmpp.NS_TIME_REVISED)
+            time_ = iq.setTag('time', namespace=Namespace.TIME_REVISED)
             formated_time = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
             time_.setTagData('utc', formated_time)
             isdst = time.localtime().tm_isdst

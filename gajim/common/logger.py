@@ -38,11 +38,10 @@ from collections import namedtuple
 
 from gi.repository import GLib
 
-from nbxmpp.protocol import Node
 from nbxmpp.protocol import Iq
+from nbxmpp.protocol import JID
 from nbxmpp.structs import DiscoInfo
 from nbxmpp.structs import CommonError
-from nbxmpp.modules.dataforms import extend_form
 from nbxmpp.modules.discovery import parse_disco_info
 
 from gajim.common import exceptions
@@ -53,8 +52,6 @@ from gajim.common.i18n import _
 from gajim.common.const import (
     JIDConstant, KindConstant, ShowConstant, TypeConstant,
     SubscriptionConstant)
-from gajim.common.structs import CapsData
-from gajim.common.structs import CapsIdentity
 
 
 LOGS_SQL_STATEMENT = '''
@@ -135,60 +132,17 @@ CACHE_SQL_STATEMENT = '''
             jid TEXT PRIMARY KEY UNIQUE,
             avatar_sha TEXT
     );
-    PRAGMA user_version=4;
+    PRAGMA user_version=5;
     '''
 
 log = logging.getLogger('gajim.c.logger')
 
 
-
-class CapsEncoder(json.JSONEncoder):
-    def encode(self, obj):
-        if isinstance(obj, DiscoInfo):
-            identities = []
-            for identity in obj.identities:
-                identities.append(
-                    {'category': identity.category,
-                     'type': identity.type,
-                     'name': identity.name,
-                     'lang': identity.lang})
-
-            dataforms = []
-            for dataform in obj.dataforms:
-                # Filter out invalid forms according to XEP-0115
-                form_type = dataform.vars.get('FORM_TYPE')
-                if form_type is None or form_type.type_ != 'hidden':
-                    continue
-                dataforms.append(str(dataform))
-
-            obj = {'identities': identities,
-                   'features': obj.features,
-                   'dataforms': dataforms}
-        return json.JSONEncoder.encode(self, obj)
-
-
-def caps_decoder(dict_):
-    if 'identities' not in dict_:
-        return dict_
-
-    identities = []
-    for identity in dict_['identities']:
-        identities.append(CapsIdentity(**identity))
-
-    features = dict_['features']
-
-    dataforms = []
-    for dataform in dict_['dataforms']:
-        dataforms.append(extend_form(node=Node(node=dataform)))
-    return CapsData(identities=identities,
-                    features=features,
-                    dataforms=dataforms)
-
 def timeit(func):
     def func_wrapper(self, *args, **kwargs):
-        start = time.time() / 1e9
+        start = time.time()
         result = func(self, *args, **kwargs)
-        exec_time = (time.time() / 1e9 - start)
+        exec_time = (time.time() - start) * 1e3
         level = 30 if exec_time > 50 else 10
         log.log(level, 'Execution time for %s: %s ms',
                 func.__name__, math.ceil(exec_time))
@@ -210,6 +164,16 @@ def _adapt_common_error(common_error):
 def _convert_marker(marker):
     return 'received' if marker == 0 else 'displayed'
 
+def _jid_adapter(jid):
+    return str(jid)
+
+def _jid_converter(jid):
+    return JID(jid.decode())
+
+
+sqlite.register_converter('jid', _jid_converter)
+sqlite.register_adapter(JID, _jid_adapter)
+
 sqlite.register_converter('disco_info', _convert_disco_info)
 sqlite.register_adapter(DiscoInfo, _adapt_disco_info)
 
@@ -228,6 +192,7 @@ class Logger:
         self._log_db_path = configpaths.get('LOG_DB')
         self._cache_db_path = configpaths.get('CACHE_DB')
 
+        self._entity_caps_cache = {}
         self._disco_info_cache = {}
         self._muc_avatar_sha_cache = {}
 
@@ -237,6 +202,8 @@ class Logger:
         self._get_jid_ids_from_db()
         self._fill_disco_info_cache()
         self._fill_muc_avatar_sha_cache()
+        self._clean_caps_table()
+        self._load_caps_data()
 
     def _create_databases(self):
         if os.path.isdir(self._log_db_path):
@@ -388,10 +355,17 @@ class Logger:
                 ]
             self._execute_multiple(con, statements)
 
+        if self._get_user_version(con) < 5:
+            statements = [
+                'DELETE FROM caps_cache',
+                'PRAGMA user_version=5'
+                ]
+            self._execute_multiple(con, statements)
+
     @staticmethod
     def _execute_multiple(con, statements):
         """
-        Execute mutliple statements with the option to fail on duplicates
+        Execute multiple statements with the option to fail on duplicates
         but still continue
         """
         for sql in statements:
@@ -517,7 +491,7 @@ class Logger:
         If jid is gajim@conf/nkour it's likely a pm one, how we know gajim@conf
         is not a normal guy and nkour is not his resource?  we ask if gajim@conf
         is already in jids (with type room jid) this fails if user disables
-        logging for room and only enables for pm (so higly unlikely) and if we
+        logging for room and only enables for pm (so highly unlikely) and if we
         fail we do not go chaos (user will see the first pm as if it was message
         in room's public chat) and after that all okay
         """
@@ -552,9 +526,9 @@ class Logger:
             return [user['jid'] for user in family]
         return [jid]
 
-    def get_account_id(self, account):
+    def get_account_id(self, account, type_=JIDConstant.NORMAL_TYPE):
         jid = app.get_jid_from_account(account)
-        return self.get_jid_id(jid, type_=JIDConstant.NORMAL_TYPE)
+        return self.get_jid_id(jid, type_=type_)
 
     @timeit
     def get_jid_id(self, jid, kind=None, type_=None):
@@ -781,13 +755,33 @@ class Logger:
             all_messages.append((result, shown))
         return all_messages
 
+    def load_groupchat_messages(self, account, jid):
+        account_id = self.get_account_id(account, type_=JIDConstant.ROOM_TYPE)
+
+        sql = '''
+            SELECT time, contact_name, message, additional_data, message_id
+            FROM logs NATURAL JOIN jids WHERE jid = ?
+            AND account_id = ? AND kind = ?
+            ORDER BY time DESC, log_line_id DESC LIMIT ?'''
+
+        try:
+            messages = self._con.execute(
+                sql, (jid, account_id, KindConstant.GC_MSG, 50)).fetchall()
+        except sqlite.DatabaseError:
+            self.dispatch('DB_ERROR',
+                          exceptions.DatabaseMalformed(self._log_db_path))
+            return []
+
+        messages.reverse()
+        return messages
+
     @timeit
     def get_last_conversation_lines(self, account, jid, pending):
         """
         Get recent messages
 
         Pending messages are already in queue to be printed when the
-        ChatControl is opened, so we dont want to request those messages.
+        ChatControl is opened, so we don’t want to request those messages.
         How many messages are requested depends on the 'restore_lines'
         config value. How far back in time messages are requested depends on
         _get_timeout().
@@ -796,7 +790,7 @@ class Logger:
 
         :param jid:     The jid from which we request the conversation lines
 
-        :param pending: How many messages are currently pending so we dont
+        :param pending: How many messages are currently pending so we don’t
                         request those messages
 
         returns a list of namedtuples
@@ -813,15 +807,18 @@ class Logger:
                           KindConstant.ERROR])
 
         jids = self._get_family_jids(account, jid)
+        account_id = self.get_account_id(account)
 
         sql = '''
             SELECT time, kind, message, error as "error [common_error]",
                    subject, additional_data, marker as "marker [marker]",
                    message_id
-            FROM logs NATURAL JOIN jids WHERE jid IN ({jids}) AND
-            kind IN ({kinds}) AND time > get_timeout()
+            FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
+            AND account_id = {account_id} AND kind IN ({kinds})
+            AND time > get_timeout()
             ORDER BY time DESC, log_line_id DESC LIMIT ? OFFSET ?
             '''.format(jids=', '.join('?' * len(jids)),
+                       account_id=account_id,
                        kinds=', '.join(kinds))
 
         try:
@@ -883,7 +880,7 @@ class Logger:
         Search the conversation log for messages containing the `query` string.
 
         The search can either span the complete log for the given
-        `account` and `jid` or be restriced to a single day by
+        `account` and `jid` or be restricted to a single day by
         specifying `date`.
 
         :param account: The account
@@ -913,7 +910,7 @@ class Logger:
                additional_data, log_line_id
         FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
         AND message LIKE like(?) {date_search}
-        ORDER BY time, log_line_id
+        ORDER BY time DESC, log_line_id
         '''.format(jids=', '.join('?' * len(jids)),
                    date_search=between if date else '')
 
@@ -1083,31 +1080,31 @@ class Logger:
         return answer
 
     @timeit
-    def load_caps_data(self):
+    def _load_caps_data(self):
         '''
         Load caps cache data
         '''
         rows = self._con.execute(
-            'SELECT hash_method, hash, data FROM caps_cache')
+            'SELECT hash_method, hash, data as "data [disco_info]" '
+            'FROM caps_cache')
 
-        cache = {}
         for row in rows:
-            try:
-                data = json.loads(row.data, object_hook=caps_decoder)
-            except Exception:
-                log.exception('')
-                continue
-            cache[(row.hash_method, row.hash)] = data
-        return cache
+            self._entity_caps_cache[(row.hash_method, row.hash)] = row.data
 
     @timeit
-    def add_caps_entry(self, hash_method, hash_, caps_data):
-        serialized = json.dumps(caps_data, cls=CapsEncoder)
+    def add_caps_entry(self, jid, hash_method, hash_, caps_data):
+        self._entity_caps_cache[(hash_method, hash_)] = caps_data
+
+        self._disco_info_cache[jid] = caps_data
+
         self._con.execute('''
                 INSERT INTO caps_cache (hash_method, hash, data, last_seen)
                 VALUES (?, ?, ?, ?)
-                ''', (hash_method, hash_, serialized, int(time.time())))
+                ''', (hash_method, hash_, caps_data, int(time.time())))
         self._timeout_commit()
+
+    def get_caps_entry(self, hash_method, hash_):
+        return self._entity_caps_cache.get((hash_method, hash_))
 
     @timeit
     def update_caps_time(self, method, hash_):
@@ -1117,7 +1114,7 @@ class Logger:
         self._timeout_commit()
 
     @timeit
-    def clean_caps_table(self):
+    def _clean_caps_table(self):
         """
         Remove caps which was not seen for 3 months
         """
@@ -1136,7 +1133,7 @@ class Logger:
         roster is the new version.
         """
         # First we must reset roster_version value to ensure that the server
-        # sends back all the roster at the next connexion if the replacement
+        # sends back all the roster at the next connection if the replacement
         # didn't work properly.
         app.config.set_per('accounts', account_name, 'roster_version', '')
 
@@ -1226,7 +1223,7 @@ class Logger:
         data = {}
         account_jid_id = self.get_jid_id(account_jid, type_=JIDConstant.NORMAL_TYPE)
 
-        # First we fill data with roster_entry informations
+        # First we fill data with roster_entry information
         rows = self._con.execute('''
                 SELECT j.jid, re.jid_id, re.name, re.subscription, re.ask, re.avatar_sha
                 FROM roster_entry re, jids j
@@ -1527,7 +1524,7 @@ class Logger:
         rows = self._con.execute(sql).fetchall()
         for row in rows:
             self._muc_avatar_sha_cache[row.jid] = row.avatar_sha
-        log.info('%s Avatar SHA entrys loaded', len(rows))
+        log.info('%d Avatar SHA entries loaded', len(rows))
 
     @timeit
     def set_avatar_sha(self, account_jid, jid, sha=None):
@@ -1669,7 +1666,7 @@ class Logger:
         for row in rows:
             disco_info = row.disco_info._replace(timestamp=row.last_seen)
             self._disco_info_cache[row.jid] = disco_info
-        log.info('%s DiscoInfo entrys loaded', len(rows))
+        log.info('%d DiscoInfo entries loaded', len(rows))
 
     def get_last_disco_info(self, jid, max_age=0):
         """
@@ -1689,7 +1686,7 @@ class Logger:
         return disco_info
 
     @timeit
-    def set_last_disco_info(self, jid, disco_info):
+    def set_last_disco_info(self, jid, disco_info, cache_only=False):
         """
         Get last disco info from jid
 
@@ -1700,6 +1697,10 @@ class Logger:
         """
 
         log.info('Save disco info from %s', jid)
+
+        if cache_only:
+            self._disco_info_cache[jid] = disco_info
+            return
 
         disco_exists = self.get_last_disco_info(jid) is not None
         if disco_exists:

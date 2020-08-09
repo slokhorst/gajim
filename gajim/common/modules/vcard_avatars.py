@@ -16,7 +16,7 @@
 
 from pathlib import Path
 
-import nbxmpp
+from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import StanzaHandler
 from nbxmpp.const import AvatarState
 
@@ -34,7 +34,7 @@ class VCardAvatars(BaseModule):
         self.handlers = [
             StanzaHandler(name='presence',
                           callback=self._presence_received,
-                          ns=nbxmpp.NS_VCARD_UPDATE,
+                          ns=Namespace.VCARD_UPDATE,
                           priority=51),
         ]
 
@@ -63,7 +63,7 @@ class VCardAvatars(BaseModule):
                 # Initial presence reflection
                 if self._con.avatar_conversion:
                     # XEP-0398: Tells us the current avatar sha on the
-                    # inital presence reflection
+                    # initial presence reflection
                     self._self_update_received(properties)
             else:
                 # Presence from another resource of ours
@@ -110,17 +110,17 @@ class VCardAvatars(BaseModule):
                            jid, properties.avatar_sha)
 
     def muc_disco_info_update(self, disco_info):
-        if not disco_info.supports(nbxmpp.NS_VCARD):
+        if not disco_info.supports(Namespace.VCARD):
             return
 
         field_var = '{http://modules.prosody.im/mod_vcard_muc}avatar#sha1'
-        if not disco_info.has_field(nbxmpp.NS_MUC_INFO, field_var):
-            # Workaround so we dont delete the avatar for servers that dont
+        if not disco_info.has_field(Namespace.MUC_INFO, field_var):
+            # Workaround so we don’t delete the avatar for servers that don’t
             # support sha in disco info. Once there is a accepted XEP this
             # can be removed
             return
 
-        avatar_sha = disco_info.get_field_value(nbxmpp.NS_MUC_INFO, field_var)
+        avatar_sha = disco_info.get_field_value(Namespace.MUC_INFO, field_var)
         state = AvatarState.EMPTY if not avatar_sha else AvatarState.ADVERTISED
         self._process_update(str(disco_info.jid), state, avatar_sha, True)
 
@@ -220,15 +220,11 @@ class VCardAvatars(BaseModule):
                 self._log.debug('Avatar already advertised')
                 return
 
-        self._con.get_module('Presence').send_presence(
-            priority=self._con.priority,
-            show=self._con.status,
-            status=self._con.status_message)
-
+        self._con.update_presence()
         self.avatar_advertised = True
 
     def add_update_node(self, node):
-        update = node.setTag('x', namespace=nbxmpp.NS_VCARD_UPDATE)
+        update = node.setTag('x', namespace=Namespace.VCARD_UPDATE)
         if self._con.get_module('VCardTemp').own_vcard_received:
             sha = app.config.get_per('accounts', self._account, 'avatar_sha')
             own_jid = self._con.get_own_jid()

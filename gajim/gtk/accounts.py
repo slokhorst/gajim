@@ -61,7 +61,10 @@ class AccountsWindow(Gtk.ApplicationWindow):
         self.add(box)
 
         for account in app.get_accounts_sorted():
-            self.add_account(account, inital=True)
+            if account == 'Local':
+                # Disable zeroconf support until its working again
+                continue
+            self.add_account(account, initial=True)
 
         self._menu.connect('menu-activated', self._on_menu_activated)
         self.connect('destroy', self._on_destroy)
@@ -156,10 +159,10 @@ class AccountsWindow(Gtk.ApplicationWindow):
         del self._need_relogin[account]
         self._accounts[account].remove()
 
-    def add_account(self, account, inital=False):
+    def add_account(self, account, initial=False):
         self._need_relogin[account] = self._get_relogin_settings(account)
         self._accounts[account] = Account(account, self._menu, self._settings)
-        if not inital:
+        if not initial:
             self._accounts[account].show()
 
     def select_account(self, account):
@@ -604,6 +607,10 @@ class GeneralPage(GenericSettingPage):
                     SettingType.ACCOUNT_CONFIG, 'account_label',
                     callback=self._on_account_name_change),
 
+            Setting(SettingKind.COLOR, _('Color'),
+                    SettingType.ACCOUNT_CONFIG, 'account_color',
+                    desc=_('Recognize your account by color')),
+
             Setting(SettingKind.LOGIN, _('Login'), SettingType.DIALOG,
                     props={'dialog': LoginDialog}),
 
@@ -611,8 +618,10 @@ class GeneralPage(GenericSettingPage):
                     SettingType.ACTION, '-import-contacts',
                     props={'account': account}),
 
-            Setting(SettingKind.DIALOG, _('Client Certificate'),
-                    SettingType.DIALOG, props={'dialog': CertificateDialog}),
+            # Currently not supported by nbxmpp
+            #
+            # Setting(SettingKind.DIALOG, _('Client Certificate'),
+            #         SettingType.DIALOG, props={'dialog': CertificateDialog}),
 
             Setting(SettingKind.SWITCH, _('Connect on startup'),
                     SettingType.ACCOUNT_CONFIG, 'autoconnect'),
@@ -653,7 +662,7 @@ class PrivacyPage(GenericSettingPage):
 
             Setting(SettingKind.SWITCH, _('Client / Operating System'),
                     SettingType.ACCOUNT_CONFIG, 'send_os_info',
-                    desc=_('Disclose informations about the client '
+                    desc=_('Disclose information about the client '
                            'and operating system you currently use')),
 
             Setting(SettingKind.SWITCH, _('Ignore Unknown Contacts'),

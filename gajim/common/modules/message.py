@@ -17,12 +17,14 @@
 import time
 
 import nbxmpp
+from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import StanzaHandler
 from nbxmpp.util import generate_id
 
 from gajim.common import app
 from gajim.common.nec import NetworkEvent
 from gajim.common.helpers import AdditionalDataDict
+from gajim.common.helpers import should_log
 from gajim.common.const import KindConstant
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import get_eme_message
@@ -50,8 +52,8 @@ class Message(BaseModule):
         ]
 
         # XEPs for which this message module should not be executed
-        self._message_namespaces = set([nbxmpp.NS_ROSTERX,
-                                        nbxmpp.NS_IBB])
+        self._message_namespaces = set([Namespace.ROSTERX,
+                                        Namespace.IBB])
 
     def _check_if_unknown_contact(self, _con, stanza, properties):
         if (properties.type.is_groupchat or
@@ -111,7 +113,8 @@ class Message(BaseModule):
 
         if properties.type.is_groupchat and properties.has_server_delay:
             # Only for XEP-0045 MUC History
-            # Dont check for message text because the message could be encrypted
+            # Don’t check for message text because the message could be
+            # encrypted.
             if app.logger.deduplicate_muc_message(self._account,
                                                   properties.jid.getBare(),
                                                   properties.jid.getResource(),
@@ -234,7 +237,7 @@ class Message(BaseModule):
     def _log_muc_message(self, event):
         self._check_for_mam_compliance(event.room_jid, event.stanza_id)
 
-        if (app.config.should_log(self._account, event.jid) and
+        if (should_log(self._account, event.jid) and
                 event.msgtxt and event.properties.muc_nickname):
             # if not event.nick, it means message comes from room itself
             # usually it hold description and can be send at each connection
@@ -252,7 +255,7 @@ class Message(BaseModule):
 
     def _check_for_mam_compliance(self, room_jid, stanza_id):
         disco_info = app.logger.get_last_disco_info(room_jid)
-        if stanza_id is None and disco_info.mam_namespace == nbxmpp.NS_MAM_2:
+        if stanza_id is None and disco_info.mam_namespace == Namespace.MAM_2:
             self._log.warning('%s announces mam:2 without stanza-id', room_jid)
 
     def _get_unique_id(self, properties):
@@ -267,7 +270,7 @@ class Message(BaseModule):
             disco_info = app.logger.get_last_disco_info(
                 properties.jid.getBare())
 
-            if disco_info.mam_namespace != nbxmpp.NS_MAM_2:
+            if disco_info.mam_namespace != Namespace.MAM_2:
                 return None, None
 
             archive = properties.jid
@@ -293,7 +296,7 @@ class Message(BaseModule):
 
         if message.correct_id:
             stanza.setTag('replace', attrs={'id': message.correct_id},
-                          namespace=nbxmpp.NS_CORRECT)
+                          namespace=Namespace.CORRECT)
 
         # XEP-0359
         message.message_id = generate_id()
@@ -305,7 +308,7 @@ class Message(BaseModule):
 
         # XEP-0172: user_nickname
         if message.user_nick:
-            stanza.setTag('nick', namespace=nbxmpp.NS_NICK).setData(
+            stanza.setTag('nick', namespace=Namespace.NICK).setData(
                 message.user_nick)
 
         # XEP-0203
@@ -314,16 +317,16 @@ class Message(BaseModule):
             timestamp = time.strftime('%Y-%m-%dT%H:%M:%SZ',
                                       time.gmtime(message.delayed))
             stanza.addChild('delay',
-                            namespace=nbxmpp.NS_DELAY2,
+                            namespace=Namespace.DELAY2,
                             attrs={'from': str(own_jid), 'stamp': timestamp})
 
         # XEP-0224
         if message.attention:
-            stanza.setTag('attention', namespace=nbxmpp.NS_ATTENTION)
+            stanza.setTag('attention', namespace=Namespace.ATTENTION)
 
         # XEP-0066
         if message.oob_url is not None:
-            oob = stanza.addChild('x', namespace=nbxmpp.NS_X_OOB)
+            oob = stanza.addChild('x', namespace=Namespace.X_OOB)
             oob.addChild('url').setData(message.oob_url)
 
         # XEP-0184
@@ -333,14 +336,19 @@ class Message(BaseModule):
 
         # Mark Message as MUC PM
         if message.contact.is_pm_contact:
-            stanza.setTag('x', namespace=nbxmpp.NS_MUC_USER)
+            stanza.setTag('x', namespace=Namespace.MUC_USER)
 
         # XEP-0085
         if message.chatstate is not None:
-            stanza.setTag(message.chatstate, namespace=nbxmpp.NS_CHATSTATES)
+            stanza.setTag(message.chatstate, namespace=Namespace.CHATSTATES)
             if not message.message:
                 stanza.setTag('no-store',
-                              namespace=nbxmpp.NS_MSG_HINTS)
+                              namespace=Namespace.MSG_HINTS)
+
+        # Add other nodes
+        if message.nodes is not None:
+            for node in message.nodes:
+                stanza.addChild(node=node)
 
         return stanza
 
@@ -348,7 +356,7 @@ class Message(BaseModule):
         if not message.is_loggable:
             return
 
-        if not app.config.should_log(self._account, message.jid):
+        if not should_log(self._account, message.jid):
             return
 
         if message.message is None:

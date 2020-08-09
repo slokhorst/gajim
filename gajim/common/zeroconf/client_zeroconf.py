@@ -26,6 +26,7 @@ from unittest.mock import Mock
 import nbxmpp
 from nbxmpp import old_dispatcher as dispatcher
 from nbxmpp import simplexml
+from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import StanzaHandler
 from nbxmpp.plugin import PlugIn
 from nbxmpp.idlequeue import IdleObject
@@ -50,7 +51,7 @@ ACTIVITY_TIMEOUT_SECONDS = 30
 class ZeroconfListener(IdleObject):
     def __init__(self, port, conn_holder):
         """
-        Handle all incomming connections on ('0.0.0.0', port)
+        Handle all incoming connections on ('0.0.0.0', port)
         """
         self.port = port
         self.queue_idx = -1
@@ -96,7 +97,7 @@ class ZeroconfListener(IdleObject):
 
     def pollin(self):
         """
-        Accept a new incomming connection and notify queue
+        Accept a new incoming connection and notify queue
         """
         sock = self.accept_conn()
         # loop through roster to find who has connected to us
@@ -161,7 +162,7 @@ class P2PClient(IdleObject):
             self.on_connect, self)
         self.Server = conn.host  # set Server to the last host name / address tried
         if not self.conn_holder:
-            # An error occured, disconnect() has been called
+            # An error occurred, disconnect() has been called
             if on_not_ok:
                 on_not_ok('Connection to host could not be established.')
             return
@@ -246,7 +247,7 @@ class P2PClient(IdleObject):
         self.Dispatcher._metastream = nbxmpp.Node('stream:stream')
         self.Dispatcher._metastream.setNamespace(self.Namespace)
         self.Dispatcher._metastream.setAttr('version', '1.0')
-        self.Dispatcher._metastream.setAttr('xmlns:stream', nbxmpp.NS_STREAMS)
+        self.Dispatcher._metastream.setAttr('xmlns:stream', Namespace.STREAMS)
         self.Dispatcher._metastream.setAttr('from',
             self.conn_holder.zeroconf.name)
         if self.to:
@@ -255,7 +256,7 @@ class P2PClient(IdleObject):
                 self.Dispatcher._metastream)[:-2])
 
     def _check_stream_start(self, ns, tag, attrs):
-        if ns != nbxmpp.NS_STREAMS or tag != 'stream':
+        if ns != Namespace.STREAMS or tag != 'stream':
             log.error('Incorrect stream start: (%s,%s).Terminating!',
                       tag, ns)
             self.Connection.disconnect()
@@ -425,7 +426,7 @@ class P2PConnection(IdleObject, PlugIn):
                 self.on_receive = None
             return
         _tmp = self.on_receive
-        # make sure this cb is not overriden by recursive calls
+        # make sure this cb is not overridden by recursive calls
         if not recv_handler(None) and _tmp == self.on_receive:
             self.on_receive = recv_handler
 
@@ -517,7 +518,7 @@ class P2PConnection(IdleObject, PlugIn):
             pass
         elif errnum in [errno.ECONNRESET, errno.ENOTCONN, errno.ESHUTDOWN]:
             self.pollend()
-            # don't proccess result, cas it will raise error
+            # don’t process result, in case it will raise an error
             return
         elif not received:
             if errnum != ssl.SSL_ERROR_EOF:

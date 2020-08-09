@@ -17,14 +17,17 @@
 from typing import Any
 from typing import Tuple
 
-import nbxmpp
+from nbxmpp.namespaces import Namespace
 
 from gajim.common import app
+from gajim.common import ged
 from gajim.common.nec import NetworkEvent
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import event_node
 from gajim.common.modules.util import store_publish
 from gajim.common.const import PEPEventType
+from gajim.common.dbus.music_track import MusicTrackListener
+from gajim.common.helpers import event_filter
 
 
 class UserTune(BaseModule):
@@ -37,8 +40,14 @@ class UserTune(BaseModule):
     def __init__(self, con):
         BaseModule.__init__(self, con)
         self._register_pubsub_handler(self._tune_received)
+        self._tune_data = None
 
-    @event_node(nbxmpp.NS_TUNE)
+        self.register_events([
+            ('music-track-changed', ged.CORE, self._on_music_track_changed),
+            ('signed-in', ged.CORE, self._on_signed_in),
+        ])
+
+    @event_node(Namespace.TUNE)
     def _tune_received(self, _con, _stanza, properties):
         if properties.pubsub_event.retracted:
             return
@@ -66,8 +75,43 @@ class UserTune(BaseModule):
 
     @store_publish
     def set_tune(self, tune):
+        if not self._con.get_module('PEP').supported:
+            return
+
+        if not app.config.get_per('accounts',
+                                  self._account,
+                                  'publish_tune'):
+            return
         self._log.info('Send %s', tune)
         self._nbxmpp('Tune').set_tune(tune)
+
+    def set_enabled(self, enable):
+        if enable:
+            app.config.set_per('accounts',
+                               self._account,
+                               'publish_tune',
+                               True)
+            self._publish_current_tune()
+
+        else:
+            self.set_tune(None)
+            app.config.set_per('accounts',
+                               self._account,
+                               'publish_tune',
+                               False)
+
+    def _publish_current_tune(self):
+        self.set_tune(MusicTrackListener.get().current_tune)
+
+    @event_filter(['account'])
+    def _on_signed_in(self, _event):
+        self._publish_current_tune()
+
+    def _on_music_track_changed(self, event):
+        if self._tune_data == event.info:
+            return
+        self._tune_data = event.info
+        self.set_tune(event.info)
 
 
 def get_instance(*args: Any, **kwargs: Any) -> Tuple[UserTune, str]:

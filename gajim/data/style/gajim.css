@@ -24,6 +24,8 @@
 
 #MessageWindow, #RosterWindow paned { background-color:  @theme_base_color; }
 
+#DropArea {background-color: @theme_base_color;}
+
 .chatcontrol-separator-top {margin-top: 5px;}
 
 .chatcontrol-separator {margin-bottom: 5px;}
@@ -99,6 +101,24 @@ list.settings > row:not(:last-child) {
 list.settings row { min-height: 52px; }
 list.settings > row > box {
     margin: 6px 18px;
+}
+
+/* InfoBar */
+infobar.info > revealer > box {
+    color: #3A87AD;
+    background-color: #D9EDF7;
+}
+infobar.question > revealer > box {
+    color: #295A72;
+    background-color: #AFDAF0;
+}
+infobar.warning > revealer > box {
+    color: #D06821;
+    background-color: #FFEBC0;
+}
+infobar.error > revealer > box {
+    color: #B94A48;
+    background-color: #F2DEDE;
 }
 
 /*SendFileDialog*/
@@ -217,14 +237,12 @@ list.settings > row > box {
 .bold16 { font-size: 16px; font-weight: bold; }
 .bold24 { font-size: 24px; font-weight: bold; }
 .large-header { font-size: 20px; font-weight: bold; }
-.status-away { color: #ff8533;}
-.status-dnd { color: #e62e00;}
-.status-online { color: #66bf10;}
 .insensitive-fg-color {color: @insensitive_fg_color;}
 
 /* Padding/Margins */
 .margin-top6 { margin-top: 6px; }
 .margin-top12 { margin-top: 12px; }
+.margin-3 { margin: 3px; }
 .margin-12 { margin: 12px; }
 .margin-18 { margin: 18px; }
 .padding-18 { margin: 18px; }
@@ -263,6 +281,18 @@ button.flat.link { padding: 0; border: 0; }
 /*Image Preview*/
 .preview-image { box-shadow: 0px 0px 3px 0px alpha(@theme_text_color, 0.2); }
 
+/* Badge */
+.badge {
+    color: rgb(242, 242, 242);
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    border-radius: 4px;
+    font-size: 80%;
+    font-weight: bold;
+}
+
 /* Treeview */
 .adhoc-treeview { padding: 5px; }
 .adhoc-scrolled { border: 1px solid; border-color:@unfocused_borders; }
@@ -280,3 +310,23 @@ button.flat.link { padding: 0; border: 0; }
 
 .assistant-grid { padding: 18px; margin: 6px;}
 .assistant-grid > box stack  { padding: 18px; }
+
+/* Windows notification */
+#NotificationPopup {
+    background-color: #333333;
+    padding: 4px;
+}
+#NotificationPopup label {
+    color: #FFF;
+}
+#NotificationPopup button {
+    border-width: 0;
+    background-image: none;
+    background-color: inherit;
+    box-shadow: none;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+}
+#NotificationPopupTitle {
+    font-weight: bold;
+}
