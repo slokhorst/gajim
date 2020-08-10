@@ -11,7 +11,10 @@ jobs:
     - uses: actions/checkout@v2
     - name: Install dependencies
       run: |
-        brew install pyinstaller
+        brew install gettext git gtk+3 libsoup librsvg pygobject3 adwaita-icon-theme python pyinstaller	        brew install pyinstaller
+        brew link --force gettext
+        brew update
+        brew upgrade
         pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
         pip3 install git+https://dev.gajim.org/gajim/python-nbxmpp.git
         pip3 install .
