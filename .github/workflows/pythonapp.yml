@@ -15,7 +15,8 @@ jobs:
         brew link --force gettext
         brew update
         brew upgrade
-        pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser pyinstaller
+        pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
+        pip3 install git+https://github.com/pyinstaller/pyinstaller.git
         pip3 install git+https://dev.gajim.org/gajim/python-nbxmpp.git
         pip3 install .
     - name: Build Mac app
