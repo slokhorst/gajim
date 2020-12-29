@@ -24,7 +24,9 @@ print(sys.path)
 import site
 print("sitepackages:")
 print(site.getsitepackages())
-typelib_path = os.path.join(site.getsitepackages()[0], 'gnome', 'lib', 'girepository-1.0')
+sitepackages=site.getsitepackages()[0]
+sitepackages='/usr/local/lib/python3.9/site-packages'
+typelib_path = os.path.join(sitepackages, 'gnome', 'lib', 'girepository-1.0')
 binaries = [(os.path.join(typelib_path, tl), 'gi_typelibs') for tl in os.listdir(typelib_path)]
 
 a = Analysis(['launch.py'],
