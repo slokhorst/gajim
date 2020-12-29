@@ -13,6 +13,7 @@ info_plist = {
 hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit']
 
 import sys
+print("sys.path:")
 print(sys.path)
 #sys.path.insert(0, os.path.join(cwd))
 #from gajim.common.modules import MODULES
@@ -21,7 +22,9 @@ print(sys.path)
 
 # https://github.com/pyinstaller/pyinstaller/issues/1966
 import site
-typelib_path = os.path.join(site.getsitepackages()[1], 'gnome', 'lib', 'girepository-1.0')
+print("sitepackages:")
+print(site.getsitepackages())
+typelib_path = os.path.join(site.getsitepackages()[0], 'gnome', 'lib', 'girepository-1.0')
 binaries = [(os.path.join(typelib_path, tl), 'gi_typelibs') for tl in os.listdir(typelib_path)]
 
 a = Analysis(['launch.py'],
