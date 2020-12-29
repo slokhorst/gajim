@@ -10,7 +10,7 @@ info_plist = {
     "NSHighResolutionCapable": True,
 }
 
-hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit']
+hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit', 'soup']
 
 # https://github.com/pyinstaller/pyinstaller/issues/4569
 #import subprocess
