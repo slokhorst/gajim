@@ -21,12 +21,7 @@ print(sys.path)
 #sys.path.pop(0)
 
 # https://github.com/pyinstaller/pyinstaller/issues/1966
-import site
-print("sitepackages:")
-print(site.getsitepackages())
-sitepackages=site.getsitepackages()[0]
-sitepackages='/usr/local/lib/python3.9/site-packages'
-typelib_path = os.path.join(sitepackages, 'gnome', 'lib', 'girepository-1.0')
+typelib_path = '/usr/local/lib/girepository-1.0'
 binaries = [(os.path.join(typelib_path, tl), 'gi_typelibs') for tl in os.listdir(typelib_path)]
 
 a = Analysis(['launch.py'],
