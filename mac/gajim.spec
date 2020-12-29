@@ -19,13 +19,14 @@ print(sys.path)
 #hiddenimports += ['gajim.common.modules.' + m for m in MODULES]
 #sys.path.pop(0)
 
-# import site
-# typelib_path = os.path.join(site.getsitepackages()[1], 'gnome', 'lib', 'girepository-1.0')
-# binaries = [(os.path.join(typelib_path, tl), 'gi_typelibs') for tl in os.listdir(typelib_path)]
+# https://github.com/pyinstaller/pyinstaller/issues/1966
+import site
+typelib_path = os.path.join(site.getsitepackages()[1], 'gnome', 'lib', 'girepository-1.0')
+binaries = [(os.path.join(typelib_path, tl), 'gi_typelibs') for tl in os.listdir(typelib_path)]
 
 a = Analysis(['launch.py'],
              pathex=[cwd],
-             binaries=[],
+             binaries=binaries,
              datas=[('gajim', 'gajim')],
              hiddenimports=hiddenimports,
              hookspath=[],
