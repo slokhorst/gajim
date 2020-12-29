@@ -23,11 +23,14 @@ print(sys.path)
 # https://github.com/pyinstaller/pyinstaller/issues/1966
 typelib_path = '/usr/local/lib/girepository-1.0'
 typelibs = [(os.path.join(typelib_path, tl), 'gi_typelibs') for tl in os.listdir(typelib_path)]
+datas = [('gajim', 'gajim')] + typelibs
+print("datas:")
+print(datas)
 
 a = Analysis(['launch.py'],
              pathex=[cwd],
              binaries=[],
-             datas=[('gajim', 'gajim')] + typelibs,
+             datas=datas,
              hiddenimports=hiddenimports,
              hookspath=[],
              runtime_hooks=[],
