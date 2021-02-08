@@ -12,26 +12,25 @@ info_plist = {
 
 hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit']
 
-# https://github.com/pyinstaller/pyinstaller/issues/4569
-#import subprocess
-#subprocess.check_output("sed -i sed 's/metadata.entry_points()\[\'keyring.backends\'\]/(metadata.EntryPoint(name=\'macOS\',value=\'keyring.backends.OS_X\',group=\'keyring.backends\'),)/g' /usr/local/lib/python3.7/site-packages/keyring/backend.py", shell=True)
-
-
 import sys
+print("sys.path:")
 print(sys.path)
 #sys.path.insert(0, os.path.join(cwd))
 #from gajim.common.modules import MODULES
 #hiddenimports += ['gajim.common.modules.' + m for m in MODULES]
 #sys.path.pop(0)
 
-# import site
-# typelib_path = os.path.join(site.getsitepackages()[1], 'gnome', 'lib', 'girepository-1.0')
-# binaries = [(os.path.join(typelib_path, tl), 'gi_typelibs') for tl in os.listdir(typelib_path)]
+# https://github.com/pyinstaller/pyinstaller/issues/1966
+typelib_path = '/usr/local/lib/girepository-1.0'
+typelibs = [(os.path.join(typelib_path, tl), 'gi_typelibs') for tl in os.listdir(typelib_path)]
+datas = [('gajim', 'gajim')] + typelibs
+print("datas:")
+print(datas)
 
 a = Analysis(['launch.py'],
              pathex=[cwd],
              binaries=[],
-             datas=[('gajim', 'gajim')],
+             datas=datas,
              hiddenimports=hiddenimports,
              hookspath=[],
              runtime_hooks=[],
