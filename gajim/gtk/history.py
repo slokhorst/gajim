@@ -40,16 +40,16 @@ from gajim.common.const import StyleAttr
 
 from gajim import conversation_textview
 
-from gajim.gtk.util import python_month
-from gajim.gtk.util import gtk_month
-from gajim.gtk.util import resize_window
-from gajim.gtk.util import move_window
-from gajim.gtk.util import get_icon_name
-from gajim.gtk.util import get_completion_liststore
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import scroll_to_end
+from .util import python_month
+from .util import gtk_month
+from .util import resize_window
+from .util import move_window
+from .util import get_icon_name
+from .util import get_completion_liststore
+from .util import get_builder
+from .util import scroll_to_end
 
-from gajim.gtk.dialogs import ErrorDialog
+from .dialogs import ErrorDialog
 
 @unique
 class InfoColumn(IntEnum):
@@ -137,11 +137,11 @@ class HistoryWindow(Gtk.ApplicationWindow):
             self._load_history(None)
 
         resize_window(self,
-                      app.config.get('history_window_width'),
-                      app.config.get('history_window_height'))
+                      app.settings.get('history_window_width'),
+                      app.settings.get('history_window_height'))
         move_window(self,
-                    app.config.get('history_window_x-position'),
-                    app.config.get('history_window_y-position'))
+                    app.settings.get('history_window_x-position'),
+                    app.settings.get('history_window_y-position'))
 
         self._ui.connect_signals(self)
         self.connect('delete-event', self._on_delete)
@@ -174,7 +174,7 @@ class HistoryWindow(Gtk.ApplicationWindow):
         self._ui.query_entry.set_model(liststore)
 
         # Add all jids in logs.db:
-        db_jids = app.logger.get_jids_in_db()
+        db_jids = app.storage.archive.get_jids_in_db()
         completion_dict = dict.fromkeys(db_jids)
 
         self.accounts_seen_online = list(app.contacts.get_accounts())
@@ -216,10 +216,10 @@ class HistoryWindow(Gtk.ApplicationWindow):
 
             info_acc = self._get_account_for_jid(info_jid)
 
-            if (app.logger.jid_is_room_jid(completed) or
-                    app.logger.jid_is_from_pm(completed)):
+            if (app.storage.archive.jid_is_room_jid(completed) or
+                    app.storage.archive.jid_is_from_pm(completed)):
                 icon = muc_active_icon
-                if app.logger.jid_is_from_pm(completed):
+                if app.storage.archive.jid_is_from_pm(completed):
                     # It's PM. Make it easier to find
                     room, nick = app.get_room_and_nick_from_fjid(completed)
                     info_completion = '%s from %s' % (nick, room)
@@ -320,15 +320,15 @@ class HistoryWindow(Gtk.ApplicationWindow):
                 self._ui.log_history_checkbutton.set_sensitive(False)
             else:
                 # Are log disabled for account ?
-                if self.account in app.config.get_per(
-                        'accounts', self.account, 'no_log_for').split(' '):
+                if self.account in app.settings.get_account_setting(
+                        self.account, 'no_log_for').split(' '):
                     self._ui.log_history_checkbutton.set_active(False)
                     self._ui.log_history_checkbutton.set_sensitive(False)
                 else:
                     # Are log disabled for jid ?
                     log = True
-                    if self.jid in app.config.get_per(
-                            'accounts', self.account, 'no_log_for').split(' '):
+                    if self.jid in app.settings.get_account_setting(
+                            self.account, 'no_log_for').split(' '):
                         log = False
                     self._ui.log_history_checkbutton.set_active(log)
                     self._ui.log_history_checkbutton.set_sensitive(True)
@@ -336,10 +336,10 @@ class HistoryWindow(Gtk.ApplicationWindow):
             self.jids_to_search = [info_jid]
 
             # Get first/last date we have logs with contact
-            self.first_log = app.logger.get_first_date_that_has_logs(
+            self.first_log = app.storage.archive.get_first_date_that_has_logs(
                 self.account, self.jid)
             self.first_day = self._get_date_from_timestamp(self.first_log)
-            self.last_log = app.logger.get_last_date_that_has_logs(
+            self.last_log = app.storage.archive.get_last_date_that_has_logs(
                 self.account, self.jid)
             self.last_day = self._get_date_from_timestamp(self.last_log)
 
@@ -405,7 +405,7 @@ class HistoryWindow(Gtk.ApplicationWindow):
         month = python_month(month)
 
         try:
-            log_days = app.logger.get_days_with_logs(
+            log_days = app.storage.archive.get_days_with_logs(
                 self.account, self.jid, year, month)
         except exceptions.PysqliteOperationalError as error:
             ErrorDialog(_('Disk Error'), str(error))
@@ -459,7 +459,7 @@ class HistoryWindow(Gtk.ApplicationWindow):
             if _date == end_date:
                 break
             try:
-                logs = app.logger.get_date_has_logs(
+                logs = app.storage.archive.get_date_has_logs(
                     self.account, self.jid, _date)
             except exceptions.PysqliteOperationalError as e:
                 ErrorDialog(_('Disk Error'), str(e))
@@ -497,7 +497,7 @@ class HistoryWindow(Gtk.ApplicationWindow):
 
         date = datetime.datetime(year, month, day)
 
-        conversation = app.logger.get_conversation_for_date(
+        conversation = app.storage.archive.get_conversation_for_date(
             self.account, self.jid, date)
 
         for message in conversation:
@@ -526,13 +526,13 @@ class HistoryWindow(Gtk.ApplicationWindow):
         # Make the beginning of every message searchable by its log_line_id
         buf.create_mark(str(log_line_id), end_iter, left_gravity=True)
 
-        if app.config.get('print_time') == 'always':
-            timestamp_str = app.config.get('time_stamp')
+        if app.settings.get('print_time') == 'always':
+            timestamp_str = app.settings.get('time_stamp')
             timestamp_str = helpers.from_one_line(timestamp_str)
             tim = time.strftime(timestamp_str, time.localtime(float(tim)))
             buf.insert(end_iter, tim)
-        elif app.config.get('print_time') == 'sometimes':
-            every_foo_seconds = 60 * app.config.get(
+        elif app.settings.get('print_time') == 'sometimes':
+            every_foo_seconds = 60 * app.settings.get(
                 'print_ichat_every_foo_minutes')
             seconds_passed = tim - self.last_time_printout
             if seconds_passed > every_foo_seconds:
@@ -605,9 +605,9 @@ class HistoryWindow(Gtk.ApplicationWindow):
             # eg. nkour: nkour is now Offline
             if contact_name and kind != KindConstant.GCSTATUS:
                 # add stuff before and after contact name
-                before_str = app.config.get('before_nickname')
+                before_str = app.settings.get('before_nickname')
                 before_str = helpers.from_one_line(before_str)
-                after_str = app.config.get('after_nickname')
+                after_str = app.settings.get('after_nickname')
                 after_str = helpers.from_one_line(after_str)
                 format_ = before_str + contact_name + after_str + ' '
                 if tag_name:
@@ -673,7 +673,7 @@ class HistoryWindow(Gtk.ApplicationWindow):
 
             show_status = self._ui.show_status_checkbutton.get_active()
 
-            results = app.logger.search_log(account, jid, text, date)
+            results = app.storage.archive.search_log(account, jid, text, date)
             result_found = False
             # FIXME:
             # add "subject:  | message: " in message column if kind is single
@@ -774,8 +774,8 @@ class HistoryWindow(Gtk.ApplicationWindow):
     def on_log_history_checkbutton_toggled(self, widget, *args):
         # log conversation history?
         oldlog = True
-        no_log_for = app.config.get_per(
-            'accounts', self.account, 'no_log_for').split()
+        no_log_for = app.settings.get_account_setting(
+            self.account, 'no_log_for').split()
         if self.jid in no_log_for:
             oldlog = False
         log = widget.get_active()
@@ -784,8 +784,8 @@ class HistoryWindow(Gtk.ApplicationWindow):
         if log and self.jid in no_log_for:
             no_log_for.remove(self.jid)
         if oldlog != log:
-            app.config.set_per(
-                'accounts', self.account, 'no_log_for', ' '.join(no_log_for))
+            app.settings.set_account_setting(
+                self.account, 'no_log_for', ' '.join(no_log_for))
 
     def on_show_status_checkbutton_toggled(self, widget):
         # reload logs
@@ -809,7 +809,7 @@ class HistoryWindow(Gtk.ApplicationWindow):
         x, y = self.get_window().get_root_origin()
         width, height = self.get_size()
 
-        app.config.set('history_window_x-position', x)
-        app.config.set('history_window_y-position', y)
-        app.config.set('history_window_width', width)
-        app.config.set('history_window_height', height)
+        app.settings.set('history_window_x-position', x)
+        app.settings.set('history_window_y-position', y)
+        app.settings.set('history_window_width', width)
+        app.settings.set('history_window_height', height)

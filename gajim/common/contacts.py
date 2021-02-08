@@ -24,6 +24,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+from functools import partial
+
 try:
     from gajim.common import app
     from gajim.common.i18n import _
@@ -33,6 +35,19 @@ try:
 except ImportError as e:
     if __name__ != "__main__":
         raise ImportError(str(e))
+
+
+class ContactSettings:
+    def __init__(self, account, jid):
+        self.get = partial(app.settings.get_contact_setting, account, jid)
+        self.set = partial(app.settings.set_contact_setting, account, jid)
+
+
+class GroupChatSettings:
+    def __init__(self, account, jid):
+        self.get = partial(app.settings.get_group_chat_setting, account, jid)
+        self.set = partial(app.settings.set_group_chat_setting, account, jid)
+
 
 class XMPPEntity:
     """
@@ -128,7 +143,7 @@ class CommonContact(XMPPEntity):
             # return caps for a contact that has no resources left.
             return False
 
-        disco_info = app.logger.get_last_disco_info(self.get_full_jid())
+        disco_info = app.storage.cache.get_last_disco_info(self.get_full_jid())
         if disco_info is None:
             return False
 
@@ -136,7 +151,7 @@ class CommonContact(XMPPEntity):
 
     @property
     def uses_phone(self):
-        disco_info = app.logger.get_last_disco_info(self.get_full_jid())
+        disco_info = app.storage.cache.get_last_disco_info(self.get_full_jid())
         if disco_info is None:
             return False
 
@@ -165,6 +180,11 @@ class Contact(CommonContact):
         self._is_groupchat = groupchat
         self._is_pm_contact = is_pm_contact
 
+        if groupchat:
+            self.settings = GroupChatSettings(account.name, jid)
+        else:
+            self.settings = ContactSettings(account.name, jid)
+
         self.sub = sub
         self.ask = ask
 
@@ -172,6 +192,10 @@ class Contact(CommonContact):
         self.idle_time = idle_time
 
         self.pep = {}
+
+    def connect_signal(self, setting, func):
+        app.settings.connect_signal(
+            setting, func, self.account.name, self.jid)
 
     def get_full_jid(self):
         if self.resource:
@@ -247,8 +271,8 @@ class Contact(CommonContact):
         if not self.is_groupchat:
             raise ValueError
 
-        all_ = app.config.get('notify_on_all_muc_messages')
-        room = app.config.get_per('rooms', self.jid, 'notify_on_all_messages')
+        all_ = app.settings.get('notify_on_all_muc_messages')
+        room = self.settings.get('notify_on_all_messages')
         return all_ or room
 
 
@@ -268,6 +292,8 @@ class GC_Contact(CommonContact):
         self.role = role
         self.affiliation = affiliation
         self.avatar_sha = avatar_sha
+
+        self.settings = ContactSettings(account.name, jid)
 
     def get_full_jid(self):
         return self.room_jid + '/' + self.name
@@ -923,7 +949,7 @@ class MetacontactManager():
         order = data.get('order', 0)
         transport = common.app.get_transport_name_from_jid(jid)
         server = common.app.get_server_from_jid(jid)
-        myserver = common.app.config.get_per('accounts', account, 'hostname')
+        myserver = app.settings.get_account_setting(account, 'hostname')
         return (bool(contact), show > 2, has_order, order, bool(transport),
                 show, priority, server == myserver, jid, account)
 
@@ -937,7 +963,7 @@ class MetacontactManager():
 
         (nearby_family, big_brother_jid, big_brother_account)
         """
-        if common.app.config.get('mergeaccounts'):
+        if app.settings.get('mergeaccounts'):
             # group all together
             nearby_family = family
         else:

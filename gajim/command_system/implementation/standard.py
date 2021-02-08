@@ -90,7 +90,7 @@ class StandardCommonCommands(CommandContainer):
     @command('lastlog', overlap=True)
     @doc(_("Show logged messages which mention given text"))
     def grep(self, text, limit=None):
-        results = app.logger.search_log(self.account, self.contact.jid, text)
+        results = app.storage.archive.search_log(self.account, self.contact.jid, text)
 
         if not results:
             raise CommandError(_("%s: Nothing found") % text)
@@ -134,8 +134,8 @@ class StandardCommonCommands(CommandContainer):
         if status not in ('online', 'away', 'chat', 'xa', 'dnd'):
             raise CommandError("Invalid status given")
         for connection in app.connections.values():
-            if not app.config.get_per('accounts', connection.name,
-                                      'sync_with_global_status'):
+            if not app.settings.get_account_setting(connection.name,
+                                                    'sync_with_global_status'):
                 continue
             if not connection.state.is_available:
                 continue
@@ -148,8 +148,8 @@ class StandardCommonCommands(CommandContainer):
             message = _("Away")
 
         for connection in app.connections.values():
-            if not app.config.get_per('accounts', connection.name,
-                                      'sync_with_global_status'):
+            if not app.settings.get_account_setting(connection.name,
+                                                    'sync_with_global_status'):
                 continue
             if not connection.state.is_available:
                 continue
@@ -162,12 +162,21 @@ class StandardCommonCommands(CommandContainer):
             message = _("Available")
 
         for connection in app.connections.values():
-            if not app.config.get_per('accounts', connection.name,
-                                      'sync_with_global_status'):
+            if not app.settings.get_account_setting(connection.name,
+                                                    'sync_with_global_status'):
                 continue
             if not connection.state.is_available:
                 continue
             connection.change_status('online', message)
+
+    @command
+    @doc(_("Send a disco info request"))
+    def disco(self):
+        client = app.get_client(self.account)
+        if not client.state.is_available:
+            return
+
+        client.get_module('Discovery').disco_contact(self.contact)
 
 
 class StandardCommonChatCommands(CommandContainer):
@@ -350,7 +359,7 @@ class StandardGroupChatCommands(CommandContainer):
         if who not in app.contacts.get_nick_list(self.account, self.room_jid):
             raise CommandError(_("Nickname not found"))
         self.connection.get_module('MUC').set_role(
-            self.room_jid, who, 'none', reason or str())
+            self.room_jid, who, 'none', reason)
 
     @command(raw=True)
     # Do not translate moderator, participant, visitor, none
@@ -419,4 +428,6 @@ class StandardGroupChatCommands(CommandContainer):
             raise CommandError(
                 _('Command is not supported for zeroconf accounts'))
         gc_c = app.contacts.get_gc_contact(self.account, self.room_jid, nick)
+        if gc_c is None:
+            raise CommandError(_("Unknown nickname"))
         app.connections[self.account].get_module('Ping').send_ping(gc_c)

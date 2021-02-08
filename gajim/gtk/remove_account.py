@@ -16,7 +16,7 @@ import logging
 
 from gi.repository import Gtk
 
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import StanzaError
 
 from gajim.common import app
 from gajim.common import ged
@@ -24,11 +24,10 @@ from gajim.common.i18n import _
 from gajim.common.helpers import to_user_string
 from gajim.common.helpers import event_filter
 
-from gajim.gtk.assistant import Assistant
-from gajim.gtk.assistant import Page
-from gajim.gtk.util import ensure_not_destroyed
+from .assistant import Assistant
+from .assistant import Page
 
-log = logging.getLogger('gajim.gtk.remove_account')
+log = logging.getLogger('gajim.gui.remove_account')
 
 
 class RemoveAccount(Assistant):
@@ -149,12 +148,13 @@ class RemoveAccount(Assistant):
         self._con.disconnect(gracefully=True, reconnect=False)
         self._account_removed = True
 
-    @ensure_not_destroyed
-    def _on_remove_response(self, result):
-        if is_error_result(result):
+    def _on_remove_response(self, task):
+        try:
+            task.finish()
+        except StanzaError as error:
             self._con.set_remove_account(False)
 
-            error_text = to_user_string(result)
+            error_text = to_user_string(error)
             self.get_page('error').set_text(error_text)
             self.show_page('error')
             return
@@ -183,7 +183,7 @@ class RemoveChoice(Page):
         label.set_halign(Gtk.Align.CENTER)
         label.set_justify(Gtk.Justification.CENTER)
 
-        service = app.config.get_per('accounts', account, 'hostname')
+        service = app.settings.get_account_setting(account, 'hostname')
         check_label = Gtk.Label()
         check_label.set_markup(
             _('Do you want to unregister your account on <b>%s</b> as '

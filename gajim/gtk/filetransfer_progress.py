@@ -20,8 +20,9 @@ from gi.repository import GLib
 from gajim.common import app
 from gajim.common.i18n import _
 
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import EventHelper
+from .util import get_builder
+from .util import EventHelper
+from .dialogs import ErrorDialog
 
 
 class FileTransferProgress(Gtk.ApplicationWindow, EventHelper):
@@ -39,7 +40,7 @@ class FileTransferProgress(Gtk.ApplicationWindow, EventHelper):
         self._transfer.connect('state-changed', self._on_transfer_state_change)
         self._transfer.connect('progress', self._on_transfer_progress)
 
-        if app.config.get('use_kib_mib'):
+        if app.settings.get('use_kib_mib'):
             self._units = GLib.FormatSizeFlags.IEC_UNITS
         else:
             self._units = GLib.FormatSizeFlags.DEFAULT
@@ -57,7 +58,16 @@ class FileTransferProgress(Gtk.ApplicationWindow, EventHelper):
         self._ui.connect_signals(self)
 
     def _on_transfer_state_change(self, transfer, _signal_name, state):
-        if state.is_finished or state.is_error:
+        if self._destroyed:
+            return
+
+        if state.is_error:
+            ErrorDialog(_('Error'),
+                        transfer.error_text,
+                        transient_for=app.interface.roster.window)
+            self.destroy()
+
+        if state.is_finished or state.is_cancelled:
             self.destroy()
             return
 
@@ -73,10 +83,12 @@ class FileTransferProgress(Gtk.ApplicationWindow, EventHelper):
         self.destroy()
 
     def _on_destroy(self, *args):
-        self._transfer.cancel()
-        self._transfer.disconnect(self)
-        self._transfer = None
         self._destroyed = True
+
+        if self._transfer.state.is_active:
+            self._transfer.cancel()
+
+        self._transfer = None
         if self._pulse is not None:
             GLib.source_remove(self._pulse)
 

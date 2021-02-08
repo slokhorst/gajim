@@ -15,7 +15,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-import os
 import math
 import logging
 
@@ -28,9 +27,9 @@ from gajim.common import app
 from gajim.common import configpaths
 from gajim.common.const import StyleAttr, CSSPriority
 
-from gajim.gtk.const import Theme
+from .const import Theme
 
-log = logging.getLogger('gajim.gtk.css')
+log = logging.getLogger('gajim.gui.css')
 settings = Gtk.Settings.get_default()
 
 
@@ -115,7 +114,7 @@ class CSSConfig():
 
     @property
     def prefer_dark(self):
-        setting = app.config.get('dark_theme')
+        setting = app.settings.get('dark_theme')
         if setting == Theme.SYSTEM:
             if settings is None:
                 return False
@@ -125,9 +124,9 @@ class CSSConfig():
     @staticmethod
     def set_dark_theme(value=None):
         if value is None:
-            value = app.config.get('dark_theme')
+            value = app.settings.get('dark_theme')
         else:
-            app.config.set('dark_theme', value)
+            app.settings.set('dark_theme', value)
 
         if settings is None:
             return
@@ -148,7 +147,7 @@ class CSSConfig():
                                      CSSPriority.DEFAULT_THEME_DARK)
 
     def _load_css_from_file(self, filename, priority):
-        path = os.path.join(configpaths.get('STYLE'), filename)
+        path = configpaths.get('STYLE') / filename
         try:
             with open(path, "r") as file_:
                 css = file_.read()
@@ -180,8 +179,8 @@ class CSSConfig():
         return int(math.ceil(number / 100.0)) * 100
 
     def _gather_available_themes(self):
-        files = os.listdir(configpaths.get('MY_THEME'))
-        self.themes = [file[:-4] for file in files if file.endswith('.css')]
+        files = configpaths.get('MY_THEME').iterdir()
+        self.themes = [file.stem for file in files if file.suffix == '.css']
         if 'default' in self.themes:
             # Ignore user created themes that are named 'default'
             self.themes.remove('default')
@@ -191,20 +190,20 @@ class CSSConfig():
             theme = 'default-dark'
 
         if user:
-            return os.path.join(configpaths.get('MY_THEME'), '%s.css' % theme)
-        return os.path.join(configpaths.get('STYLE'), '%s.css' % theme)
+            return configpaths.get('MY_THEME') / f'{theme}.css'
+        return configpaths.get('STYLE') / f'{theme}.css'
 
     def _determine_theme_path(self):
         # Gets the path of the currently active theme.
         # If it does not exist, it falls back to the default theme
-        theme = app.config.get('roster_theme')
+        theme = app.settings.get('roster_theme')
         if theme == 'default':
             return self.get_theme_path(theme, user=False)
 
         theme_path = self.get_theme_path(theme)
-        if not theme or not os.path.exists(theme_path):
+        if not theme or not theme_path.exists():
             log.warning('Theme %s not found, fallback to default', theme)
-            app.config.set('roster_theme', 'default')
+            app.settings.set('roster_theme', 'default')
             log.info('Use Theme: default')
             return self.get_theme_path('default', user=False)
         log.info('Use Theme: %s', theme)
@@ -462,18 +461,18 @@ class CSSConfig():
     def change_theme(self, theme):
         user = not theme == 'default'
         theme_path = self.get_theme_path(theme, user=user)
-        if not os.path.exists(theme_path):
+        if not theme_path.exists():
             log.error('Change Theme: Theme %s does not exist', theme_path)
             return False
         self._load_selected(theme_path)
         self._activate_theme()
-        app.config.set('roster_theme', theme)
+        app.settings.set('roster_theme', theme)
         log.info('Change Theme: Successful switched to %s', theme)
         return True
 
     def change_preload_theme(self, theme):
         theme_path = self.get_theme_path(theme)
-        if not os.path.exists(theme_path):
+        if not theme_path.exists():
             log.error('Change Preload Theme: Theme %s does not exist',
                       theme_path)
             return False
@@ -492,7 +491,7 @@ class CSSConfig():
 
         old_theme_path = self.get_theme_path(old_theme)
         new_theme_path = self.get_theme_path(new_theme)
-        os.rename(old_theme_path, new_theme_path)
+        old_theme_path.rename(new_theme_path)
         self.themes.remove(old_theme)
         self.themes.append(new_theme)
         self._load_pre(new_theme)
@@ -507,7 +506,7 @@ class CSSConfig():
 
     def add_new_theme(self, theme):
         theme_path = self.get_theme_path(theme)
-        if os.path.exists(theme_path):
+        if theme_path.exists():
             log.error('Add Theme: %s exists already', theme_path)
             return False
         with open(theme_path, 'w', encoding='utf8'):
@@ -518,8 +517,8 @@ class CSSConfig():
 
     def remove_theme(self, theme):
         theme_path = self.get_theme_path(theme)
-        if os.path.exists(theme_path):
-            os.remove(theme_path)
+        if theme_path.exists():
+            theme_path.unlink()
             self.themes.remove(theme)
         log.info('Remove Theme: Successful removed theme %s', theme)
 
@@ -534,9 +533,9 @@ class CSSConfig():
 
     def refresh(self):
         css = ''
-        accounts = app.config.get_per('accounts')
+        accounts = app.settings.get_accounts()
         for index, account in enumerate(accounts):
-            color = app.config.get_per('accounts', account, 'account_color')
+            color = app.settings.get_account_setting(account, 'account_color')
             css_class = 'gajim_class_%s' % index
             css += '.%s { background-color: %s }\n' % (css_class, color)
             self._dynamic_dict[account] = css_class

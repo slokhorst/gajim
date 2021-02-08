@@ -41,17 +41,17 @@ from gajim.common.modules.bytestream import (is_transfer_active,
                                              is_transfer_paused,
                                              is_transfer_stopped)
 
-from gajim.gtk.dialogs import DialogButton
-from gajim.gtk.dialogs import NewConfirmationDialog
-from gajim.gtk.dialogs import HigDialog
-from gajim.gtk.dialogs import InformationDialog
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.filechoosers import FileSaveDialog
-from gajim.gtk.filechoosers import FileChooserDialog
-from gajim.gtk.tooltips import FileTransfersTooltip
-from gajim.gtk.util import get_builder
+from .dialogs import DialogButton
+from .dialogs import ConfirmationDialog
+from .dialogs import HigDialog
+from .dialogs import InformationDialog
+from .dialogs import ErrorDialog
+from .filechoosers import FileSaveDialog
+from .filechoosers import FileChooserDialog
+from .tooltips import FileTransfersTooltip
+from .util import get_builder
 
-log = logging.getLogger('gajim.gtk.filetransfer')
+log = logging.getLogger('gajim.gui.filetransfer')
 
 
 @unique
@@ -73,7 +73,7 @@ class FileTransfersWindow:
 
         self._ui = get_builder('filetransfers.ui')
         self.window = self._ui.file_transfers_window
-        show_notification = app.config.get('notify_on_file_complete')
+        show_notification = app.settings.get('notify_on_file_complete')
         self._ui.notify_ft_complete.set_active(show_notification)
         self.model = Gtk.ListStore(str, str, str, str, str, int, int, str)
         self._ui.transfers_list.set_model(self.model)
@@ -142,7 +142,7 @@ class FileTransfersWindow:
             'hash_error': 'network-error-symbolic',
         }
 
-        if app.config.get('use_kib_mib'):
+        if app.settings.get('use_kib_mib'):
             self.units = GLib.FormatSizeFlags.IEC_UNITS
         else:
             self.units = GLib.FormatSizeFlags.DEFAULT
@@ -329,7 +329,7 @@ class FileTransfersWindow:
             file_name = os.path.basename(file_props.file_name)
         else:
             file_name = file_props.name
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('File Transfer Error'),
             _('File Transfer Error'),
             _('The file %s has been received, but it seems to have '
@@ -379,7 +379,7 @@ class FileTransfersWindow:
     def _start_receive(self, file_path, account, contact, file_props):
         file_dir = os.path.dirname(file_path)
         if file_dir:
-            app.config.set('last_save_dir', file_dir)
+            app.settings.set('last_save_dir', file_dir)
         file_props.file_name = file_path
         file_props.type_ = 'r'
         self.add_transfer(account, contact, file_props)
@@ -389,14 +389,14 @@ class FileTransfersWindow:
     def on_file_request_accepted(self, account, contact, file_props):
         def _on_accepted(account, contact, file_props, file_path):
             if os.path.exists(file_path):
-                app.config.set('last_save_dir', os.path.dirname(file_path))
+                app.settings.set('last_save_dir', os.path.dirname(file_path))
 
                 # Check if we have write permissions
                 if not os.access(file_path, os.W_OK):
                     file_name = GLib.markup_escape_text(
                         os.path.basename(file_path))
                     ErrorDialog(
-                        _('Cannot overwrite existing file \'%s\'' % file_name),
+                        _('Cannot overwrite existing file \'%s\'') % file_name,
                         _('A file with this name already exists and you do '
                           'not have permission to overwrite it.'))
                     return
@@ -420,7 +420,7 @@ class FileTransfersWindow:
                     con.get_module('Bytestream').send_file_rejection(
                         file_props)
 
-                NewConfirmationDialog(
+                ConfirmationDialog(
                     _('File Transfer Conflict'),
                     _('File already exists'),
                     _('Resume download or replace file?'),
@@ -453,7 +453,7 @@ class FileTransfersWindow:
                             file_props)
         FileSaveDialog(accept_cb,
                        cancel_cb,
-                       path=app.config.get('last_save_dir'),
+                       path=app.settings.get('last_save_dir'),
                        file_name=file_props.name)
 
     def show_file_request(self, account, contact, file_props):
@@ -481,7 +481,7 @@ class FileTransfersWindow:
             app.connections[account].get_module(
                 'Bytestream').send_file_rejection(file_props)
 
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('File Transfer Request'),
             _('%s wants to send you a file') % contact.get_shown_name(),
             sectext,
@@ -924,7 +924,7 @@ class FileTransfersWindow:
         self.set_status(file_props, 'stop')
 
     def _on_notify_ft_complete_toggled(self, widget, *args):
-        app.config.set('notify_on_file_complete', widget.get_active())
+        app.settings.set('notify_on_file_complete', widget.get_active())
 
     def _on_file_transfers_dialog_delete_event(self, widget, event):
         self.window.hide()
@@ -1060,7 +1060,7 @@ class SendFileDialog(Gtk.ApplicationWindow):
         FileChooserDialog(self._set_files,
                           select_multiple=True,
                           transient_for=self,
-                          path=app.config.get('last_send_dir'))
+                          path=app.settings.get('last_send_dir'))
 
     def _remove_files(self, button):
         selected = self._ui.listbox.get_selected_rows()
@@ -1075,7 +1075,7 @@ class SendFileDialog(Gtk.ApplicationWindow):
             last_dir = row.path.parent
             self._ui.listbox.add(row)
         self._ui.listbox.show_all()
-        app.config.set('last_send_dir', str(last_dir))
+        app.settings.set('last_send_dir', str(last_dir))
 
     def _get_description(self):
         buffer_ = self._ui.description.get_buffer()

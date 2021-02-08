@@ -23,13 +23,13 @@ from gajim.common.app import interface
 from gajim.common.exceptions import GajimGeneralException
 from gajim import dialogs
 
-from gajim.gtk.dialogs import ShortcutsWindow
-from gajim.gtk.single_message import SingleMessageWindow
-from gajim.gtk.about import AboutDialog
-from gajim.gtk.history import HistoryWindow
-from gajim.gtk.discovery import ServiceDiscoveryWindow
-from gajim.gtk.util import open_window
-from gajim.gtk.util import get_app_window
+from gajim.gui.dialogs import ShortcutsWindow
+from gajim.gui.single_message import SingleMessageWindow
+from gajim.gui.about import AboutDialog
+from gajim.gui.history import HistoryWindow
+from gajim.gui.discovery import ServiceDiscoveryWindow
+from gajim.gui.util import open_window
+from gajim.gui.util import get_app_window
 
 # General Actions
 
@@ -86,14 +86,14 @@ def on_profile(_action, param):
 
 def on_send_server_message(_action, param):
     account = param.get_string()
-    server = app.config.get_per('accounts', account, 'hostname')
+    server = app.settings.get_account_setting(account, 'hostname')
     server += '/announce/online'
     SingleMessageWindow(account, server, 'send')
 
 
 def on_service_disco(_action, param):
     account = param.get_string()
-    server_jid = app.config.get_per('accounts', account, 'hostname')
+    server_jid = app.settings.get_account_setting(account, 'hostname')
     if server_jid in interface.instances[account]['disco']:
         interface.instances[account]['disco'][server_jid].\
             window.present()
@@ -124,7 +124,7 @@ def on_single_message(_action, param):
 def on_merge_accounts(action, param):
     action.set_state(param)
     value = param.get_boolean()
-    app.config.set('mergeaccounts', value)
+    app.settings.set('mergeaccounts', value)
     # Do not merge accounts if only one active
     if len(app.connections) >= 2:
         app.interface.roster.regroup = value
@@ -188,14 +188,14 @@ def on_manage_proxies(_action, _param):
 
 def on_set_motd(_action, param):
     account = param.get_string()
-    server = app.config.get_per('accounts', account, 'hostname')
+    server = app.settings.get_account_setting(account, 'hostname')
     server += '/announce/motd'
     SingleMessageWindow(account, server, 'send')
 
 
 def on_update_motd(_action, param):
     account = param.get_string()
-    server = app.config.get_per('accounts', account, 'hostname')
+    server = app.settings.get_account_setting(account, 'hostname')
     server += '/announce/motd/update'
     SingleMessageWindow(account, server, 'send')
 
@@ -246,6 +246,16 @@ def on_open_event(_action, param):
     app.interface.handle_event(
         dict_['account'], dict_['jid'], dict_['type_'])
 
+
+def on_remove_event(_action, param):
+    dict_ = param.unpack()
+    account, jid, type_ = dict_['account'], dict_['jid'], dict_['type_']
+    event = app.events.get_first_event(account, jid, type_)
+    app.events.remove_events(account, jid, event)
+    win = app.interface.msg_win_mgr.get_window(jid, account)
+    if win:
+        win.redraw_tab(win.get_control(jid, account))
+        win.show_title()
 
 # Other Actions
 

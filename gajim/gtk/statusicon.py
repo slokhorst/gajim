@@ -24,19 +24,17 @@ import os
 from gi.repository import Gtk
 from gi.repository import GLib
 
-from gajim import dialogs
-
 from gajim.common import app
 from gajim.common import helpers
 from gajim.common.i18n import _
 from gajim.common.helpers import save_roster_position
 
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import get_icon_name
-from gajim.gtk.util import restore_roster_position
-from gajim.gtk.util import open_window
-from gajim.gtk.single_message import SingleMessageWindow
-from gajim.gtk.tooltips import NotificationAreaTooltip
+from .util import get_builder
+from .util import get_icon_name
+from .util import restore_roster_position
+from .util import open_window
+from .single_message import SingleMessageWindow
+from .tooltips import NotificationAreaTooltip
 
 
 class StatusIcon:
@@ -143,7 +141,7 @@ class StatusIcon:
         """
         if not app.interface.systray_enabled:
             return
-        if app.config.get('trayicon') == 'always':
+        if app.settings.get('trayicon') == 'always':
             self.status_icon.set_visible(True)
         if app.events.get_nb_systray_events():
             self.status_icon.set_visible(True)
@@ -152,7 +150,7 @@ class StatusIcon:
             self.status_icon.set_from_icon_name(icon_name)
             return
 
-        if app.config.get('trayicon') == 'on_event':
+        if app.settings.get('trayicon') == 'on_event':
             self.status_icon.set_visible(False)
 
         icon_name = get_icon_name(self.status)
@@ -188,7 +186,7 @@ class StatusIcon:
         self.popup_menus.append(sub_menu)
         status_menuitem.set_submenu(sub_menu)
 
-        for show in ('online', 'chat', 'away', 'xa', 'dnd'):
+        for show in ('online', 'away', 'xa', 'dnd'):
             uf_show = helpers.get_uf_show(show, use_mnemonic=True)
             item = Gtk.MenuItem.new_with_mnemonic(uf_show)
             sub_menu.append(item)
@@ -227,7 +225,7 @@ class StatusIcon:
             # submenus
             for account in app.connections:
                 if app.account_is_available(account) and \
-                not app.config.get_per('accounts', account, 'is_zeroconf'):
+                not app.settings.get_account_setting(account, 'is_zeroconf'):
 
                     # for single message
                     single_message_menuitem.set_submenu(None)
@@ -254,7 +252,7 @@ class StatusIcon:
                              self._on_single_message, account)
                 account_menu_for_single_message.append(item)
 
-        sounds_mute_menuitem.set_active(not app.config.get('sounds_on'))
+        sounds_mute_menuitem.set_active(not app.settings.get('sounds_on'))
 
         win = app.interface.roster.window
         if self._show_roster_handler_id:
@@ -292,7 +290,7 @@ class StatusIcon:
 
     @staticmethod
     def _on_sounds_mute(widget):
-        app.config.set('sounds_on', not widget.get_active())
+        app.settings.set('sounds_on', not widget.get_active())
 
     @staticmethod
     def _on_show_roster(_widget):
@@ -323,7 +321,7 @@ class StatusIcon:
             else:
                 win.show_all()
                 restore_roster_position(win)
-                if not app.config.get('roster_window_skip_taskbar'):
+                if not app.settings.get('roster_window_skip_taskbar'):
                     win.set_property('skip-taskbar-hint', False)
                 win.present_with_time(Gtk.get_current_event_time())
         else:
@@ -354,35 +352,8 @@ class StatusIcon:
 
     @staticmethod
     def _on_show(_widget, show):
-        # we all add some fake (we cannot select those nor have them as show)
-        # but this helps to align with roster's status_combobox index positions
-        status = ['online', 'chat', 'away', 'xa', 'dnd',
-                  'SEPARATOR', 'CHANGE_STATUS_MSG_MENUITEM', 'SEPARATOR',
-                  'offline']
-        index = status.index(show)
-        if not helpers.statuses_unified():
-            app.interface.roster.status_combobox.set_active(index + 2)
-            return
-        current = app.interface.roster.status_combobox.get_active()
-        if index != current:
-            app.interface.roster.status_combobox.set_active(index)
+        app.interface.change_status(status=show)
 
     @staticmethod
     def _on_change_status(_widget):
-        model = app.interface.roster.status_combobox.get_model()
-        active = app.interface.roster.status_combobox.get_active()
-        status = model[active][2]
-        def on_response(message, pep_dict):
-            if message is None: # None if user press Cancel
-                return
-            accounts = app.connections.keys()
-            for acct in accounts:
-                if not app.config.get_per('accounts',
-                                          acct,
-                                          'sync_with_global_status'):
-                    continue
-                show = app.connections[acct].status
-                app.interface.roster.send_status(acct, show, message)
-                app.interface.roster.send_pep(acct, pep_dict)
-        dlg = dialogs.ChangeStatusMessageDialog(on_response, status)
-        dlg.dialog.present()
+        app.interface.change_status()

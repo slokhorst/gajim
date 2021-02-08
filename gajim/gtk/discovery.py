@@ -43,12 +43,11 @@
 
 import types
 import weakref
-import uuid
 
 import nbxmpp
-from nbxmpp.util import is_error_result
 from nbxmpp.structs import DiscoIdentity
 from nbxmpp.namespaces import Namespace
+from nbxmpp.errors import StanzaError
 
 from gi.repository import GLib
 from gi.repository import Gtk
@@ -59,12 +58,12 @@ from gajim.common import helpers
 from gajim.common.i18n import _
 from gajim.common.const import StyleAttr
 
-from gajim.gtk.adhoc import AdHocCommand
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.search import Search
-from gajim.gtk.service_registration import ServiceRegistration
-from gajim.gtk.util import icon_exists
-from gajim.gtk.util import get_builder
+from .adhoc import AdHocCommand
+from .dialogs import ErrorDialog
+from .search import Search
+from .service_registration import ServiceRegistration
+from .util import icon_exists
+from .util import get_builder
 
 LABELS = {
     1: _('This service has not yet responded with detailed information'),
@@ -399,14 +398,16 @@ class ServicesCache:
             con.get_module('Discovery').disco_items(
                 jid, node, callback=self._disco_items_received)
 
-    def _disco_info_received(self, result):
+    def _disco_info_received(self, task):
         """
         Callback for when we receive an agent's info
         array is (agent, node, identities, features, data)
         """
 
-        if is_error_result(result):
-            self._disco_info_error(result)
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            self._disco_info_error(error)
             return
 
         identities = result.identities
@@ -450,13 +451,16 @@ class ServicesCache:
             if cbkey in self._cbs:
                 del self._cbs[cbkey]
 
-    def _disco_items_received(self, result):
+    def _disco_items_received(self, task):
         """
         Callback for when we receive an agent's items
         array is (agent, node, items)
         """
-        if is_error_result(result):
-            self._disco_items_error(result)
+
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            self._disco_items_error(error)
             return
 
         addr = get_agent_address(result.jid, result.node)
@@ -503,7 +507,7 @@ class ServiceDiscoveryWindow:
         self._account = account
         self.parent = parent
         if not jid:
-            jid = app.config.get_per('accounts', account, 'hostname')
+            jid = app.settings.get_account_setting(account, 'hostname')
             node = None
 
         self.jid = None
@@ -552,7 +556,7 @@ class ServiceDiscoveryWindow:
         if address_entry:
             self.address_comboboxtext = self._ui.address_comboboxtext
 
-            self.latest_addresses = app.config.get(
+            self.latest_addresses = app.settings.get(
                 'latest_disco_addresses').split()
             if jid in self.latest_addresses:
                 self.latest_addresses.remove(jid)
@@ -758,7 +762,7 @@ class ServiceDiscoveryWindow:
         self.address_comboboxtext.get_model().clear()
         for j in self.latest_addresses:
             self.address_comboboxtext.append_text(j)
-        app.config.set('latest_disco_addresses',
+        app.settings.set('latest_disco_addresses',
                        ' '.join(self.latest_addresses))
         self.travel(jid, None)
 
@@ -2185,8 +2189,9 @@ class GroupsPostWindow:
 
         # Publish it to node
         con = app.connections[self.account]
-        con.get_module('PubSub').send_pb_publish(
-            self.servicejid, self.groupid, item, str(uuid.uuid4()))
+        con.get_module('PubSub').publish(self.groupid,
+                                         item,
+                                         jid=self.servicejid)
 
         # Close the window
         self.window.destroy()

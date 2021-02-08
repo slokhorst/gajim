@@ -18,7 +18,6 @@ Handles  Jingle File Transfer (XEP 0234)
 
 import hashlib
 import logging
-import os
 import threading
 from enum import IntEnum, unique
 
@@ -119,10 +118,10 @@ class JingleFileTransfer(JingleContent):
             State.CAND_SENT_AND_RECEIVED : StateCandSentAndRecv(self)
         }
 
-        cert_name = os.path.join(configpaths.get('MY_CERT'),
-                                 jingle_xtls.SELF_SIGNED_CERTIFICATE)
-        if not (os.path.exists(cert_name + '.cert')
-                and os.path.exists(cert_name + '.pkey')):
+        cert_name = (configpaths.get('MY_CERT') /
+                     jingle_xtls.SELF_SIGNED_CERTIFICATE)
+        if not (cert_name.with_suffix('.cert').exists()
+                and cert_name.with_suffix('.pkey').exists()):
             jingle_xtls.make_certs(cert_name, 'gajim')
 
     def __state_changed(self, nextstate, args=None):
@@ -370,7 +369,7 @@ class JingleFileTransfer(JingleContent):
         sha_str = helpers.get_auth_sha(self.file_props.sid, sender,
                                        receiver)
         self.file_props.sha_str = sha_str
-        port = app.config.get('file_transfers_port')
+        port = app.settings.get('file_transfers_port')
         fingerprint = None
         if self.use_security:
             fingerprint = 'server'

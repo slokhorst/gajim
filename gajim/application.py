@@ -33,10 +33,10 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+import os
 import time
 import sys
 from datetime import datetime
-from pathlib import Path
 from urllib.parse import unquote
 
 from nbxmpp.namespaces import Namespace
@@ -52,10 +52,13 @@ from gajim.common import ged
 from gajim.common import configpaths
 from gajim.common import logging_helpers
 from gajim.common import exceptions
-from gajim.common import logger
 from gajim.common.i18n import _
 from gajim.common.contacts import LegacyContactsAPI
 from gajim.common.task_manager import TaskManager
+from gajim.common.storage.cache import CacheStorage
+from gajim.common.storage.archive import MessageArchiveStorage
+from gajim.common.settings import Settings
+from gajim.common.settings import LegacyConfig
 
 
 class GajimApplication(Gtk.Application):
@@ -63,7 +66,6 @@ class GajimApplication(Gtk.Application):
 
     def __init__(self):
         flags = (Gio.ApplicationFlags.HANDLES_COMMAND_LINE |
-                 Gio.ApplicationFlags.HANDLES_OPEN |
                  Gio.ApplicationFlags.CAN_OVERRIDE_APP_ID)
         Gtk.Application.__init__(self,
                                  application_id='org.gajim.Gajim',
@@ -140,6 +142,14 @@ class GajimApplication(Gtk.Application):
             _('Open IPython shell'))
 
         self.add_main_option(
+            'gdebug',
+            0,
+            GLib.OptionFlags.NONE,
+            GLib.OptionArg.NONE,
+            _('Sets an environment variable so '
+              'GLib debug messages are printed'))
+
+        self.add_main_option(
             'show-next-pending-event',
             0,
             GLib.OptionFlags.NONE,
@@ -155,9 +165,8 @@ class GajimApplication(Gtk.Application):
         self.add_main_option_entries(self._get_remaining_entry())
 
         self.connect('handle-local-options', self._handle_local_options)
-        self.connect('command-line', self._handle_remote_options)
+        self.connect('command-line', self._command_line)
         self.connect('startup', self._startup)
-        self.connect('activate', self._activate)
 
         self.interface = None
 
@@ -177,12 +186,23 @@ class GajimApplication(Gtk.Application):
         return [option]
 
     def _startup(self, _application):
-
         # Create and initialize Application Paths & Databases
+        app.print_version()
         app.detect_dependencies()
         configpaths.create_paths()
+
+        app.settings = Settings()
+        app.settings.init()
+
+        app.config = LegacyConfig() # type: ignore
+
+        app.storage.cache = CacheStorage()
+        app.storage.cache.init()
+
+        app.storage.archive = MessageArchiveStorage()
+        app.storage.archive.init()
+
         try:
-            app.logger = logger.Logger()
             app.contacts = LegacyContactsAPI()
         except exceptions.DatabaseMalformed as error:
             dlg = Gtk.MessageDialog(
@@ -197,7 +217,7 @@ class GajimApplication(Gtk.Application):
             dlg.destroy()
             sys.exit()
 
-        from gajim.gtk.util import load_user_iconsets
+        from gajim.gui.util import load_user_iconsets
         load_user_iconsets()
 
         from gajim.common.cert_store import CertificateStore
@@ -206,15 +226,10 @@ class GajimApplication(Gtk.Application):
 
         # Set Application Menu
         app.app = self
-        from gajim.gtk.util import get_builder
+        from gajim.gui.util import get_builder
         builder = get_builder('application_menu.ui')
         menubar = builder.get_object("menubar")
         self.set_menubar(menubar)
-
-    def _activate(self, _application):
-        if self.interface is not None:
-            self.interface.roster.window.present()
-            return
 
         from gajim.gui_interface import Interface
         self.interface = Interface()
@@ -247,12 +262,12 @@ class GajimApplication(Gtk.Application):
                 jid, cmd = uri, 'message'
 
             try:
-                jid = JID(jid)
+                jid = JID.from_string(jid)
             except InvalidJid as error:
                 app.log('uri_handler').warning('Invalid JID %s: %s', uri, error)
                 continue
 
-            if cmd == 'join' and jid.getResource():
+            if cmd == 'join' and jid.resource:
                 app.log('uri_handler').warning('Invalid MUC JID %s', uri)
                 continue
 
@@ -292,31 +307,30 @@ class GajimApplication(Gtk.Application):
             self.interface.roster.prepare_quit()
 
         # Commit any outstanding SQL transactions
-        app.logger.commit()
+        app.storage.cache.shutdown()
+        app.storage.archive.shutdown()
 
-    def _handle_remote_options(self, _application, command_line):
-        # Parse all options that should be executed on a remote instance
+    def _command_line(self, _application, command_line):
         options = command_line.get_options_dict()
 
         remote_commands = [
-            'ipython',
-            'show-next-pending-event',
-            'start-chat',
+            ('ipython', None),
+            ('show-next-pending-event', None),
+            ('start-chat', GLib.Variant('s', '')),
         ]
 
         remaining = options.lookup_value(GLib.OPTION_REMAINING,
                                          GLib.VariantType.new('as'))
 
-        for cmd in remote_commands:
+        for cmd, parameter in remote_commands:
             if options.contains(cmd):
-                self.activate_action(cmd)
+                self.activate_action(cmd, parameter)
                 return 0
 
         if remaining is not None:
             self._open_uris(remaining.unpack())
             return 0
 
-        self.activate()
         return 0
 
     def _handle_local_options(self,
@@ -340,6 +354,9 @@ class GajimApplication(Gtk.Application):
             configpaths.set_config_root(path)
 
         configpaths.init()
+
+        if options.contains('gdebug'):
+            os.environ['G_MESSAGES_DEBUG'] = 'all'
 
         if app.get_debug_mode():
             # Redirect has to happen before logging init
@@ -378,7 +395,7 @@ class GajimApplication(Gtk.Application):
 
     @staticmethod
     def _redirect_output():
-        debug_folder = Path(configpaths.get('DEBUG'))
+        debug_folder = configpaths.get('DEBUG')
         date = datetime.today().strftime('%d%m%Y-%H%M%S')
         filename = '%s-debug.log' % date
         fd = open(debug_folder / filename, 'a')
@@ -386,7 +403,7 @@ class GajimApplication(Gtk.Application):
 
     @staticmethod
     def _cleanup_debug_logs():
-        debug_folder = Path(configpaths.get('DEBUG'))
+        debug_folder = configpaths.get('DEBUG')
         debug_files = list(debug_folder.glob('*-debug.log*'))
         now = time.time()
         for file in debug_files:
@@ -402,7 +419,7 @@ class GajimApplication(Gtk.Application):
 
         act = Gio.SimpleAction.new_stateful(
             'merge', None,
-            GLib.Variant.new_boolean(app.config.get('mergeaccounts')))
+            GLib.Variant.new_boolean(app.settings.get('mergeaccounts')))
         act.connect('change-state', app_actions.on_merge_accounts)
         self.add_action(act)
 
@@ -446,7 +463,7 @@ class GajimApplication(Gtk.Application):
             act.connect('activate', func)
             self.add_action(act)
 
-        accounts_list = sorted(app.config.get_per('accounts'))
+        accounts_list = sorted(app.settings.get_accounts())
         if not accounts_list:
             return
         if len(accounts_list) > 1:
@@ -479,6 +496,7 @@ class GajimApplication(Gtk.Application):
             ('-update-motd', a.on_update_motd, 'online', 's'),
             ('-delete-motd', a.on_delete_motd, 'online', 's'),
             ('-open-event', a.on_open_event, 'always', 'a{sv}'),
+            ('-remove-event', a.on_remove_event, 'always', 'a{sv}'),
             ('-import-contacts', a.on_import_contacts, 'online', 's'),
         ]
 
@@ -532,22 +550,22 @@ class GajimApplication(Gtk.Application):
             'win.show-roster': ['<Primary>R'],
             'win.show-offline': ['<Primary>O'],
             'win.show-active': ['<Primary>Y'],
-            'win.change-nickname': ['<Control><Shift>n'],
-            'win.change-subject': ['<Alt>t'],
+            'win.change-nickname': ['<Primary><Shift>N'],
+            'win.change-subject': ['<Primary><Shift>S'],
             'win.escape': ['Escape'],
-            'win.browse-history': ['<Control>h'],
-            'win.send-file': ['<Control>f'],
-            'win.show-contact-info': ['<Control>i'],
-            'win.show-emoji-chooser': ['<Alt>m'],
-            'win.clear-chat': ['<Control>l'],
-            'win.delete-line': ['<Control>u'],
-            'win.close-tab': ['<Control>w'],
-            'win.move-tab-up': ['<Control><Shift>Page_Up'],
-            'win.move-tab-down': ['<Control><Shift>Page_Down'],
-            'win.switch-next-tab': ['<Control>Page_Down'],
-            'win.switch-prev-tab': ['<Control>Page_Up'],
-            'win.switch-next-unread-tab-right': ['<Control>Tab'],
-            'win.switch-next-unread-tab-left': ['<Control>ISO_Left_Tab'],
+            'win.browse-history': ['<Primary>H'],
+            'win.send-file': ['<Primary>F'],
+            'win.show-contact-info': ['<Primary>I'],
+            'win.show-emoji-chooser': ['<Primary><Shift>M'],
+            'win.clear-chat': ['<Primary>L'],
+            'win.delete-line': ['<Primary>U'],
+            'win.close-tab': ['<Primary>W'],
+            'win.move-tab-up': ['<Primary><Shift>Page_Up'],
+            'win.move-tab-down': ['<Primary><Shift>Page_Down'],
+            'win.switch-next-tab': ['<Primary>Page_Down'],
+            'win.switch-prev-tab': ['<Primary>Page_Up'],
+            'win.switch-next-unread-tab-right': ['<Primary>Tab'],
+            'win.switch-next-unread-tab-left': ['<Primary>ISO_Left_Tab'],
             'win.switch-tab-1': ['<Alt>1', '<Alt>KP_1'],
             'win.switch-tab-2': ['<Alt>2', '<Alt>KP_2'],
             'win.switch-tab-3': ['<Alt>3', '<Alt>KP_3'],
@@ -557,7 +575,6 @@ class GajimApplication(Gtk.Application):
             'win.switch-tab-7': ['<Alt>7', '<Alt>KP_7'],
             'win.switch-tab-8': ['<Alt>8', '<Alt>KP_8'],
             'win.switch-tab-9': ['<Alt>9', '<Alt>KP_9'],
-            'win.copy-text': ['<Control><Shift>c'],
         }
 
         for action, accels in shortcuts.items():

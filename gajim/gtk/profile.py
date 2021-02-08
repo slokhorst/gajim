@@ -1,350 +1,316 @@
-# Copyright (C) 2003-2014 Yann Leboulanger <asterix AT lagaule.org>
-# Copyright (C) 2005-2006 Nikos Kouremenos <kourem AT gmail.com>
-# Copyright (C) 2006-2008 Jean-Marie Traissard <jim AT lapin.org>
-#
-# This file is part of Gajim.
-#
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
-
-import base64
-import time
 import logging
-import hashlib
 
-from gi.repository import Gtk
+from gi.repository import Gio
 from gi.repository import Gdk
+from gi.repository import Gtk
 from gi.repository import GLib
 
+from nbxmpp.errors import StanzaError
+from nbxmpp.namespaces import Namespace
+from nbxmpp.modules.vcard4 import VCard
+from nbxmpp.modules.user_avatar import Avatar
+
 from gajim.common import app
-from gajim.common import ged
-from gajim.common.i18n import _
 from gajim.common.const import AvatarSize
-from gajim.common.helpers import event_filter
+from gajim.common.i18n import _
+from gajim.common.i18n import Q_
 
-from gajim import gtkgui_helpers
+from gajim.gui.avatar import clip_circle
+from gajim.gui.avatar_selector import AvatarSelector
+from gajim.gui.filechoosers import AvatarChooserDialog
+from gajim.gui.util import get_builder
+from gajim.gui.vcard_grid import VCardGrid
+from gajim.gui.util import scroll_to_end
 
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.dialogs import InformationDialog
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import EventHelper
-from gajim.gtk.filechoosers import AvatarChooserDialog
+log = logging.getLogger('gajim.gui.profile')
+
+MENU_DICT = {
+    'fn': _('Full Name'),
+    'bday': _('Birthday'),
+    'gender': _('Gender'),
+    'adr': _('Address'),
+    'email': _('Email'),
+    'impp': 'IM Address',
+    'tel': _('Phone No.'),
+    'org': Q_('?profile:Organisation'),
+    'title': Q_('?profile:Title'),
+    'role': Q_('?profile:Role'),
+    'url': _('URL'),
+    'key': Q_('?profile:Public Encryption Key'),
+}
 
 
-log = logging.getLogger('gajim.profile')
-
-
-class ProfileWindow(Gtk.ApplicationWindow, EventHelper):
-    def __init__(self, account):
+class ProfileWindow(Gtk.ApplicationWindow):
+    def __init__(self, account, *args):
         Gtk.ApplicationWindow.__init__(self)
-        EventHelper.__init__(self)
         self.set_application(app.app)
         self.set_position(Gtk.WindowPosition.CENTER)
         self.set_show_menubar(False)
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        self.set_resizable(True)
+        self.set_default_size(700, 600)
+        self.set_name('ProfileWindow')
         self.set_title(_('Profile'))
 
-        self.connect('destroy', self.on_profile_window_destroy)
-        self.connect('key-press-event', self.on_profile_window_key_press_event)
-
-        self.xml = get_builder('profile_window.ui')
-        self.add(self.xml.get_object('profile_box'))
-        self.progressbar = self.xml.get_object('progressbar')
-        self.statusbar = self.xml.get_object('statusbar')
-        self.context_id = self.statusbar.get_context_id('profile')
-
         self.account = account
-        self.jid = app.get_jid_from_account(account)
-        account_label = app.config.get_per(
-            'accounts', account, 'account_label')
-        self.set_value('account_label', account_label)
+        self._jid = app.get_jid_from_account(account)
 
-        self.dialog = None
-        self.avatar_mime_type = None
-        self.avatar_encoded = None
-        self.avatar_sha = None
-        self.message_id = self.statusbar.push(self.context_id,
-                                              _('Retrieving profile…'))
-        self.update_progressbar_timeout_id = GLib.timeout_add(
-            100, self.update_progressbar)
-        self.remove_statusbar_timeout_id = None
+        self._ui = get_builder('profile.ui')
 
-        self.xml.connect_signals(self)
-        self.register_events([
-            ('vcard-published', ged.GUI1, self._nec_vcard_published),
-            ('vcard-not-published', ged.GUI1, self._nec_vcard_not_published),
-        ])
+        menu = Gio.Menu()
+        for action, label in MENU_DICT.items():
+            menu.append(label, 'win.add-' + action.lower())
 
+        self._ui.add_entry_button.set_menu_model(menu)
+        self._add_actions()
+
+        self._avatar_selector = None
+        self._current_avatar = None
+        self._current_vcard = None
+        self._avatar_nick_public = None
+
+        # False  - no change to avatar
+        # None   - we want to delete the avatar
+        # Avatar - upload new avatar
+        self._new_avatar = False
+
+        self._ui.nickname_entry.set_text(app.nicks[account])
+
+        self._vcard_grid = VCardGrid(self.account)
+        self._ui.profile_box.add(self._vcard_grid)
+
+        self.add(self._ui.profile_stack)
         self.show_all()
-        self.xml.get_object('ok_button').grab_focus()
-        app.connections[account].get_module('VCardTemp').request_vcard(
-            self._nec_vcard_received, self.jid)
 
-    def on_information_notebook_switch_page(self, widget, page, page_num):
-        GLib.idle_add(self.xml.get_object('ok_button').grab_focus)
+        self._load_avatar()
 
-    def update_progressbar(self):
-        self.progressbar.pulse()
-        return True
+        client = app.get_client(account)
+        client.get_module('VCard4').request_vcard(
+            callback=self._on_vcard_received)
 
-    def remove_statusbar(self, message_id):
-        self.statusbar.remove(self.context_id, message_id)
-        self.remove_statusbar_timeout_id = None
+        client.get_module('PubSub').get_access_model(
+            Namespace.VCARD4_PUBSUB,
+            callback=self._on_access_model_received,
+            user_data=Namespace.VCARD4_PUBSUB)
 
-    def on_profile_window_destroy(self, widget):
-        if self.update_progressbar_timeout_id is not None:
-            GLib.source_remove(self.update_progressbar_timeout_id)
-        if self.remove_statusbar_timeout_id is not None:
-            GLib.source_remove(self.remove_statusbar_timeout_id)
+        client.get_module('PubSub').get_access_model(
+            Namespace.AVATAR_METADATA,
+            callback=self._on_access_model_received,
+            user_data=Namespace.AVATAR_METADATA)
 
-        if self.dialog:  # Image chooser dialog
-            self.dialog.destroy()
+        client.get_module('PubSub').get_access_model(
+            Namespace.AVATAR_DATA,
+            callback=self._on_access_model_received,
+            user_data=Namespace.AVATAR_DATA)
 
-    def on_profile_window_key_press_event(self, widget, event):
+        client.get_module('PubSub').get_access_model(
+            Namespace.NICK,
+            callback=self._on_access_model_received,
+            user_data=Namespace.NICK)
+
+        self._ui.connect_signals(self)
+        self.connect('key-press-event', self._on_key_press_event)
+
+    def _on_access_model_received(self, task):
+        namespace = task.get_user_data()
+
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            log.warning('Unable to get access model for %s: %s',
+                        namespace, error)
+            return
+
+        access_model = result == 'open'
+
+        if namespace == Namespace.VCARD4_PUBSUB:
+            self._ui.vcard_access.set_active(access_model)
+        else:
+            if self._avatar_nick_public is None:
+                self._avatar_nick_public = access_model
+            else:
+                self._avatar_nick_public = (self._avatar_nick_public and
+                                            access_model)
+            self._ui.avatar_nick_access.set_active(self._avatar_nick_public)
+
+    def _on_vcard_received(self, task):
+        try:
+            self._current_vcard = task.finish()
+        except StanzaError as error:
+            log.info('Error loading VCard: %s', error)
+            self._current_vcard = VCard()
+
+        if self._current_vcard is None:
+            self._current_vcard = VCard()
+
+        self._load_avatar()
+        self._vcard_grid.set_vcard(self._current_vcard.copy())
+        self._ui.profile_stack.set_visible_child_name('profile')
+        self._ui.spinner.stop()
+
+    def _load_avatar(self):
+        scale = self.get_scale_factor()
+        self._current_avatar = app.contacts.get_avatar(
+            self.account,
+            self._jid,
+            AvatarSize.VCARD,
+            scale)
+
+        self._ui.avatar_image.set_from_surface(self._current_avatar)
+        self._ui.avatar_image.show()
+
+    def _on_key_press_event(self, _widget, event):
         if event.keyval == Gdk.KEY_Escape:
             self.destroy()
 
-    def _clear_photo(self, widget):
-        # empty the image
-        button = self.xml.get_object('PHOTO_button')
-        image = self.xml.get_object('PHOTO_image')
-        image.set_from_pixbuf(None)
-        button.hide()
-        text_button = self.xml.get_object('NOPHOTO_button')
-        text_button.show()
-        self.avatar_encoded = None
-        self.avatar_sha = None
-        self.avatar_mime_type = None
+    def _add_actions(self):
+        for action in MENU_DICT:
+            action_name = 'add-' + action.lower()
+            act = Gio.SimpleAction.new(action_name, None)
+            act.connect('activate', self._on_action)
+            self.add_action(act)
 
-    def _on_set_avatar_clicked(self, _button):
-        def on_ok(path_to_file):
-            data, sha = app.interface.avatar_storage.prepare_for_publish(
-                path_to_file)
-            if sha is None:
-                ErrorDialog(
-                    _('Could not load image'), transient_for=self)
-                return
+    def _on_action(self, action, _param):
+        name = action.get_name()
+        key = name.split('-')[1]
+        self._vcard_grid.add_new_property(key)
+        GLib.idle_add(scroll_to_end, self._ui.scrolled)
 
-            scale = self.get_scale_factor()
-            surface = app.interface.avatar_storage.surface_from_filename(
-                sha, AvatarSize.VCARD, scale)
+    def _on_edit_clicked(self, *args):
+        self._vcard_grid.set_editable(True)
+        self._ui.edit_button.hide()
+        self._ui.add_entry_button.set_no_show_all(False)
+        self._ui.add_entry_button.show_all()
+        self._ui.cancel_button.show()
+        self._ui.save_button.show()
+        self._ui.remove_avatar_button.show()
+        self._ui.edit_avatar_button.show()
+        self._ui.nickname_entry.set_sensitive(True)
+        self._ui.privacy_button.show()
 
-            button = self.xml.get_object('PHOTO_button')
-            image = self.xml.get_object('PHOTO_image')
-            image.set_from_surface(surface)
-            button.show()
-            text_button = self.xml.get_object('NOPHOTO_button')
-            text_button.hide()
+    def _on_cancel_clicked(self, _widget):
+        self._vcard_grid.set_editable(False)
+        self._ui.edit_button.show()
+        self._ui.add_entry_button.hide()
+        self._ui.cancel_button.hide()
+        self._ui.save_button.hide()
+        self._ui.remove_avatar_button.hide()
+        self._ui.edit_avatar_button.hide()
+        self._ui.privacy_button.hide()
+        self._ui.nickname_entry.set_sensitive(False)
+        self._ui.avatar_image.set_from_surface(self._current_avatar)
+        self._ui.nickname_entry.set_text(app.nicks[self.account])
+        self._vcard_grid.set_vcard(self._current_vcard.copy())
+        self._new_avatar = False
 
-            self.avatar_sha = sha
-            self.avatar_encoded = base64.b64encode(data).decode('utf-8')
-            self.avatar_mime_type = 'image/png'
+    def _on_save_clicked(self, _widget):
+        self._ui.spinner.start()
+        self._ui.profile_stack.set_visible_child_name('spinner')
+        self._ui.add_entry_button.hide()
+        self._ui.cancel_button.hide()
+        self._ui.save_button.hide()
+        self._ui.edit_button.show()
+        self._ui.remove_avatar_button.hide()
+        self._ui.edit_avatar_button.hide()
+        self._ui.privacy_button.hide()
+        self._ui.nickname_entry.set_sensitive(False)
 
-        AvatarChooserDialog(on_ok, transient_for=self)
+        self._vcard_grid.validate()
+        self._vcard_grid.sort()
 
-    def on_BDAY_entry_focus_out_event(self, widget, event):
-        txt = widget.get_text()
-        if not txt:
-            return
-        try:
-            time.strptime(txt, '%Y-%m-%d')
-        except ValueError:
-            if not widget.is_focus():
-                pritext = _('Wrong date format')
-                ErrorDialog(
-                    pritext,
-                    _('Format of the date must be YYYY-MM-DD'),
-                    transient_for=self)
-                GLib.idle_add(widget.grab_focus)
-            return True
+        vcard = self._vcard_grid.get_vcard()
+        self._current_vcard = vcard.copy()
 
-    def set_value(self, entry_name, value):
-        try:
-            widget = self.xml.get_object(entry_name)
-            val = widget.get_text()
-            if val:
-                value = val + ' / ' + value
-            widget.set_text(value)
-        except AttributeError:
-            pass
+        con = app.connections[self.account]
+        con.get_module('VCard4').set_vcard(
+            self._current_vcard,
+            public=self._ui.vcard_access.get_active(),
+            callback=self._on_save_finished)
 
-    def set_values(self, vcard_):
-        button = self.xml.get_object('PHOTO_button')
-        image = self.xml.get_object('PHOTO_image')
-        text_button = self.xml.get_object('NOPHOTO_button')
-        if 'PHOTO' not in vcard_:
-            # set default image
-            image.set_from_pixbuf(None)
-            button.hide()
-            text_button.show()
-        for i in vcard_.keys():
-            if i == 'PHOTO':
-                photo_encoded = vcard_[i]['BINVAL']
-                if photo_encoded == '':
-                    continue
-                self.avatar_encoded = photo_encoded
-                photo_decoded = base64.b64decode(photo_encoded.encode('utf-8'))
-                self.avatar_sha = hashlib.sha1(photo_decoded).hexdigest()
-                if 'TYPE' in vcard_[i]:
-                    self.avatar_mime_type = vcard_[i]['TYPE']
+        public = self._ui.avatar_nick_access.get_active()
 
-                scale = self.get_scale_factor()
-                surface = app.interface.avatar_storage.surface_from_filename(
-                    self.avatar_sha, AvatarSize.VCARD, scale)
-                if surface is None:
-                    pixbuf = gtkgui_helpers.scale_pixbuf_from_data(
-                        photo_decoded, AvatarSize.VCARD)
-                    surface = Gdk.cairo_surface_create_from_pixbuf(pixbuf,
-                                                                   scale)
-                image.set_from_surface(surface)
-                button.show()
-                text_button.hide()
-                continue
-            if i in ('ADR', 'TEL', 'EMAIL'):
-                for entry in vcard_[i]:
-                    add_on = '_HOME'
-                    if 'WORK' in entry:
-                        add_on = '_WORK'
-                    for j in entry.keys():
-                        self.set_value(i + add_on + '_' + j + '_entry', entry[j])
-            if isinstance(vcard_[i], dict):
-                for j in vcard_[i].keys():
-                    self.set_value(i + '_' + j + '_entry', vcard_[i][j])
-            else:
-                if i == 'DESC':
-                    self.xml.get_object('DESC_textview').get_buffer().set_text(
-                        vcard_[i], len(vcard_[i].encode('utf-8')))
-                else:
-                    self.set_value(i + '_entry', vcard_[i])
-        if self.update_progressbar_timeout_id is not None:
-            if self.message_id:
-                self.statusbar.remove(self.context_id, self.message_id)
-            self.message_id = self.statusbar.push(
-                self.context_id, _('Information received'))
-            self.remove_statusbar_timeout_id = GLib.timeout_add_seconds(
-                3, self.remove_statusbar, self.message_id)
-            GLib.source_remove(self.update_progressbar_timeout_id)
-            self.progressbar.hide()
-            self.progressbar.set_fraction(0)
-            self.update_progressbar_timeout_id = None
+        if self._new_avatar is False:
+            if self._avatar_nick_public != public:
+                con.get_module('UserAvatar').set_access_model(public)
 
-    def _nec_vcard_received(self, jid, resource, room, vcard_, *args):
-        self.set_values(vcard_)
+        else:
+            # Only update avatar if it changed
+            con.get_module('UserAvatar').set_avatar(self._new_avatar,
+                                                    public=public)
 
-    def add_to_vcard(self, vcard_, entry, txt):
-        """
-        Add an information to the vCard dictionary
-        """
-        entries = entry.split('_')
-        loc = vcard_
-        if len(entries) == 3:  # We need to use lists
-            if entries[0] not in loc:
-                loc[entries[0]] = []
+        nick = GLib.markup_escape_text(self._ui.nickname_entry.get_text())
+        con.get_module('UserNickname').set_nickname(nick, public=public)
 
-            for e in loc[entries[0]]:
-                if entries[1] in e:
-                    e[entries[2]] = txt
-                    break
-            else:
-                loc[entries[0]].append({entries[1]: '', entries[2]: txt})
-            return vcard_
-        while len(entries) > 1:
-            if entries[0] not in loc:
-                loc[entries[0]] = {}
-            loc = loc[entries[0]]
-            del entries[0]
-        loc[entries[0]] = txt
-        return vcard_
-
-    def make_vcard(self):
-        """
-        Make the vCard dictionary
-        """
-        entries = [
-            'FN', 'NICKNAME', 'BDAY', 'EMAIL_HOME_USERID', 'JABBERID', 'URL',
-            'TEL_HOME_NUMBER', 'N_FAMILY', 'N_GIVEN', 'N_MIDDLE', 'N_PREFIX',
-            'N_SUFFIX', 'ADR_HOME_STREET', 'ADR_HOME_EXTADR', 'ADR_HOME_LOCALITY',
-            'ADR_HOME_REGION', 'ADR_HOME_PCODE', 'ADR_HOME_CTRY', 'ORG_ORGNAME',
-            'ORG_ORGUNIT', 'TITLE', 'ROLE', 'TEL_WORK_NUMBER', 'EMAIL_WORK_USERID',
-            'ADR_WORK_STREET', 'ADR_WORK_EXTADR', 'ADR_WORK_LOCALITY',
-            'ADR_WORK_REGION', 'ADR_WORK_PCODE', 'ADR_WORK_CTRY']
-        vcard_ = {}
-        for e in entries:
-            txt = self.xml.get_object(e + '_entry').get_text()
-            if txt != '':
-                vcard_ = self.add_to_vcard(vcard_, e, txt)
-
-        # DESC textview
-        buff = self.xml.get_object('DESC_textview').get_buffer()
-        start_iter = buff.get_start_iter()
-        end_iter = buff.get_end_iter()
-        txt = buff.get_text(start_iter, end_iter, False)
-        if txt != '':
-            vcard_['DESC'] = txt
-
-        # Avatar
-        if self.avatar_encoded:
-            vcard_['PHOTO'] = {'BINVAL': self.avatar_encoded}
-            if self.avatar_mime_type:
-                vcard_['PHOTO']['TYPE'] = self.avatar_mime_type
-        return vcard_, self.avatar_sha
-
-    def on_ok_button_clicked(self, widget):
-        if self.update_progressbar_timeout_id:
-            # Operation in progress
-            return
-        if not app.account_is_available(self.account):
-            ErrorDialog(
-                _('You are not connected to the server'),
-                _('Without a connection, you can not publish your contact '
-                  'information.'),
-                transient_for=self)
-            return
-        vcard_, sha = self.make_vcard()
-        nick = vcard_.get('NICKNAME') or None
-        app.connections[self.account].get_module('UserNickname').set_nickname(nick)
         if not nick:
-            nick = app.config.get_per('accounts', self.account, 'name')
+            nick = app.settings.get_account_setting(
+                self.account, 'name')
         app.nicks[self.account] = nick
-        app.connections[self.account].get_module('VCardTemp').send_vcard(
-            vcard_, sha)
-        self.message_id = self.statusbar.push(
-            self.context_id, _('Sending profile…'))
-        self.progressbar.show()
-        self.update_progressbar_timeout_id = GLib.timeout_add(
-            100, self.update_progressbar)
 
-    @event_filter(['account'])
-    def _nec_vcard_published(self, _event):
-        if self.update_progressbar_timeout_id is not None:
-            GLib.source_remove(self.update_progressbar_timeout_id)
-            self.update_progressbar_timeout_id = None
-        self.destroy()
+    def _on_remove_avatar(self, _button):
+        contact = app.contacts.create_contact(self._jid, self.account)
+        scale = self.get_scale_factor()
+        surface = app.interface.avatar_storage.get_surface(
+            contact, AvatarSize.VCARD, scale, default=True)
 
-    @event_filter(['account'])
-    def _nec_vcard_not_published(self, _event):
-        if self.message_id:
-            self.statusbar.remove(self.context_id, self.message_id)
-        self.message_id = self.statusbar.push(
-            self.context_id, _('Information NOT published'))
-        self.remove_statusbar_timeout_id = GLib.timeout_add_seconds(
-            3, self.remove_statusbar, self.message_id)
-        if self.update_progressbar_timeout_id is not None:
-            GLib.source_remove(self.update_progressbar_timeout_id)
-            self.progressbar.set_fraction(0)
-            self.update_progressbar_timeout_id = None
-        InformationDialog(
-            _('vCard publication failed'),
-            _('There was an error while publishing your personal information, '
-              'try again later.'), transient_for=self)
+        self._ui.avatar_image.set_from_surface(surface)
+        self._ui.remove_avatar_button.hide()
+        self._new_avatar = None
 
-    def on_cancel_button_clicked(self, widget):
-        self.destroy()
+    def _on_edit_avatar(self, button):
+        def _on_file_selected(path):
+            if self._avatar_selector is None:
+                self._avatar_selector = AvatarSelector()
+                self._ui.avatar_selector_box.add(self._avatar_selector)
+
+            self._avatar_selector.prepare_crop_area(path)
+            self._ui.avatar_update_button.set_sensitive(
+                self._avatar_selector.get_prepared())
+            self._ui.profile_stack.set_visible_child_name('avatar_selector')
+
+        AvatarChooserDialog(_on_file_selected,
+                            transient_for=button.get_toplevel())
+
+    def _on_cancel_update_avatar(self, _button):
+        self._ui.profile_stack.set_visible_child_name('profile')
+
+    def _on_update_avatar(self, _button):
+        success, data, width, height = self._avatar_selector.get_avatar_bytes()
+        if not success:
+            # TODO: Error handling
+            return
+
+        sha = app.interface.avatar_storage.save_avatar(data)
+        if sha is None:
+            # TODO: Error handling
+            return
+
+        self._new_avatar = Avatar()
+        self._new_avatar.add_image_source(data, 'image/png', height, width)
+
+        scale = self.get_scale_factor()
+        surface = app.interface.avatar_storage.surface_from_filename(
+            sha, AvatarSize.VCARD, scale)
+
+        self._ui.avatar_image.set_from_surface(clip_circle(surface))
+        self._ui.remove_avatar_button.show()
+        self._ui.profile_stack.set_visible_child_name('profile')
+
+    def _access_switch_toggled(self, *args):
+        avatar_nick_access = self._ui.avatar_nick_access.get_active()
+        vcard_access = self._ui.vcard_access.get_active()
+        self._ui.avatar_nick_access_label.set_text(
+            _('Everyone') if avatar_nick_access else _('Contacts'))
+        self._ui.vcard_access_label.set_text(
+            _('Everyone') if vcard_access else _('Contacts'))
+
+    def _on_save_finished(self, task):
+        try:
+            task.finish()
+        except StanzaError as err:
+            log.error('Could not publish VCard: %s', err)
+            # TODO Handle error
+            return
+
+        self._vcard_grid.set_editable(False)
+        self._ui.profile_stack.set_visible_child_name('profile')
+        self._ui.spinner.stop()

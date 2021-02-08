@@ -21,9 +21,9 @@ from gajim.common import ged
 from gajim.common import helpers
 from gajim.common.i18n import _
 
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import EventHelper
+from .dialogs import ErrorDialog
+from .util import get_builder
+from .util import EventHelper
 
 
 class AddNewContactWindow(Gtk.ApplicationWindow, EventHelper):
@@ -41,7 +41,7 @@ class AddNewContactWindow(Gtk.ApplicationWindow, EventHelper):
         self.set_resizable(False)
         self.set_title(_('Add Contact'))
 
-        self.connect('key-press-event', self._on_key_press)
+        self.connect_after('key-press-event', self._on_key_press)
 
         self.account = account
         self.adding_jid = False
@@ -233,7 +233,7 @@ class AddNewContactWindow(Gtk.ApplicationWindow, EventHelper):
         model = self.protocol_jid_combobox.get_model()
         row = self.protocol_jid_combobox.get_active()
         jid = model[row][0]
-        from gajim.gtk.service_registration import ServiceRegistration
+        from .service_registration import ServiceRegistration
         ServiceRegistration(self.account, jid)
 
     def _on_key_press(self, widget, event):
@@ -258,7 +258,7 @@ class AddNewContactWindow(Gtk.ApplicationWindow, EventHelper):
         if not jid:
             ErrorDialog(
                 _('%s Missing') % self.uid_label.get_text(),
-                _('You must supply the %s of the new contact.' %
+                (_('You must supply the %s of the new contact.') %
                     self.uid_label.get_text())
             )
             return
@@ -330,8 +330,9 @@ class AddNewContactWindow(Gtk.ApplicationWindow, EventHelper):
             message = message_buffer.get_text(start_iter, end_iter, True)
             if self.save_message_checkbutton.get_active():
                 msg = helpers.to_one_line(message)
-                app.config.set_per('accounts', self.account,
-                                   'subscription_request_msg', msg)
+                app.settings.set_account_setting(self.account,
+                                                 'subscription_request_msg',
+                                                 msg)
         else:
             message = ''
         group = self.group_comboboxentry.get_child().get_text()

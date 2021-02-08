@@ -12,7 +12,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-import os
 import logging
 import hashlib
 from math import pi
@@ -30,13 +29,13 @@ from gajim.common.helpers import get_groupchat_name
 from gajim.common.const import AvatarSize
 from gajim.common.const import StyleAttr
 
-from gajim.gtk.util import load_pixbuf
-from gajim.gtk.util import text_to_color
-from gajim.gtk.util import scale_with_ratio
-from gajim.gtk.util import get_css_show_class
-from gajim.gtk.util import convert_rgb_string_to_float
+from .util import load_pixbuf
+from .util import text_to_color
+from .util import scale_with_ratio
+from .util import get_css_show_class
+from .util import convert_rgb_string_to_float
 
-log = logging.getLogger('gajim.gtk.avatar')
+log = logging.getLogger('gajim.gui.avatar')
 
 
 def generate_avatar(letters, color, size, scale):
@@ -199,25 +198,26 @@ class AvatarStorage(metaclass=Singleton):
     def invalidate_cache(self, jid):
         self._cache.pop(jid, None)
 
-    def get_pixbuf(self, contact, size, scale, show=None):
-        surface = self.get_surface(contact, size, scale, show)
+    def get_pixbuf(self, contact, size, scale, show=None, default=False):
+        surface = self.get_surface(contact, size, scale, show, default)
         return Gdk.pixbuf_get_from_surface(surface, 0, 0, size, size)
 
-    def get_surface(self, contact, size, scale, show=None):
+    def get_surface(self, contact, size, scale, show=None, default=False):
         jid = contact.jid
         if contact.is_gc_contact:
             jid = contact.get_full_jid()
 
-        surface = self._cache[jid].get((size, scale, show))
-        if surface is not None:
-            return surface
+        if not default:
+            surface = self._cache[jid].get((size, scale, show))
+            if surface is not None:
+                return surface
 
-        surface = self._get_avatar_from_storage(contact, size, scale)
-        if surface is not None:
-            if show is not None:
-                surface = add_status_to_avatar(surface, show)
-            self._cache[jid][(size, scale, show)] = surface
-            return surface
+            surface = self._get_avatar_from_storage(contact, size, scale)
+            if surface is not None:
+                if show is not None:
+                    surface = add_status_to_avatar(surface, show)
+                self._cache[jid][(size, scale, show)] = surface
+                return surface
 
         name = contact.get_shown_name()
         # Use nickname for group chats and bare JID for single contacts
@@ -234,19 +234,20 @@ class AvatarStorage(metaclass=Singleton):
         self._cache[jid][(size, scale, show)] = surface
         return surface
 
-    def get_muc_surface(self, account, jid, size, scale):
-        surface = self._cache[jid].get((size, scale))
-        if surface is not None:
-            return surface
+    def get_muc_surface(self, account, jid, size, scale, default=False):
+        if not default:
+            surface = self._cache[jid].get((size, scale))
+            if surface is not None:
+                return surface
 
-        avatar_sha = app.logger.get_muc_avatar_sha(jid)
-        if avatar_sha is not None:
-            surface = self.surface_from_filename(avatar_sha, size, scale)
-            if surface is None:
-                return None
-            surface = clip_circle(surface)
-            self._cache[jid][(size, scale)] = surface
-            return surface
+            avatar_sha = app.storage.cache.get_muc_avatar_sha(jid)
+            if avatar_sha is not None:
+                surface = self.surface_from_filename(avatar_sha, size, scale)
+                if surface is None:
+                    return None
+                surface = clip_circle(surface)
+                self._cache[jid][(size, scale)] = surface
+                return surface
 
         con = app.connections[account]
         name = get_groupchat_name(con, jid)
@@ -295,7 +296,7 @@ class AvatarStorage(metaclass=Singleton):
             return None
 
         sha = hashlib.sha1(data).hexdigest()
-        path = os.path.join(configpaths.get('AVATAR'), sha)
+        path = configpaths.get('AVATAR') / sha
         try:
             with open(path, 'wb') as output_file:
                 output_file.write(data)
@@ -306,8 +307,8 @@ class AvatarStorage(metaclass=Singleton):
 
     @staticmethod
     def get_avatar_path(filename):
-        path = os.path.join(configpaths.get('AVATAR'), filename)
-        if not os.path.isfile(path):
+        path = configpaths.get('AVATAR') / filename
+        if not path.is_file():
             return None
         return path
 

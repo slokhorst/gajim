@@ -23,8 +23,8 @@ from collections import defaultdict
 from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import StanzaHandler
 from nbxmpp.structs import DiscoIdentity
-from nbxmpp.util import is_error_result
 from nbxmpp.util import compute_caps_hash
+from nbxmpp.errors import StanzaError
 
 from gajim.common import app
 from gajim.common.const import COMMON_FEATURES
@@ -101,36 +101,41 @@ class Caps(BaseModule):
 
         self._log.info('Received %s', task.entity)
 
-        disco_info = app.logger.get_caps_entry(task.entity.method,
-                                               task.entity.hash)
+        disco_info = app.storage.cache.get_caps_entry(task.entity.method,
+                                                      task.entity.hash)
         if disco_info is None:
             self._queue_task(task)
             return
 
         jid = str(properties.jid)
-        app.logger.set_last_disco_info(jid, disco_info, cache_only=True)
+        app.storage.cache.set_last_disco_info(jid, disco_info, cache_only=True)
         app.nec.push_incoming_event(
             NetworkEvent('caps-update',
                          account=self._account,
                          fjid=jid,
-                         jid=properties.jid.getBare()))
+                         jid=properties.jid.bare))
 
     def _execute_task(self, task):
         self._log.info('Request %s from %s', task.entity.hash, task.entity.jid)
         self._con.get_module('Discovery').disco_info(
             task.entity.jid,
             node=f'{task.entity.node}#{task.entity.hash}',
-            callback=self._on_disco_info)
+            callback=self._on_disco_info,
+            user_data=task.entity.jid)
 
-    def _on_disco_info(self, disco_info):
-        task = self._get_task(disco_info.jid)
+    def _on_disco_info(self, nbxmpp_task):
+        jid = nbxmpp_task.get_user_data()
+        task = self._get_task(jid)
         if task is None:
-            self._log.info('Task not found for %s', disco_info.jid)
+            self._log.info('Task not found for %s', jid)
             return
 
-        if is_error_result(disco_info):
-            self._remove_task(task)
-            self._log.info(disco_info)
+        self._remove_task(task)
+
+        try:
+            disco_info = nbxmpp_task.finish()
+        except StanzaError as error:
+            self._log.warning(error)
             return
 
         self._log.info('Disco Info received: %s', disco_info.jid)
@@ -138,12 +143,11 @@ class Caps(BaseModule):
         try:
             compute_caps_hash(disco_info)
         except Exception as error:
-            self._remove_task(task)
             self._log.warning('Disco info malformed: %s %s',
                               disco_info.jid, error)
             return
 
-        app.logger.add_caps_entry(
+        app.storage.cache.add_caps_entry(
             str(disco_info.jid),
             task.entity.method,
             disco_info.get_caps_hash(),
@@ -160,7 +164,7 @@ class Caps(BaseModule):
                 NetworkEvent('caps-update',
                              account=self._account,
                              fjid=str(task.entity.jid),
-                             jid=task.entity.jid.getBare()))
+                             jid=task.entity.jid.bare))
 
     def update_caps(self):
         if not app.account_is_connected(self._account):
@@ -209,7 +213,7 @@ class EntityCapsTask(Task):
 
         if self._from_muc:
             muc = client.get_module('MUC').get_manager().get(
-                self.entity.jid.getBare())
+                self.entity.jid.bare)
 
             if muc is None or not muc.state.is_joined:
                 self.set_obsolete()

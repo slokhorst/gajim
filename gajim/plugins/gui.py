@@ -38,12 +38,12 @@ from gajim.common.nec import EventHelper
 from gajim.plugins.helpers import GajimPluginActivateException
 from gajim.plugins.plugins_i18n import _
 
-from gajim.gtk.dialogs import WarningDialog
-from gajim.gtk.dialogs import DialogButton
-from gajim.gtk.dialogs import NewConfirmationDialog
-from gajim.gtk.filechoosers import ArchiveChooserDialog
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import load_icon
+from gajim.gui.dialogs import WarningDialog
+from gajim.gui.dialogs import DialogButton
+from gajim.gui.dialogs import ConfirmationDialog
+from gajim.gui.filechoosers import ArchiveChooserDialog
+from gajim.gui.util import get_builder
+from gajim.gui.util import load_icon
 
 
 @unique
@@ -217,7 +217,8 @@ class PluginsWindow(Gtk.ApplicationWindow, EventHelper):
                               transient_for=self)
                 return
 
-        self._ui.configure_plugin_button.set_sensitive(not is_active)
+        self._ui.configure_plugin_button.set_sensitive(
+            plugin.config_dialog is not None and not is_active)
         self.installed_plugins_model[path][Column.ACTIVE] = not is_active
 
     def _on_configure_plugin(self, _widget):
@@ -282,7 +283,7 @@ class PluginsWindow(Gtk.ApplicationWindow, EventHelper):
                     _show_warn_dialog()
                     return
 
-            NewConfirmationDialog(
+            ConfirmationDialog(
                 _('Overwrite Plugin?'),
                 _('Plugin already exists'),
                 _('Do you want to overwrite the currently installed version?'),

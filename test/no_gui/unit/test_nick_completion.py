@@ -1,6 +1,8 @@
 import unittest
 
-from gajim.gtk.util import NickCompletionGenerator
+from gajim import gui
+gui.init('gtk')
+from gajim.gui.util import NickCompletionGenerator
 
 class Test(unittest.TestCase):
 

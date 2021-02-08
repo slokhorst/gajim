@@ -57,7 +57,6 @@ from gajim.common.dbus import logind
 from gajim.common.dbus import music_track
 
 from gajim import gui_menu_builder
-from gajim import dialogs
 from gajim.dialog_messages import get_dialog
 
 from gajim.chat_control_base import ChatControlBase
@@ -74,47 +73,48 @@ from gajim.common import proxy65_manager
 from gajim.common import socks5
 from gajim.common import helpers
 from gajim.common import passwords
-from gajim.common import logging_helpers
+from gajim.common.helpers import ask_for_status_message
+from gajim.common.helpers import get_group_chat_nick
 from gajim.common.structs import MUCData
+from gajim.common.structs import OutgoingMessage
 from gajim.common.nec import NetworkEvent
 from gajim.common.i18n import _
 from gajim.common.client import Client
 from gajim.common.const import Display
+from gajim.common.const import JingleState
 
 from gajim.common.file_props import FilesProp
+from gajim.common.connection_handlers_events import InformationEvent
 
 from gajim import roster_window
 from gajim.common import ged
-from gajim.common import configpaths
-from gajim.common import optparser
+from gajim.common.exceptions import FileError
 
-from gajim.gtk.avatar import AvatarStorage
-from gajim.gtk.notification import Notification
-from gajim.gtk.dialogs import DialogButton
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.dialogs import WarningDialog
-from gajim.gtk.dialogs import InformationDialog
-from gajim.gtk.dialogs import NewConfirmationDialog
-from gajim.gtk.dialogs import NewConfirmationCheckDialog
-from gajim.gtk.dialogs import InputDialog
-from gajim.gtk.dialogs import PassphraseDialog
-from gajim.gtk.dialogs import InvitationReceivedDialog
-from gajim.gtk.filechoosers import FileChooserDialog
-from gajim.gtk.emoji_data import emoji_data
-from gajim.gtk.emoji_data import emoji_ascii_data
-from gajim.gtk.filetransfer import FileTransfersWindow
-from gajim.gtk.filetransfer_progress import FileTransferProgress
-from gajim.gtk.roster_item_exchange import RosterItemExchangeWindow
-from gajim.gtk.util import get_show_in_roster
-from gajim.gtk.util import get_show_in_systray
-from gajim.gtk.util import open_window
-from gajim.gtk.util import get_app_window
-from gajim.gtk.util import get_app_windows
-from gajim.gtk.util import get_color_for_account
-from gajim.gtk.const import ControlType
+from gajim.gui.avatar import AvatarStorage
+from gajim.gui.notification import Notification
+from gajim.gui.dialogs import DialogButton
+from gajim.gui.dialogs import ErrorDialog
+from gajim.gui.dialogs import WarningDialog
+from gajim.gui.dialogs import InformationDialog
+from gajim.gui.dialogs import ConfirmationDialog
+from gajim.gui.dialogs import ConfirmationCheckDialog
+from gajim.gui.dialogs import InputDialog
+from gajim.gui.dialogs import PassphraseDialog
+from gajim.gui.filechoosers import FileChooserDialog
+from gajim.gui.emoji_data import emoji_data
+from gajim.gui.emoji_data import emoji_ascii_data
+from gajim.gui.filetransfer import FileTransfersWindow
+from gajim.gui.filetransfer_progress import FileTransferProgress
+from gajim.gui.roster_item_exchange import RosterItemExchangeWindow
+from gajim.gui.util import get_show_in_roster
+from gajim.gui.util import get_show_in_systray
+from gajim.gui.util import open_window
+from gajim.gui.util import get_app_window
+from gajim.gui.util import get_app_windows
+from gajim.gui.util import get_color_for_account
+from gajim.gui.const import ControlType
 
 
-parser = optparser.OptionsParser(configpaths.get('CONFIG_FILE'))
 log = logging.getLogger('gajim.interface')
 
 class Interface:
@@ -176,7 +176,7 @@ class Interface:
             sec_msg = obj.msg + '\n' + sec_msg
         message = message + '\n' + sec_msg
 
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('Authorization Request'),
             _('HTTP Authorization Request'),
             message,
@@ -189,7 +189,7 @@ class Interface:
                                args=[obj, 'yes'])]).show()
 
     def handle_event_iq_error(self, event):
-        ctrl = self.msg_win_mgr.get_control(event.properties.jid.getBare(),
+        ctrl = self.msg_win_mgr.get_control(event.properties.jid.bare,
                                             event.account)
         if ctrl and ctrl.is_groupchat:
             ctrl.add_info_message('Error: %s' % event.properties.error)
@@ -245,12 +245,49 @@ class Interface:
             ctrl.remove_session(ctrl.session)
 
     @staticmethod
+    def handle_event_read_state_sync(event):
+        if event.type.is_groupchat:
+            control = app.get_groupchat_control(
+                event.account, event.jid.bare)
+            if control is None:
+                log.warning('Groupchat control not found')
+                return
+
+            jid = event.jid.bare
+            types = ['printed_gc_msg', 'printed_marked_gc_msg']
+
+        else:
+            types = ['chat', 'pm', 'printed_chat', 'printed_pm']
+            jid = event.jid
+
+            control = app.interface.msg_win_mgr.get_control(jid, event.account)
+
+        # Compare with control.last_msg_id.
+        events_ = app.events.get_events(event.account, jid, types)
+        if not events_:
+            log.warning('No Events')
+            return
+
+        if event.type.is_groupchat:
+            id_ = events_[-1].stanza_id or events_[-1].message_id
+        else:
+            id_ = events_[-1].message_id
+
+        if id_ != event.marker_id:
+            return
+
+        if not app.events.remove_events(event.account, jid, types=types):
+            # There were events to remove
+            if control is not None:
+                control.redraw_after_event_removed(event.jid)
+
+    @staticmethod
     def handle_event_msgsent(obj):
-        # ('MSGSENT', account, (jid, msg))
-        # Do not play sound if it is a standalone chatstate message (eg no msg)
-        # or if it is a message to more than one recipient
-        if obj.message and app.config.get_per('soundevents', 'message_sent',
-        'enabled'):
+        if not obj.play_sound:
+            return
+
+        enabled = app.settings.get_soundevent_settings('message_sent')['enabled']
+        if enabled:
             if isinstance(obj.jid, list) and len(obj.jid) > 1:
                 return
             helpers.play_sound('message_sent')
@@ -289,8 +326,8 @@ class Interface:
                 'gajim-subscription_request', event_type, obj.jid)
 
     def handle_event_subscribed_presence(self, event):
-        bare_jid = event.jid.getBare()
-        resource = event.jid.getResource()
+        bare_jid = event.jid.bare
+        resource = event.jid.resource
         if bare_jid in app.contacts.get_jid_list(event.account):
             contact = app.contacts.get_first_contact_from_jid(event.account,
                                                               bare_jid)
@@ -301,7 +338,7 @@ class Interface:
                                                     _('Observers')],
                                                    update=False)
         else:
-            name = event.jid.getNode()
+            name = event.jid.localpart
             name = name.split('%', 1)[0]
             contact = app.contacts.create_contact(jid=bare_jid,
                                                   account=event.account,
@@ -319,8 +356,8 @@ class Interface:
             bare_jid,
             event.account,
             title=_('Authorization accepted'),
-            text=_('The contact "%s" has authorized you'
-                   ' to see their status.') % event.jid)
+            text=_('The contact "%(jid)s" has authorized you'
+                   ' to see their status.') % {'jid': event.jid})
 
     def show_unsubscribed_dialog(self, account, contact):
         def _remove():
@@ -328,7 +365,7 @@ class Interface:
 
         name = contact.get_shown_name()
         jid = contact.jid
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('Subscription Removed'),
             _('%(name)s (%(jid)s) has removed subscription from you') % {
                 'name': name, 'jid': jid},
@@ -377,28 +414,30 @@ class Interface:
                         'jid': event.from_})
 
     def handle_event_gc_invitation(self, event):
-        if helpers.allow_popup_window(event.account) or not self.systray_enabled:
-            InvitationReceivedDialog(event.account, event)
+        event = events.GcInvitationtEvent(event)
+
+        if (helpers.allow_popup_window(event.account) or
+                not self.systray_enabled):
+            open_window('GroupChatInvitation',
+                        account=event.account,
+                        event=event)
             return
 
-        from_ = str(event.from_)
-        muc = str(event.muc)
-
-        event_ = events.GcInvitationtEvent(event)
-        self.add_event(event.account, from_, event_)
+        self.add_event(event.account, str(event.from_), event)
 
         if helpers.allow_showing_notification(event.account):
+            contact_name = event.get_inviter_name()
             event_type = _('Group Chat Invitation')
-            text = _('You are invited to {room} by {user}').format(room=muc,
-                                                                   user=from_)
+            text = _('%(contact)s invited you to %(chat)s') % {
+                'contact': contact_name, 'chat': event.info.muc_name}
             app.notification.popup(event_type,
-                                   from_,
+                                   str(event.from_),
                                    event.account,
                                    'gc-invitation',
                                    'gajim-gc_invitation',
                                    event_type,
                                    text,
-                                   room_jid=muc)
+                                   room_jid=event.muc)
 
     @staticmethod
     def handle_event_client_cert_passphrase(obj):
@@ -423,7 +462,7 @@ class Interface:
         text = _('Enter your password for account %s') % account
 
         def on_ok(passphrase, save):
-            app.config.set_per('accounts', account, 'savepass', save)
+            app.settings.set_account_setting(account, 'savepass', save)
             passwords.save_password(account, passphrase)
             obj.on_password(passphrase)
             del self.pass_dialog[account]
@@ -665,7 +704,7 @@ class Interface:
         ft = self.instances['file_transfers']
         if helpers.allow_popup_window(account):
             if file_props.error == 0:
-                if app.config.get('notify_on_file_complete'):
+                if app.settings.get('notify_on_file_complete'):
                     ft.show_completed(jid, file_props)
             elif file_props.error == -1:
                 ft.show_stopped(
@@ -692,7 +731,7 @@ class Interface:
         msg_type = ''
         event_type = ''
         if (file_props.error == 0 and
-                app.config.get('notify_on_file_complete')):
+                app.settings.get('notify_on_file_complete')):
             event_class = events.FileCompletedEvent
             msg_type = 'file-completed'
             event_type = _('File Transfer Completed')
@@ -773,8 +812,8 @@ class Interface:
             txt = ''
             icon_name = None
 
-        if (app.config.get('notify_on_file_complete') and
-                (app.config.get('autopopupaway') or
+        if (app.settings.get('notify_on_file_complete') and
+                (app.settings.get('autopopupaway') or
                 app.connections[account].status in ('online', 'chat'))):
             # We want to be notified and we are online/chat or we don't mind
             # to be bugged when away/na/busy
@@ -795,7 +834,7 @@ class Interface:
         # block signed in notifications for 30 seconds
 
         # Add our own JID into the DB
-        app.logger.insert_jid(obj.conn.get_own_jid().getStripped())
+        app.storage.archive.insert_jid(obj.conn.get_own_jid().bare)
         account = obj.conn.name
         app.block_signed_in_notifications[account] = True
 
@@ -806,37 +845,67 @@ class Interface:
 
         # enable location listener
         if (pep_supported and app.is_installed('GEOCLUE') and
-                app.config.get_per('accounts', account, 'publish_location')):
+                app.settings.get_account_setting(account, 'publish_location')):
             location.enable()
 
-    @staticmethod
-    def show_httpupload_progress(transfer):
-        FileTransferProgress(transfer)
+        if ask_for_status_message(obj.conn.status, signin=True):
+            open_window('StatusChange', status=obj.conn.status)
 
-    def send_httpupload(self, chat_control):
+    def send_httpupload(self, chat_control, path=None):
+        if path is not None:
+            self._send_httpupload(chat_control, path)
+            return
+
         accept_cb = partial(self.on_file_dialog_ok, chat_control)
         FileChooserDialog(accept_cb,
                           select_multiple=True,
                           transient_for=chat_control.parent_win.window)
 
-    @staticmethod
-    def on_file_dialog_ok(chat_control, paths):
-        con = app.connections[chat_control.account]
+    def on_file_dialog_ok(self, chat_control, paths):
         for path in paths:
-            con.get_module('HTTPUpload').check_file_before_transfer(
+            self._send_httpupload(chat_control, path)
+
+    def _send_httpupload(self, chat_control, path):
+        con = app.connections[chat_control.account]
+        try:
+            transfer = con.get_module('HTTPUpload').make_transfer(
                 path,
                 chat_control.encryption,
                 chat_control.contact,
                 chat_control.is_groupchat)
+        except FileError as error:
+            app.nec.push_incoming_event(InformationEvent(
+                None, dialog_name='open-file-error2', args=error))
+            return
 
-    def encrypt_file(self, transfer, account, callback):
-        transfer.set_encrypting()
-        plugin = app.plugin_manager.encryption_plugins[transfer.encryption]
-        if hasattr(plugin, 'encrypt_file'):
-            plugin.encrypt_file(transfer, account, callback)
-        else:
-            transfer.set_error()
-            self.raise_dialog('httpupload-encryption-not-available')
+        transfer.connect('cancel', self._on_cancel_upload)
+        transfer.connect('state-changed',
+                         self._on_http_upload_state_changed)
+        FileTransferProgress(transfer)
+        con.get_module('HTTPUpload').start_transfer(transfer)
+
+    @staticmethod
+    def _on_http_upload_state_changed(transfer, _signal_name, state):
+        if state.is_finished:
+            uri = transfer.get_transformed_uri()
+
+            type_ = 'chat'
+            if transfer.is_groupchat:
+                type_ = 'groupchat'
+
+            message = OutgoingMessage(account=transfer.account,
+                                      contact=transfer.contact,
+                                      message=uri,
+                                      type_=type_,
+                                      oob_url=uri)
+
+            client = app.get_client(transfer.account)
+            client.send_message(message)
+
+    @staticmethod
+    def _on_cancel_upload(transfer, _signal_name):
+        client = app.get_client(transfer.account)
+        client.get_module('HTTPUpload').cancel_transfer(transfer)
 
     @staticmethod
     def handle_event_metacontacts(obj):
@@ -844,7 +913,7 @@ class Interface:
 
     def handle_event_zc_name_conflict(self, obj):
         def _on_ok(new_name):
-            app.config.set_per('accounts', obj.conn.name, 'name', new_name)
+            app.settings.set_account_setting(obj.conn.name, 'name', new_name)
             obj.conn.username = new_name
             obj.conn.change_status(obj.conn.status, obj.conn.status_message)
 
@@ -875,14 +944,16 @@ class Interface:
         ft.show_stopped(obj.jid, file_props, 'Peer cancelled ' +
                             'the transfer')
 
-    def handle_event_jingle_incoming(self, obj):
+    # Jingle AV handling
+    def handle_event_jingle_incoming(self, event):
         # ('JINGLE_INCOMING', account, peer jid, sid, tuple-of-contents==(type,
         # data...))
         # TODO: conditional blocking if peer is not in roster
 
-        account = obj.conn.name
-        content_types = [obj.contents.media]
-
+        account = event.conn.name
+        content_types = []
+        for item in event.contents:
+            content_types.append(item.media)
         # check type of jingle session
         if 'audio' in content_types or 'video' in content_types:
             # a voip session...
@@ -893,74 +964,106 @@ class Interface:
             # unknown session type... it should be declined in common/jingle.py
             return
 
-        ctrl = (self.msg_win_mgr.get_control(obj.fjid, account)
-            or self.msg_win_mgr.get_control(obj.jid, account))
+        notification_event = events.JingleIncomingEvent(
+            event.fjid, event.sid, content_types)
+
+        ctrl = (self.msg_win_mgr.get_control(event.fjid, account)
+                or self.msg_win_mgr.get_control(event.jid, account))
         if ctrl:
             if 'audio' in content_types:
-                ctrl.set_audio_state('connection_received', obj.sid)
+                ctrl.set_jingle_state(
+                    'audio',
+                    JingleState.CONNECTION_RECEIVED,
+                    event.sid)
             if 'video' in content_types:
-                ctrl.set_video_state('connection_received', obj.sid)
-
-        dlg = dialogs.VoIPCallReceivedDialog.get_dialog(obj.fjid, obj.sid)
-        if dlg:
-            dlg.add_contents(content_types)
-            return
+                ctrl.set_jingle_state(
+                    'video',
+                    JingleState.CONNECTION_RECEIVED,
+                    event.sid)
+            ctrl.add_call_received_message(notification_event)
 
         if helpers.allow_popup_window(account):
-            dialogs.VoIPCallReceivedDialog(account, obj.fjid, obj.sid,
-                content_types)
+            app.interface.new_chat_from_jid(account, event.fjid)
+            ctrl.add_call_received_message(notification_event)
             return
 
-        event = events.JingleIncomingEvent(obj.fjid, obj.sid, content_types)
-        self.add_event(account, obj.jid, event)
+        self.add_event(account, event.fjid, notification_event)
 
         if helpers.allow_showing_notification(account):
-            # TODO: we should use another pixmap ;-)
-            txt = _('%s wants to start a voice chat.') % \
-                app.get_name_from_jid(account, obj.fjid)
-            event_type = _('Voice Chat Request')
+            heading = _('Incoming Call')
+            contact = app.get_name_from_jid(account, event.jid)
+            text = _('%s is calling') % contact
             app.notification.popup(
-                event_type, obj.fjid, account, 'jingle-incoming',
-                icon_name='call-start-symbolic', title=event_type, text=txt)
+                heading,
+                event.fjid,
+                account,
+                'jingle-incoming',
+                icon_name='call-start-symbolic',
+                title=heading,
+                text=text)
 
-    def handle_event_jingle_connected(self, obj):
+    def handle_event_jingle_connected(self, event):
         # ('JINGLE_CONNECTED', account, (peerjid, sid, media))
-        if obj.media in ('audio', 'video'):
-            account = obj.conn.name
-            ctrl = (self.msg_win_mgr.get_control(obj.fjid, account)
-                or self.msg_win_mgr.get_control(obj.jid, account))
+        if event.media in ('audio', 'video'):
+            account = event.conn.name
+            ctrl = (self.msg_win_mgr.get_control(event.fjid, account)
+                    or self.msg_win_mgr.get_control(event.jid, account))
             if ctrl:
-                if obj.media == 'audio':
-                    ctrl.set_audio_state('connected', obj.sid)
-                else:
-                    ctrl.set_video_state('connected', obj.sid)
+                con = app.connections[account]
+                session = con.get_module('Jingle').get_jingle_session(
+                    event.fjid, event.sid)
 
-    def handle_event_jingle_disconnected(self, obj):
+                if event.media == 'audio':
+                    content = session.get_content('audio')
+                    ctrl.set_jingle_state(
+                        'audio',
+                        JingleState.CONNECTED,
+                        event.sid)
+                if event.media == 'video':
+                    content = session.get_content('video')
+                    ctrl.set_jingle_state(
+                        'video',
+                        JingleState.CONNECTED,
+                        event.sid)
+
+                # Now, accept the content/sessions.
+                # This should be done after the chat control is running
+                if not session.accepted:
+                    session.approve_session()
+                for content in event.media:
+                    session.approve_content(content)
+
+    def handle_event_jingle_disconnected(self, event):
         # ('JINGLE_DISCONNECTED', account, (peerjid, sid, reason))
-        account = obj.conn.name
-        ctrl = (self.msg_win_mgr.get_control(obj.fjid, account)
-            or self.msg_win_mgr.get_control(obj.jid, account))
+        account = event.conn.name
+        ctrl = (self.msg_win_mgr.get_control(event.fjid, account)
+                or self.msg_win_mgr.get_control(event.jid, account))
         if ctrl:
-            if obj.media is None:
-                ctrl.stop_jingle(sid=obj.sid, reason=obj.reason)
-            elif obj.media == 'audio':
-                ctrl.set_audio_state('stop', sid=obj.sid, reason=obj.reason)
-            elif obj.media == 'video':
-                ctrl.set_video_state('stop', sid=obj.sid, reason=obj.reason)
-        dialog = dialogs.VoIPCallReceivedDialog.get_dialog(obj.fjid, obj.sid)
-        if dialog:
-            if obj.media is None:
-                dialog.dialog.destroy()
-            else:
-                dialog.remove_contents((obj.media, ))
+            if event.media is None:
+                ctrl.stop_jingle(sid=event.sid, reason=event.reason)
+            if event.media == 'audio':
+                ctrl.set_jingle_state(
+                    'audio',
+                    JingleState.NULL,
+                    sid=event.sid,
+                    reason=event.reason)
+            if event.media == 'video':
+                ctrl.set_jingle_state(
+                    'video',
+                    JingleState.NULL,
+                    sid=event.sid,
+                    reason=event.reason)
 
-    def handle_event_jingle_error(self, obj):
+    def handle_event_jingle_error(self, event):
         # ('JINGLE_ERROR', account, (peerjid, sid, reason))
-        account = obj.conn.name
-        ctrl = (self.msg_win_mgr.get_control(obj.fjid, account)
-            or self.msg_win_mgr.get_control(obj.jid, account))
-        if ctrl and obj.sid == ctrl.jingle['audio'].sid:
-            ctrl.set_audio_state('error', reason=obj.reason)
+        account = event.conn.name
+        ctrl = (self.msg_win_mgr.get_control(event.fjid, account)
+                or self.msg_win_mgr.get_control(event.jid, account))
+        if ctrl and event.sid == ctrl.jingle['audio'].sid:
+            ctrl.set_jingle_state(
+                'audio',
+                JingleState.ERROR,
+                reason=event.reason)
 
     @staticmethod
     def handle_event_roster_item_exchange(obj):
@@ -969,7 +1072,7 @@ class Interface:
                                  obj.exchange_items_list, obj.fjid)
 
     def handle_event_plain_connection(self, event):
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('Insecure Connection'),
             _('Insecure Connection'),
             _('You are about to connect to the account %(account)s '
@@ -1023,6 +1126,7 @@ class Interface:
             'unsubscribed-presence-received': [
                 self.handle_event_unsubscribed_presence],
             'zeroconf-name-conflict': [self.handle_event_zc_name_conflict],
+            'read-state-sync': [self.handle_event_read_state_sync],
         }
 
     def register_core_handlers(self):
@@ -1163,7 +1267,9 @@ class Interface:
             event = app.events.get_first_event(account, jid, type_)
             if event is None:
                 return
-            InvitationReceivedDialog(account, event)
+            open_window('GroupChatInvitation',
+                        account=account,
+                        event=event)
             app.events.remove_events(account, jid, event)
             self.roster.draw_contact(jid, account)
         elif type_ == 'subscription_request':
@@ -1271,7 +1377,7 @@ class Interface:
         # detects eg. *b* *bold* *bold bold* test *bold* *bold*! (*bold*)
         # doesn't detect (it's a feature :P) * bold* *bold * * bold * test*bold*
         formatting = r'|(?<!\w)' r'\*[^\s*]' r'([^*]*[^\s*])?' r'\*(?!\w)|'\
-            r'(?<!\S)' r'/[^\s/]' r'([^/]*[^\s/])?' r'/(?!\S)|'\
+            r'(?<!\S)' r'~[^\s~]' r'([^~]*[^\s~])?' r'~(?!\S)|'\
             r'(?<!\w)' r'_[^\s_]' r'([^_]*[^\s_])?' r'_(?!\w)'
 
         basic_pattern = links + '|' + mail + '|' + legacy_prefixes
@@ -1279,14 +1385,14 @@ class Interface:
         link_pattern = basic_pattern
         self.link_pattern_re = re.compile(link_pattern, re.I | re.U)
 
-        if app.config.get('ascii_formatting'):
+        if app.settings.get('ascii_formatting'):
             basic_pattern += formatting
         self.basic_pattern = basic_pattern
 
         # because emoticons match later (in the string) they need to be after
         # basic matches that may occur earlier
         emoticons = emoji_data.get_regex()
-        if app.config.get('ascii_emoticons'):
+        if app.settings.get('ascii_emoticons'):
             emoticons += '|%s' % emoji_ascii_data.get_regex()
 
         self.emot_and_basic = '%s|%s' % (basic_pattern, emoticons)
@@ -1318,7 +1424,7 @@ class Interface:
 
     def create_groupchat_control(self, account, room_jid, muc_data,
                                  minimize=False):
-        avatar_sha = app.logger.get_muc_avatar_sha(room_jid)
+        avatar_sha = app.storage.cache.get_muc_avatar_sha(room_jid)
         contact = app.contacts.create_contact(jid=room_jid,
                                               account=account,
                                               groups=[_('Group chats')],
@@ -1343,23 +1449,21 @@ class Interface:
             mw.set_active_tab(control)
 
     @staticmethod
-    def _create_muc_data(account, room_jid, password, config):
-        nick = app.nicks[account]
+    def _create_muc_data(account, room_jid, nick, password, config):
+        if not nick:
+            nick = get_group_chat_nick(account, room_jid)
 
         # Fetch data from bookmarks
-        con = app.connections[account]
-        bookmark = con.get_module('Bookmarks').get_bookmark(room_jid)
+        client = app.get_client(account)
+        bookmark = client.get_module('Bookmarks').get_bookmark(room_jid)
         if bookmark is not None:
-            if bookmark.nick is not None:
-                nick = bookmark.nick
-
             if bookmark.password is not None:
                 password = bookmark.password
 
         return MUCData(room_jid, nick, password, config)
 
     def create_groupchat(self, account, room_jid, config=None):
-        muc_data = self._create_muc_data(account, room_jid, None, config)
+        muc_data = self._create_muc_data(account, room_jid, None, None, config)
         self.create_groupchat_control(account, room_jid, muc_data)
         app.connections[account].get_module('MUC').create(muc_data)
 
@@ -1368,11 +1472,21 @@ class Interface:
             return
         self.join_groupchat(account, room_jid, **kwargs)
 
-    def join_groupchat(self, account, room_jid, password=None, minimized=False):
+    def join_groupchat(self,
+                       account,
+                       room_jid,
+                       password=None,
+                       nick=None,
+                       minimized=False):
+
         if not app.account_is_available(account):
             return
 
-        muc_data = self._create_muc_data(account, room_jid, password, None)
+        muc_data = self._create_muc_data(account,
+                                         room_jid,
+                                         nick,
+                                         password,
+                                         None)
         self.create_groupchat_control(
             account, room_jid, muc_data, minimize=minimized)
 
@@ -1542,9 +1656,9 @@ class Interface:
             config['custom_host'] = host
             config['custom_type'] = type_.value
 
-        app.config.add_per('accounts', account)
+        app.settings.add_account(account)
         for opt in config:
-            app.config.set_per('accounts', account, opt, config[opt])
+            app.settings.set_account_setting(account, opt, config[opt])
 
         # Password module depends on existing config
         passwords.save_password(account, password)
@@ -1582,20 +1696,20 @@ class Interface:
         if account == app.ZEROCONF_ACC_NAME:
             app.nicks[account] = app.ZEROCONF_ACC_NAME
         else:
-            app.nicks[account] = app.config.get_per(
-                'accounts', account, 'name')
+            app.nicks[account] = app.settings.get_account_setting(account,
+                                                                  'name')
         app.block_signed_in_notifications[account] = True
         app.last_message_time[account] = {}
         # refresh roster
         if len(app.connections) >= 2:
             # Do not merge accounts if only one exists
-            self.roster.regroup = app.config.get('mergeaccounts')
+            self.roster.regroup = app.settings.get('mergeaccounts')
         else:
             self.roster.regroup = False
         self.roster.setup_and_draw_roster()
         gui_menu_builder.build_accounts_menu()
         self.roster.send_status(account, 'online', '')
-        app.config.set_per('accounts', account, 'active', True)
+        app.settings.set_account_setting(account, 'active', True)
         app.app.update_app_actions_state()
         window = get_app_window('AccountsWindow')
         if window is not None:
@@ -1608,7 +1722,10 @@ class Interface:
             ctrl.shutdown()
 
         for win in get_app_windows(account):
-            # Close all account specific windows
+            # Close all account specific windows, except the RemoveAccount
+            # dialog. It shows if the removal was successful.
+            if type(win).__name__ == 'RemoveAccount':
+                continue
             win.destroy()
 
         if account == app.ZEROCONF_ACC_NAME:
@@ -1628,25 +1745,25 @@ class Interface:
         del app.last_message_time[account]
         if len(app.connections) >= 2:
             # Do not merge accounts if only one exists
-            self.roster.regroup = app.config.get('mergeaccounts')
+            self.roster.regroup = app.settings.get('mergeaccounts')
         else:
             self.roster.regroup = False
-        app.config.set_per(
-            'accounts', account, 'roster_version', '')
+        app.settings.set_account_setting(account, 'roster_version', '')
         self.roster.setup_and_draw_roster()
+        self.roster.update_status_selector()
         gui_menu_builder.build_accounts_menu()
-        app.config.set_per('accounts', account, 'active', False)
+        app.settings.set_account_setting(account, 'active', False)
         app.app.update_app_actions_state()
 
     def remove_account(self, account):
-        if app.config.get_per('accounts', account, 'active'):
+        if app.settings.get_account_setting(account, 'active'):
             self.disable_account(account)
 
-        app.logger.remove_roster(app.get_jid_from_account(account))
+        app.storage.cache.remove_roster(account)
         # Delete password must be before del_per() because it calls set_per()
         # which would recreate the account with defaults values if not found
         passwords.delete_password(account)
-        app.config.del_per('accounts', account)
+        app.settings.remove_account(account)
         app.app.remove_account_actions(account)
 
         window = get_app_window('AccountsWindow')
@@ -1657,31 +1774,57 @@ class Interface:
         """
         Auto connect at startup
         """
-        # dict of account that want to connect sorted by status
-        shows = {}
-        for a in app.connections:
-            if app.config.get_per('accounts', a, 'autoconnect'):
-                if app.config.get_per('accounts', a, 'restore_last_status'):
-                    self.roster.send_status(a, app.config.get_per('accounts',
-                        a, 'last_status'), helpers.from_one_line(
-                        app.config.get_per('accounts', a, 'last_status_msg')))
-                    continue
-                show = app.config.get_per('accounts', a, 'autoconnect_as')
-                if show not in ['online', 'chat', 'away', 'xa', 'dnd']:
-                    continue
-                if show not in shows:
-                    shows[show] = [a]
-                else:
-                    shows[show].append(a)
-        def on_message(message, pep_dict):
-            if message is None:
-                return
-            for a in shows[show]:
-                self.roster.send_status(a, show, message)
-                self.roster.send_pep(a, pep_dict)
-        for show in shows:
-            self.roster.get_status_message(show, on_message)
-        return False
+
+        for account in app.connections:
+            if not app.settings.get_account_setting(account, 'autoconnect'):
+                continue
+
+            status = 'online'
+            status_message = ''
+
+            if app.settings.get_account_setting(account, 'restore_last_status'):
+                status = app.settings.get_account_setting(account, 'last_status')
+                status_message = app.settings.get_account_setting(
+                    account, 'last_status_msg')
+                status_message = helpers.from_one_line(status_message)
+
+            self.roster.send_status(account, status, status_message)
+
+    def change_status(self, status=None):
+        # status=None means we want to change the message only
+
+        ask = ask_for_status_message(status)
+
+        if status is None:
+            status = helpers.get_global_show()
+
+        if ask:
+            open_window('StatusChange', status=status)
+            return
+
+        for account in app.connections:
+            if not app.settings.get_account_setting(account,
+                                                    'sync_with_global_status'):
+                continue
+
+            message = app.get_client(account).status_message
+            self.roster.send_status(account, status, message)
+
+    def change_account_status(self, account, status=None):
+        # status=None means we want to change the message only
+
+        ask = ask_for_status_message(status)
+
+        client = app.get_client(account)
+        if status is None:
+            status = client.status
+
+        if ask:
+            open_window('StatusChange', status=status, account=account)
+            return
+
+        message = client.status_message
+        self.roster.send_status(account, status, message)
 
     def show_systray(self):
         if not app.is_display(Display.WAYLAND):
@@ -1722,12 +1865,7 @@ class Interface:
 
     @staticmethod
     def save_config():
-        if parser.write():
-            return
-
-        error_dialog = ErrorDialog(
-            _('Could not save your settings and preferences'))
-        error_dialog.run()
+        app.settings.save()
 
     def update_avatar(self, account=None, jid=None,
                       contact=None, room_avatar=False):
@@ -1822,42 +1960,49 @@ class Interface:
                     connection.disconnect(gracefully=False, reconnect=True)
 
     def create_zeroconf_default_config(self):
-        if app.config.get_per('accounts', app.ZEROCONF_ACC_NAME, 'name'):
+        if app.settings.get_account_setting(app.ZEROCONF_ACC_NAME, 'name'):
             return
         log.info('Creating zeroconf account')
-        app.config.add_per('accounts', app.ZEROCONF_ACC_NAME)
-        app.config.set_per('accounts', app.ZEROCONF_ACC_NAME,
-                'autoconnect', True)
-        app.config.set_per('accounts', app.ZEROCONF_ACC_NAME, 'no_log_for',
-                '')
-        app.config.set_per('accounts', app.ZEROCONF_ACC_NAME, 'password',
-                'zeroconf')
-        app.config.set_per('accounts', app.ZEROCONF_ACC_NAME,
-                'sync_with_global_status', True)
-
-        app.config.set_per('accounts', app.ZEROCONF_ACC_NAME,
-                'custom_port', 5298)
-        app.config.set_per('accounts', app.ZEROCONF_ACC_NAME,
-                'is_zeroconf', True)
-        app.config.set_per('accounts', app.ZEROCONF_ACC_NAME,
-                'use_ft_proxies', False)
-        app.config.set_per('accounts', app.ZEROCONF_ACC_NAME,
-                'active', False)
+        app.settings.add_account(app.ZEROCONF_ACC_NAME)
+        app.settings.set_account_setting(app.ZEROCONF_ACC_NAME,
+                                         'autoconnect',
+                                         True)
+        app.settings.set_account_setting(app.ZEROCONF_ACC_NAME,
+                                         'no_log_for',
+                                         '')
+        app.settings.set_account_setting(app.ZEROCONF_ACC_NAME,
+                                         'password',
+                                         'zeroconf')
+        app.settings.set_account_setting(app.ZEROCONF_ACC_NAME,
+                                         'sync_with_global_status',
+                                         True)
+        app.settings.set_account_setting(app.ZEROCONF_ACC_NAME,
+                                         'custom_port',
+                                         5298)
+        app.settings.set_account_setting(app.ZEROCONF_ACC_NAME,
+                                         'is_zeroconf',
+                                         True)
+        app.settings.set_account_setting(app.ZEROCONF_ACC_NAME,
+                                         'use_ft_proxies',
+                                         False)
+        app.settings.set_account_setting(app.ZEROCONF_ACC_NAME,
+                                         'active',
+                                         False)
 
     def check_for_updates(self):
-        if not app.config.get('check_for_update'):
+        if not app.settings.get('check_for_update'):
             return
 
         now = datetime.now()
-        last_check = app.config.get('last_update_check')
+        last_check = app.settings.get('last_update_check')
         if not last_check:
             def _on_cancel():
-                app.config.set('check_for_update', False)
+                app.settings.set('check_for_update', False)
 
             def _on_check():
                 self._get_latest_release()
 
-            NewConfirmationDialog(
+            ConfirmationDialog(
                 _('Update Check'),
                 _('Gajim Update Check'),
                 _('Search for Gajim updates periodically?'),
@@ -1884,7 +2029,7 @@ class Interface:
 
     def _on_update_checked(self, _session, message):
         now = datetime.now()
-        app.config.set('last_update_check', now.strftime('%Y-%m-%d %H:%M'))
+        app.settings.set('last_update_check', now.strftime('%Y-%m-%d %H:%M'))
 
         body = message.props.response_body.data
         if not body:
@@ -1897,18 +2042,18 @@ class Interface:
         if V(latest_version) > V(app.version):
             def _on_cancel(is_checked):
                 if is_checked:
-                    app.config.set('check_for_update', False)
+                    app.settings.set('check_for_update', False)
 
             def _on_update(is_checked):
                 if is_checked:
-                    app.config.set('check_for_update', False)
+                    app.settings.set('check_for_update', False)
                 helpers.open_uri('https://gajim.org/download')
 
-            NewConfirmationCheckDialog(
+            ConfirmationCheckDialog(
                 _('Update Available'),
                 _('Gajim Update Available'),
                 _('There is an update available for Gajim '
-                  '(latest version: %s)' % str(latest_version)),
+                  '(latest version: %s)') % str(latest_version),
                 _('_Do not show again'),
                 [DialogButton.make('Cancel',
                                     text=_('_Later'),
@@ -1920,7 +2065,7 @@ class Interface:
             log.info('Gajim is up to date')
 
     def run(self, application):
-        if app.config.get('trayicon') != 'never':
+        if app.settings.get('trayicon') != 'never':
             self.show_systray()
 
         self.roster = roster_window.RosterWindow(application)
@@ -1953,7 +2098,7 @@ class Interface:
             GLib.timeout_add(timeout, self.process_connections)
 
         def remote_init():
-            if app.config.get('remote_control'):
+            if app.settings.get('remote_control'):
                 try:
                     from gajim import remote_control
                     remote_control.GajimRemote()
@@ -1984,51 +2129,15 @@ class Interface:
 
         self.avatar_storage = AvatarStorage()
 
-        parser.read()
-
         # Load CSS files
         app.load_css_config()
 
-        app.logger.reset_shown_unread_messages()
-        # override logging settings from config (don't take care of '-q' option)
-        if app.config.get('verbose'):
-            logging_helpers.set_verbose()
+        app.storage.archive.reset_shown_unread_messages()
 
-        for account in app.config.get_per('accounts'):
-            if app.config.get_per('accounts', account, 'is_zeroconf'):
+        for account in app.settings.get_accounts():
+            if app.settings.get_account_setting(account, 'is_zeroconf'):
                 app.ZEROCONF_ACC_NAME = account
                 break
-
-        # add default status messages if there is not in the config file
-        if not app.config.get_per('statusmsg'):
-            default = app.config.statusmsg_default
-            for msg in default:
-                app.config.add_per('statusmsg', msg)
-                app.config.set_per('statusmsg', msg, 'message',
-                    default[msg][0])
-                app.config.set_per('statusmsg', msg, 'activity',
-                    default[msg][1])
-                app.config.set_per('statusmsg', msg, 'subactivity',
-                    default[msg][2])
-                app.config.set_per('statusmsg', msg, 'activity_text',
-                    default[msg][3])
-                app.config.set_per('statusmsg', msg, 'mood',
-                    default[msg][4])
-                app.config.set_per('statusmsg', msg, 'mood_text',
-                    default[msg][5])
-
-        # Add Tor proxy if there is not in the config
-        if not app.config.get_per('proxies'):
-            default = app.config.proxies_default
-            for proxy in default:
-                app.config.add_per('proxies', proxy)
-                app.config.set_per('proxies', proxy, 'type',
-                    default[proxy][0])
-                app.config.set_per('proxies', proxy, 'host',
-                    default[proxy][1])
-                app.config.set_per('proxies', proxy, 'port',
-                    default[proxy][2])
-
 
         app.idlequeue = idlequeue.get_idlequeue()
         # resolve and keep current record of resolved hosts
@@ -2048,14 +2157,14 @@ class Interface:
         self.register_core_handlers()
 
         # self.create_zeroconf_default_config()
-        # if app.config.get_per('accounts', app.ZEROCONF_ACC_NAME, 'active') \
+        # if app.settings.get_account_setting(app.ZEROCONF_ACC_NAME, 'active') \
         # and app.is_installed('ZEROCONF'):
         #     app.connections[app.ZEROCONF_ACC_NAME] = \
         #         connection_zeroconf.ConnectionZeroconf(app.ZEROCONF_ACC_NAME)
 
-        for account in app.config.get_per('accounts'):
-            if not app.config.get_per('accounts', account, 'is_zeroconf') and\
-            app.config.get_per('accounts', account, 'active'):
+        for account in app.settings.get_accounts():
+            if (not app.settings.get_account_setting(account, 'is_zeroconf') and
+                    app.settings.get_account_setting(account, 'active')):
                 app.connections[account] = Client(account)
 
         self.instances = {}
@@ -2070,7 +2179,7 @@ class Interface:
             app.automatic_rooms[a] = {}
             app.newly_added[a] = []
             app.to_be_removed[a] = []
-            app.nicks[a] = app.config.get_per('accounts', a, 'name')
+            app.nicks[a] = app.settings.get_account_setting(a, 'name')
             app.block_signed_in_notifications[a] = True
             app.last_message_time[a] = {}
 
@@ -2080,22 +2189,20 @@ class Interface:
         else:
             GLib.timeout_add_seconds(20, self.check_for_updates)
 
-        idle.Monitor.set_interval(app.config.get('autoawaytime') * 60,
-                                  app.config.get('autoxatime') * 60)
+        idle.Monitor.set_interval(app.settings.get('autoawaytime') * 60,
+                                  app.settings.get('autoxatime') * 60)
 
         self.systray_enabled = False
 
         if not app.is_display(Display.WAYLAND):
-            from gajim.gtk import statusicon
+            from gajim.gui import statusicon
             self.systray = statusicon.StatusIcon()
 
-        # Init emoji_chooser
-        from gajim.gtk.emoji_chooser import emoji_chooser
-        emoji_chooser.load()
-        self.make_regexps()
+        if sys.platform in ('win32', 'darwin'):
+            from gajim.gui.emoji_chooser import emoji_chooser
+            emoji_chooser.load()
 
-        # get transports type from DB
-        app.transport_type = app.logger.get_transports_type()
+        self.make_regexps()
 
         self.last_ftwindow_update = 0
 

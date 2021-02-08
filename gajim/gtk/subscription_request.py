@@ -20,8 +20,8 @@ from gajim import vcard
 from gajim.common import app
 from gajim.common.i18n import _
 
-from gajim.gtk.add_contact import AddNewContactWindow
-from gajim.gtk.util import get_builder
+from .add_contact import AddNewContactWindow
+from .util import get_builder
 
 
 class SubscriptionRequest(Gtk.ApplicationWindow):
@@ -104,12 +104,14 @@ class SubscriptionRequest(Gtk.ApplicationWindow):
         self._remove_contact()
 
     def _on_block_clicked(self, _widget):
+        app.events.remove_events(self.account, self.jid)
         self._deny_request()
         con = app.connections[self.account]
         con.get_module('Blocking').block([self.jid])
         self._remove_contact()
 
     def _on_report_clicked(self, _widget):
+        app.events.remove_events(self.account, self.jid)
         self._deny_request()
         con = app.connections[self.account]
         con.get_module('Blocking').block([self.jid], report='spam')

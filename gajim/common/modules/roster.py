@@ -45,8 +45,7 @@ class Roster(BaseModule):
 
     def load_roster(self):
         self._log.info('Load from database')
-        account_jid = self._con.get_own_jid().getStripped()
-        data = app.logger.get_roster(account_jid)
+        data = app.storage.cache.load_roster(self._account)
         if data:
             self.set_raw(data)
             for jid, item in self._data.items():
@@ -62,8 +61,8 @@ class Roster(BaseModule):
                     avatar_sha=item['avatar_sha']))
         else:
             self._log.info('Database empty, reset roster version')
-            app.config.set_per(
-                'accounts', self._account, 'roster_version', '')
+            app.settings.set_account_setting(
+                self._account, 'roster_version', '')
 
         app.nec.push_incoming_event(NetworkEvent(
             'roster-received',
@@ -71,12 +70,15 @@ class Roster(BaseModule):
             roster=self._data.copy(),
             received_from_server=False))
 
+    def _store_roster(self):
+        app.storage.cache.store_roster(self._account, self._data)
+
     def request_roster(self):
         version = None
         features = self._con.connection.features
         if features.has_roster_version:
-            version = app.config.get_per(
-                'accounts', self._account, 'roster_version')
+            version = app.settings.get_account_setting(self._account,
+                                                       'roster_version')
 
         self._log.info('Requested from server')
         iq = nbxmpp.Iq('get', Namespace.ROSTER)
@@ -99,7 +101,10 @@ class Roster(BaseModule):
                 version = self._parse_roster(stanza)
 
                 self._log.info('New version: %s', version)
-                app.logger.replace_roster(self._account, version, self._data)
+                self._store_roster()
+                app.settings.set_account_setting(self._account,
+                                                 'roster_version',
+                                                 version)
 
                 received_from_server = True
 
@@ -116,7 +121,7 @@ class Roster(BaseModule):
 
         sender = stanza.getFrom()
         if sender is not None:
-            if not self._con.get_own_jid().bareMatch(sender):
+            if not self._con.get_own_jid().bare_match(sender):
                 self._log.warning('Wrong JID %s', stanza.getFrom())
                 return
 
@@ -135,14 +140,13 @@ class Roster(BaseModule):
                 ask=attrs['ask'],
                 groups=attrs['groups'],
                 avatar_sha=None))
-            account_jid = self._con.get_own_jid().getStripped()
-            app.logger.add_or_update_contact(
-                account_jid, item.jid, attrs['name'],
-                attrs['subscription'], attrs['ask'], attrs['groups'])
+
+            self._store_roster()
 
         self._log.info('New version: %s', version)
-        app.config.set_per(
-            'accounts', self._account, 'roster_version', version)
+        app.settings.set_account_setting(self._account,
+                                         'roster_version',
+                                         version)
 
         raise nbxmpp.NodeProcessed
 
@@ -226,7 +230,7 @@ class Roster(BaseModule):
         if pres.getType() != 'subscribe':
             return
 
-        jid = pres.getFrom().getStripped()
+        jid = pres.getFrom().bare
 
         if jid in self._data:
             return
@@ -237,13 +241,8 @@ class Roster(BaseModule):
                            'subscription':
                            'none',
                            'groups': ['Not in contact list']}
-        account_jid = self._con.get_own_jid().getStripped()
-        app.logger.add_or_update_contact(
-            account_jid, jid,
-            self._data[jid]['name'],
-            self._data[jid]['subscription'],
-            self._data[jid]['ask'],
-            self._data[jid]['groups'])
+
+        self._store_roster()
 
     def _get_item_data(self, jid, dataname):
         """
@@ -357,7 +356,7 @@ class Roster(BaseModule):
         """
         Set the internal data representation of the roster
         """
-        own_jid = self._con.get_own_jid().getStripped()
+        own_jid = self._con.get_own_jid().bare
         self._data = data
         self._data[own_jid] = {
             'resources': {},
@@ -367,6 +366,13 @@ class Roster(BaseModule):
             'groups': None,
             'avatar_sha': None
         }
+
+    def set_avatar_sha(self, jid, sha):
+        if jid not in self._data:
+            return
+
+        self._data[jid]['avatar_sha'] = sha
+        self._store_roster()
 
 
 def get_instance(*args, **kwargs):

@@ -12,8 +12,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import sys
 import logging
 import weakref
 from collections import OrderedDict
@@ -27,10 +25,10 @@ from gajim.common import app
 from gajim.common import helpers
 from gajim.common import configpaths
 
-from gajim.gtk.util import get_builder
-from gajim.gtk.emoji_data import emoji_data
-from gajim.gtk.emoji_data import emoji_pixbufs
-from gajim.gtk.emoji_data import Emoji
+from .util import get_builder
+from .emoji_data import emoji_data
+from .emoji_data import emoji_pixbufs
+from .emoji_data import Emoji
 
 MODIFIER_MAX_CHILDREN_PER_LINE = 6
 MAX_CHILDREN_PER_LINE = 10
@@ -301,31 +299,25 @@ class EmojiChooser(Gtk.Popover):
 
     @staticmethod
     def _get_current_theme():
-        theme = app.config.get('emoticons_theme')
+        theme = app.settings.get('emoticons_theme')
         themes = helpers.get_available_emoticon_themes()
         if theme not in themes:
-            if sys.platform not in ('win32', 'darwin'):
-                app.config.set('emoticons_theme', 'font')
-                theme = 'font'
-            else:
-                # Win/Mac fallback to noto
-                app.config.set('emoticons_theme', 'noto')
-                theme = 'noto'
+            app.settings.set('emoticons_theme', 'noto')
+            theme = 'noto'
         return theme
 
     @staticmethod
     def _get_emoji_theme_path(theme):
         if theme == 'font':
             return 'font'
-        emoticons_data_path = os.path.join(configpaths.get('EMOTICONS'),
-                                           theme,
-                                           '%s.png' % theme)
-        if os.path.exists(emoticons_data_path):
+
+        base_path = configpaths.get('EMOTICONS')
+        emoticons_data_path = base_path / theme / f'{theme}.png'
+        if emoticons_data_path.exists():
             return emoticons_data_path
 
-        emoticons_user_path = os.path.join(configpaths.get('MY_EMOTS'),
-                                           '%s.png' % theme)
-        if os.path.exists(emoticons_user_path):
+        emoticons_user_path = configpaths.get('MY_EMOTS') / f'{theme}.png'
+        if emoticons_user_path.exists():
             return emoticons_user_path
 
         log.warning('Could not find emoji theme: %s', theme)
@@ -385,7 +377,7 @@ class EmojiChooser(Gtk.Popover):
     @staticmethod
     def _get_next_pixbuf(path):
         src_x = src_y = cur_column = 0
-        atlas = GdkPixbuf.Pixbuf.new_from_file(path)
+        atlas = GdkPixbuf.Pixbuf.new_from_file(str(path))
 
         while True:
             src_x = cur_column * Emoji.PARSE_WIDTH

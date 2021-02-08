@@ -15,18 +15,21 @@
 # XEP-0084: User Avatar
 
 from nbxmpp.namespaces import Namespace
-from nbxmpp.util import is_error_result
+from nbxmpp.modules.util import is_error
 
 from gajim.common import app
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import event_node
-
+from gajim.common.modules.util import as_task
 
 class UserAvatar(BaseModule):
 
     _nbxmpp_extends = 'UserAvatar'
     _nbxmpp_methods = [
-        'request_avatar'
+        'request_avatar_metadata',
+        'request_avatar_data',
+        'set_avatar',
+        'set_access_model'
     ]
 
     def __init__(self, con):
@@ -38,50 +41,53 @@ class UserAvatar(BaseModule):
         if properties.pubsub_event.retracted:
             return
 
-        data = properties.pubsub_event.data
+        metadata = properties.pubsub_event.data
         jid = str(properties.jid)
-        own_jid = self._con.get_own_jid().getBare()
 
-        if data is None:
-            # Remove avatar
-            self._log.info('Remove: %s', jid)
+        if metadata is None or not metadata.infos:
+            self._log.info('No avatar published: %s', jid)
             app.contacts.set_avatar(self._account, jid, None)
-            app.logger.set_avatar_sha(own_jid, jid, None)
+            self._con.get_module('Roster').set_avatar_sha(jid, None)
             app.interface.update_avatar(self._account, jid)
         else:
             if properties.is_self_message:
-                sha = app.config.get_per(
-                    'accounts', self._account, 'avatar_sha')
+                sha = app.settings.get_account_setting(self._account,
+                                                       'avatar_sha')
             else:
                 sha = app.contacts.get_avatar_sha(self._account, jid)
 
-            if sha == data.id:
-                self._log.info('Avatar already known: %s %s', jid, data.id)
+            if sha in metadata.avatar_shas:
+                self._log.info('Avatar already known: %s %s', jid, sha)
                 return
 
-            self._log.info('Request: %s %s', jid, data.id)
-            self._nbxmpp('UserAvatar').request_avatar(
-                jid, data.id, callback=self._avatar_received)
+            avatar_info = metadata.infos[0]
+            self._log.info('Request: %s %s', jid, avatar_info.id)
+            self._request_avatar_data(jid, avatar_info)
 
-    def _avatar_received(self, result):
-        if is_error_result(result):
-            self._log.info(result)
+    @as_task
+    def _request_avatar_data(self, jid, avatar_info):
+        _task = yield
+
+        avatar = yield self._nbxmpp('UserAvatar').request_avatar_data(
+            avatar_info.id, jid=jid)
+
+        if is_error(avatar):
+            self._log.warning(avatar)
             return
 
-        self._log.info('Received Avatar: %s %s', result.jid, result.sha)
-        app.interface.save_avatar(result.data)
+        self._log.info('Received Avatar: %s %s', jid, avatar.sha)
+        app.interface.save_avatar(avatar.data)
 
-        if self._con.get_own_jid().bareMatch(result.jid):
-            app.config.set_per('accounts',
-                               self._account,
-                               'avatar_sha',
-                               result.sha)
+        if self._con.get_own_jid().bare_match(jid):
+            app.settings.set_account_setting(self._account,
+                                             'avatar_sha',
+                                             avatar.sha)
         else:
-            own_jid = self._con.get_own_jid().getBare()
-            app.logger.set_avatar_sha(own_jid, str(result.jid), result.sha)
+            self._con.get_module('Roster').set_avatar_sha(
+                str(jid), avatar.sha)
 
-        app.contacts.set_avatar(self._account, str(result.jid), result.sha)
-        app.interface.update_avatar(self._account, str(result.jid))
+        app.contacts.set_avatar(self._account, str(jid), avatar.sha)
+        app.interface.update_avatar(self._account, str(jid))
 
 
 def get_instance(*args, **kwargs):

@@ -22,7 +22,7 @@ from enum import unique
 Filter = namedtuple('Filter', 'name pattern default')
 
 Setting = namedtuple('Setting', 'kind label type value name callback data desc '
-                                'enabledif enabled_func props')
+                                'bind inverted enabled_func props')
 Setting.__new__.__defaults__ = (None,) * len(Setting._fields)  # type: ignore
 
 @unique
@@ -33,6 +33,7 @@ class Theme(IntEnum):
 
 
 class GajimIconSet(Enum):
+    BRUNO = 'bruno'
     DCRAVEN = 'dcraven'
     GNOME = 'gnome'
     GOOJIM = 'goojim'
@@ -51,22 +52,28 @@ class SettingKind(IntEnum):
     LOGIN = 4
     DIALOG = 5
     CALLBACK = 6
-    PROXY = 7
     HOSTNAME = 8
     PRIORITY = 9
     FILECHOOSER = 10
     CHANGEPASSWORD = 11
     COMBO = 12
     COLOR = 13
+    POPOVER = 14
+    AUTO_AWAY = 15
+    AUTO_EXTENDED_AWAY = 16
+    USE_STUN_SERVER = 17
+    NOTIFICATIONS = 18
 
 
 @unique
 class SettingType(IntEnum):
-    ACCOUNT_CONFIG = 0
-    CONFIG = 1
-    VALUE = 2
-    ACTION = 3
-    DIALOG = 4
+    CONFIG = 0
+    ACCOUNT_CONFIG = 1
+    CONTACT = 2
+    GROUP_CHAT = 3
+    VALUE = 4
+    ACTION = 5
+    DIALOG = 6
 
 
 class ControlType(Enum):
@@ -91,34 +98,37 @@ class ControlType(Enum):
 
 
 WINDOW_MODULES = {
-    'AccountsWindow': 'gajim.gtk.accounts',
-    'HistorySyncAssistant': 'gajim.gtk.history_sync',
-    'ServerInfo': 'gajim.gtk.server_info',
-    'MamPreferences': 'gajim.gtk.mam_preferences',
-    'Preferences': 'gajim.gtk.preferences',
-    'CreateGroupchatWindow': 'gajim.gtk.groupchat_creation',
-    'StartChatDialog': 'gajim.gtk.start_chat',
-    'AddNewContactWindow': 'gajim.gtk.add_contact',
-    'SingleMessageWindow': 'gajim.gtk.single_message',
-    'Bookmarks': 'gajim.gtk.bookmarks',
-    'AccountWizard': 'gajim.gtk.account_wizard',
-    'HistoryWindow': 'gajim.gtk.history',
-    'ManageProxies': 'gajim.gtk.proxies',
-    'ServiceDiscoveryWindow': 'gajim.gtk.discovery',
-    'BlockingList': 'gajim.gtk.blocking',
-    'XMLConsoleWindow': 'gajim.gtk.xml_console',
-    'GroupchatJoin': 'gajim.gtk.groupchat_join',
-    'PEPConfig': 'gajim.gtk.pep_config',
+    'AccountsWindow': 'gajim.gui.accounts',
+    'HistorySyncAssistant': 'gajim.gui.history_sync',
+    'ServerInfo': 'gajim.gui.server_info',
+    'MamPreferences': 'gajim.gui.mam_preferences',
+    'Preferences': 'gajim.gui.preferences',
+    'CreateGroupchatWindow': 'gajim.gui.groupchat_creation',
+    'StartChatDialog': 'gajim.gui.start_chat',
+    'AddNewContactWindow': 'gajim.gui.add_contact',
+    'SingleMessageWindow': 'gajim.gui.single_message',
+    'Bookmarks': 'gajim.gui.bookmarks',
+    'AccountWizard': 'gajim.gui.account_wizard',
+    'HistoryWindow': 'gajim.gui.history',
+    'ManageProxies': 'gajim.gui.proxies',
+    'ManageSounds': 'gajim.gui.manage_sounds',
+    'ServiceDiscoveryWindow': 'gajim.gui.discovery',
+    'BlockingList': 'gajim.gui.blocking',
+    'XMLConsoleWindow': 'gajim.gui.xml_console',
+    'GroupchatJoin': 'gajim.gui.groupchat_join',
+    'PEPConfig': 'gajim.gui.pep_config',
     'HistoryManager': 'gajim.history_manager',
-    'GroupchatConfig': 'gajim.gtk.groupchat_config',
-    'ProfileWindow': 'gajim.gtk.profile',
-    'SSLErrorDialog': 'gajim.gtk.ssl_error_dialog',
-    'Themes': 'gajim.gtk.themes',
-    'AdvancedConfig': 'gajim.gtk.advanced_config',
-    'CertificateDialog': 'gajim.gtk.dialogs',
-    'SubscriptionRequest': 'gajim.gtk.subscription_request',
-    'RemoveAccount': 'gajim.gtk.remove_account',
-    'ChangePassword': 'gajim.gtk.change_password',
+    'GroupchatConfig': 'gajim.gui.groupchat_config',
+    'ProfileWindow': 'gajim.gui.profile',
+    'SSLErrorDialog': 'gajim.gui.ssl_error_dialog',
+    'Themes': 'gajim.gui.themes',
+    'AdvancedConfig': 'gajim.gui.advanced_config',
+    'CertificateDialog': 'gajim.gui.dialogs',
+    'SubscriptionRequest': 'gajim.gui.subscription_request',
+    'RemoveAccount': 'gajim.gui.remove_account',
+    'ChangePassword': 'gajim.gui.change_password',
     'PluginsWindow': 'gajim.plugins.gui',
-    'Features': 'gajim.gtk.features',
+    'Features': 'gajim.gui.features',
+    'StatusChange': 'gajim.gui.status_change',
+    'GroupChatInvitation': 'gajim.gui.groupchat_invitation',
 }

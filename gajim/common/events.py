@@ -22,6 +22,8 @@
 
 import time
 
+from gajim.common import app
+
 
 class Event:
     """
@@ -89,13 +91,16 @@ class PmEvent(ChatEvent):
 class PrintedChatEvent(Event):
     type_ = 'printed_chat'
     def __init__(self, message, subject, control, msg_log_id, time_=None,
-    show_in_roster=False, show_in_systray=True):
+                 message_id=None, stanza_id=None, show_in_roster=False,
+                 show_in_systray=True):
         Event.__init__(self, time_, show_in_roster=show_in_roster,
-            show_in_systray=show_in_systray)
+                       show_in_systray=show_in_systray)
         self.message = message
         self.subject = subject
         self.control = control
         self.msg_log_id = msg_log_id
+        self.message_id = message_id
+        self.stanza_id = stanza_id
 
 class PrintedGcMsgEvent(PrintedChatEvent):
     type_ = 'printed_gc_msg'
@@ -129,6 +134,16 @@ class GcInvitationtEvent(Event):
         Event.__init__(self, None, show_in_roster=False, show_in_systray=True)
         for key, value in vars(event).items():
             setattr(self, key, value)
+
+    def get_inviter_name(self):
+        if self.from_.bare_match(self.muc):
+            return self.from_.resource
+
+        contact = app.contacts.get_first_contact_from_jid(
+            self.account, self.from_.bare)
+        if contact is None:
+            return str(self.from_)
+        return contact.get_shown_name()
 
 class FileRequestEvent(Event):
     type_ = 'file-request'
@@ -268,9 +283,10 @@ class Events:
                 del self._events[account][jid]
             self.fire_event_removed(removed_list)
             return
-        # no event nor type given, remove them all
-        self.fire_event_removed(self._events[account][jid])
+        # No event nor type given, remove them all
+        removed_list = self._events[account][jid]
         del self._events[account][jid]
+        self.fire_event_removed(removed_list)
 
     def change_jid(self, account, old_jid, new_jid):
         if account not in self._events:

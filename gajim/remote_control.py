@@ -29,10 +29,11 @@ from gi.repository import GLib
 from gi.repository import Gio
 
 from gajim.common import app
-from gajim.common import helpers
-from gajim.gtk.add_contact import AddNewContactWindow
 from gajim.common import ged
+from gajim.common import helpers
 from gajim.common.structs import OutgoingMessage
+
+from gajim.gui.add_contact import AddNewContactWindow
 
 
 log = logging.getLogger('gajim.remote_control')
@@ -319,8 +320,8 @@ class GajimRemote(Server):
             obj.jid, obj.message, chatstate]))
 
     def on_time(self, obj):
-        self.raise_signal('EntityTime', (obj.conn.name, [obj.jid.getStripped(),
-                                                         obj.jid.getResource(),
+        self.raise_signal('EntityTime', (obj.conn.name, [obj.jid.bare,
+                                                         obj.jid.resource,
                                                          obj.time_info]))
 
     def on_roster_info(self, obj):
@@ -345,8 +346,8 @@ class GajimRemote(Server):
 
     def on_subscribed_presence_received(self, event):
         self.raise_signal('Subscribed', (event.account,
-                                         [event.jid.getBare(),
-                                          event.jid.getResource()]))
+                                         [event.jid.bare,
+                                          event.jid.resource]))
 
     def on_unsubscribed_presence_received(self, obj):
         self.raise_signal('Unsubscribed', (obj.conn.name, obj.jid))
@@ -404,8 +405,7 @@ class GajimRemote(Server):
             # If user did not ask for account, returns the global status
             return str(helpers.get_global_status_message())
         # return show for the given account
-        status = app.connections[account].status
-        return status
+        return app.connections[account].status_message
 
     def _get_account_and_contact(self, account, jid):
         """
@@ -629,8 +629,8 @@ class GajimRemote(Server):
         else:
             # account not specified, so change the status of all accounts
             for acc in app.contacts.get_accounts():
-                if not app.config.get_per('accounts', acc,
-                                          'sync_with_global_status'):
+                if not app.settings.get_account_setting(
+                        acc, 'sync_with_global_status'):
                     continue
                 if status:
                     status_ = status
@@ -648,7 +648,7 @@ class GajimRemote(Server):
         priority is changed for all accounts. That are synced with global status
         """
         if account:
-            app.config.set_per('accounts', account, 'priority', prio)
+            app.settings.set_account_setting(account, 'priority', prio)
             show = app.connections[account].status
             status = app.connections[account].status_message
             GLib.idle_add(app.connections[account].change_status, show, status)
@@ -657,10 +657,10 @@ class GajimRemote(Server):
             for acc in app.contacts.get_accounts():
                 if not app.account_is_available(acc):
                     continue
-                if not app.config.get_per('accounts', acc,
-                                          'sync_with_global_status'):
+                if not app.settings.get_account_setting(
+                        acc, 'sync_with_global_status'):
                     continue
-                app.config.set_per('accounts', acc, 'priority', prio)
+                app.settings.set_account_setting(acc, 'priority', prio)
                 show = app.connections[acc].status
                 status = app.connections[acc].status_message
                 GLib.idle_add(app.connections[acc].change_status, show, status)
@@ -699,8 +699,8 @@ class GajimRemote(Server):
             result['jid'] = app.get_jid_from_account(con.name)
             result['message'] = con.status_message
             result['priority'] = str(con.priority)
-            result['resource'] = app.config.get_per('accounts', con.name,
-                                                    'resource')
+            result['resource'] = app.settings.get_account_setting(con.name,
+                                                                  'resource')
         return result
 
     def list_contacts(self, account):

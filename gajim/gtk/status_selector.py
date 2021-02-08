@@ -20,9 +20,8 @@ from gajim.common.helpers import get_uf_show
 from gajim.common.helpers import get_global_show
 from gajim.common.helpers import statuses_unified
 from gajim.common.i18n import _
-from gajim.dialogs import ChangeStatusMessageDialog
 
-from gajim.gtk.util import get_icon_name
+from .util import get_icon_name
 
 
 class StatusSelector(Gtk.MenuButton):
@@ -31,6 +30,7 @@ class StatusSelector(Gtk.MenuButton):
         self.set_direction(Gtk.ArrowType.UP)
         self._compact = compact
         self._create_popover()
+        self.set_no_show_all(True)
 
         self._current_show_icon = Gtk.Image()
         self._current_show_icon.set_from_icon_name(
@@ -44,6 +44,7 @@ class StatusSelector(Gtk.MenuButton):
             self._current_show_label.set_halign(Gtk.Align.START)
             self._current_show_label.set_xalign(0)
             box.add(self._current_show_label)
+            box.show_all()
         self.add(box)
 
     def _create_popover(self):
@@ -100,27 +101,18 @@ class StatusSelector(Gtk.MenuButton):
         self.set_popover(self._status_popover)
 
     def _on_change_status(self, button):
-        def _on_response(message, pep_dict):
-            if message is None:  # None if user pressed Cancel
-                return
-            for account in app.contacts.get_accounts():
-                sync_account = app.config.get_per(
-                    'accounts', account, 'sync_with_global_status')
-                if not sync_account:
-                    continue
-                app.interface.roster.send_status(account, new_show, message)
-                app.interface.roster.send_pep(account, pep_dict)
-
         self._status_popover.popdown()
-        new_show = button.get_name()
-        if new_show == 'change_status_message':
-            new_show = get_global_show()
-            ChangeStatusMessageDialog(_on_response, new_show)
-            return
-
-        app.interface.roster.get_status_message(new_show, _on_response)
+        new_status = button.get_name()
+        if new_status == 'change_status_message':
+            new_status = None
+        app.interface.change_status(status=new_status)
 
     def update(self):
+        if not app.connections:
+            self.hide()
+            return
+
+        self.show()
         show = get_global_show()
         uf_show = get_uf_show(show)
         self._current_show_icon.set_from_icon_name(

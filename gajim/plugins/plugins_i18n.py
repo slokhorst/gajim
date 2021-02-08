@@ -14,9 +14,9 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-import os
 import locale
 import gettext
+from pathlib import Path
 
 from gajim.common import configpaths
 
@@ -26,9 +26,11 @@ try:
 except KeyError:
     # This allows to import the module for tests
     print('No plugin translation path available')
-    plugin_user_dir = ''
+    plugin_user_dir = Path.cwd()
 
-plugins_locale_dir = os.path.join(plugin_user_dir, 'locale')
+
+# python 3.7 gettext module does not support Path objects
+plugins_locale_dir = str(plugin_user_dir / 'locale')
 
 try:
     t = gettext.translation(DOMAIN, plugins_locale_dir)

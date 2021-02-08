@@ -46,6 +46,7 @@ from gi.repository import GLib
 from gi.repository import Gio
 from gi.repository import Pango
 
+import gajim.gui
 from gajim.common import app
 from gajim.common import configpaths
 from gajim.common.i18n import _
@@ -54,6 +55,8 @@ from gajim.common.const import StyleAttr
 from gajim.common.const import JIDConstant
 from gajim.common.const import KindConstant
 from gajim.common.const import ShowConstant
+from gajim.common.settings import Settings
+
 
 def is_standalone():
     # Determine if we are in standalone mode
@@ -64,7 +67,15 @@ def is_standalone():
     return False
 
 
+def init_gtk():
+    gajim.gui.init('gtk')
+    from gajim.gui import exception
+    exception.init()
+
+
 if is_standalone():
+    init_gtk()
+
     try:
         shortargs = 'hvsc:l:p:'
         longargs = 'help verbose separate config-path= loglevel= profile='
@@ -86,16 +97,18 @@ if is_standalone():
             configpaths.set_config_root(a)
 
     configpaths.init()
+    app.settings = Settings()
+    app.settings.init()
     app.load_css_config()
 
 from gajim.common import helpers
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.dialogs import NewConfirmationDialog
-from gajim.gtk.dialogs import DialogButton
-from gajim.gtk.filechoosers import FileSaveDialog
-from gajim.gtk.util import convert_rgb_to_hex
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import get_app_icon_list
+from gajim.gui.dialogs import ErrorDialog
+from gajim.gui.dialogs import ConfirmationDialog
+from gajim.gui.dialogs import DialogButton
+from gajim.gui.filechoosers import FileSaveDialog
+from gajim.gui.util import convert_rgb_to_hex
+from gajim.gui.util import get_builder
+from gajim.gui.util import get_app_icon_list
 # pylint: enable=C0413
 
 @unique
@@ -109,7 +122,7 @@ class Column(IntEnum):
 class HistoryManager:
     def __init__(self):
         log_db_path = configpaths.get('LOG_DB')
-        if not os.path.exists(log_db_path):
+        if not log_db_path.exists():
             ErrorDialog(_('Cannot find history logs database'),
                         _('%s does not exist.') % log_db_path)
             sys.exit()
@@ -250,7 +263,7 @@ class HistoryManager:
             if is_standalone():
                 Gtk.main_quit()
 
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('Database Cleanup'),
             _('Clean up the database?'),
             _('This is STRONGLY NOT RECOMMENDED IF GAJIM IS RUNNING.\n'
@@ -371,7 +384,7 @@ class HistoryManager:
             self.nickname_col_for_logs.set_visible(False)
             self.subject_col_for_logs.set_visible(True)
 
-        format_ = helpers.from_one_line(app.config.get('time_stamp'))
+        format_ = helpers.from_one_line(app.settings.get('time_stamp'))
         for row in results:
             # exposed in UI (TreeViewColumns) are only
             # time, message, subject, nickname
@@ -428,7 +441,7 @@ class HistoryManager:
                 ''', (like_sql, like_sql))
 
         results = self.cur.fetchall()
-        format_ = helpers.from_one_line(app.config.get('time_stamp'))
+        format_ = helpers.from_one_line(app.settings.get('time_stamp'))
         for row in results:
             # exposed in UI (TreeViewColumns) are only
             # JID, time, message, subject, nickname
@@ -572,7 +585,7 @@ class HistoryManager:
 
             self.AT_LEAST_ONE_DELETION_DONE = True
 
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('Delete'),
             ngettext('Delete Conversation', 'Delete Conversations', paths_len),
             ngettext('Do you want to permanently delete this '
@@ -611,7 +624,7 @@ class HistoryManager:
 
             self.AT_LEAST_ONE_DELETION_DONE = True
 
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('Delete'),
             ngettext('Delete Message', 'Delete Messages', paths_len),
             ngettext('Do you want to permanently delete this message?',

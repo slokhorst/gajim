@@ -25,16 +25,15 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import base64
-import binascii
+import logging
 
 from gi.repository import Gtk
 from gi.repository import GLib
 from gi.repository import Gdk
 from nbxmpp.structs import AnnotationNote
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import StanzaError
 from nbxmpp.protocol import JID
+from nbxmpp.errors import is_error
 
 from gajim import gtkgui_helpers
 from gajim.common import helpers
@@ -45,10 +44,12 @@ from gajim.common.i18n import Q_
 from gajim.common.i18n import _
 from gajim.common.const import AvatarSize
 from gajim.common.nec import EventHelper
+from gajim.common.modules.util import as_task
 
-from gajim.gtk.util import get_builder
+from gajim.gui.util import get_builder
 
-# log = logging.getLogger('gajim.vcard')
+
+log = logging.getLogger('gajim.vcard')
 
 
 class VcardWindow(EventHelper):
@@ -87,11 +88,11 @@ class VcardWindow(EventHelper):
             self.real_resource = contact.resource
 
         puny_jid = helpers.sanitize_filename(contact.jid)
-        local_avatar_basepath = os.path.join(configpaths.get('AVATAR'), puny_jid) + \
-                '_local'
+        local_avatar_basepath = configpaths.get('AVATAR') / (puny_jid +
+                                                             '_local')
         for extension in ('.png', '.jpeg'):
-            local_avatar_path = local_avatar_basepath + extension
-            if os.path.isfile(local_avatar_path):
+            local_avatar_path = local_avatar_basepath.with_suffix(extension)
+            if local_avatar_path.is_file():
                 image = self.xml.get_object('custom_avatar_image')
                 image.set_from_file(local_avatar_path)
                 image.show()
@@ -151,6 +152,7 @@ class VcardWindow(EventHelper):
             new_note = AnnotationNote(jid=self.contact.jid, data=new_annotation)
             con.get_module('Annotations').set_note(new_note)
         self.unregister_events()
+        app.cancel_tasks(self)
 
     def on_vcard_information_window_key_press_event(self, widget, event):
         if event.keyval == Gdk.KEY_Escape:
@@ -181,31 +183,7 @@ class VcardWindow(EventHelper):
 
     def _set_values(self, vcard, jid):
         for i in vcard.keys():
-            if i == 'PHOTO' and self.xml.get_object('information_notebook').\
-            get_n_pages() > 4:
-                if 'BINVAL' not in vcard[i]:
-                    continue
-                photo_encoded = vcard[i]['BINVAL']
-                if photo_encoded == '':
-                    continue
-                try:
-                    photo_decoded = base64.b64decode(
-                        photo_encoded.encode('utf-8'))
-                except binascii.Error as error:
-                    app.log('avatar').warning('Invalid avatar for %s: %s', jid, error)
-                    continue
-
-                pixbuf = gtkgui_helpers.get_pixbuf_from_data(photo_decoded)
-                if pixbuf is None:
-                    continue
-                self.avatar = pixbuf
-                pixbuf = gtkgui_helpers.scale_pixbuf(pixbuf, AvatarSize.VCARD)
-                surface = Gdk.cairo_surface_create_from_pixbuf(
-                    pixbuf, self.window.get_scale_factor())
-                image = self.xml.get_object('PHOTO_image')
-                image.set_from_surface(surface)
-                image.show()
-                self.xml.get_object('user_avatar_label').show()
+            if i == 'PHOTO':
                 continue
             if i in ('ADR', 'TEL', 'EMAIL'):
                 for entry in vcard[i]:
@@ -225,6 +203,32 @@ class VcardWindow(EventHelper):
                     self.set_value(i + '_label', vcard[i])
         self.vcard_arrived = True
 
+    def _load_avatar(self, vcard):
+        if not self.xml.get_object('information_notebook').get_n_pages() > 4:
+            # TODO: why?
+            return
+
+        try:
+            avatar, _ = vcard.get_avatar()
+        except Exception as error:
+            log.warning('Failed to load avatar: %s', error)
+            return
+
+        if avatar is None:
+            return
+
+        pixbuf = gtkgui_helpers.get_pixbuf_from_data(avatar)
+        pixbuf = gtkgui_helpers.scale_pixbuf(pixbuf, AvatarSize.VCARD)
+
+        surface = Gdk.cairo_surface_create_from_pixbuf(
+            pixbuf, self.window.get_scale_factor())
+        image = self.xml.get_object('PHOTO_image')
+        image.set_from_surface(surface)
+        image.show()
+
+        self.avatar = pixbuf
+        self.xml.get_object('user_avatar_label').show()
+
     def clear_values(self):
         for l in ('FN', 'NICKNAME', 'N_FAMILY', 'N_GIVEN', 'N_MIDDLE',
         'N_PREFIX', 'N_SUFFIX', 'EMAIL_HOME_USERID', 'TEL_HOME_NUMBER', 'BDAY',
@@ -242,20 +246,37 @@ class VcardWindow(EventHelper):
                 widget.set_text('')
         self.xml.get_object('DESC_textview').get_buffer().set_text('')
 
-    def _nec_vcard_received(self, jid, resource, room, vcard, *args):
-        self.clear_values()
-        self._set_values(vcard, jid)
+    @as_task
+    def _request_vcard(self, jid):
+        _task = yield
 
-    def set_os_info(self, result, jid):
+        con = app.connections[self.account]
+        vcard = yield con.get_module('VCardTemp').request_vcard(jid=jid)
+
+        if is_error(vcard):
+            return
+
+        self.clear_values()
+        self._set_values(vcard.data, str(jid))
+        self._load_avatar(vcard)
+
+    def set_os_info(self, task):
+        error = False
+        try:
+            result = task.finish()
+        except StanzaError:
+            error = True
+
+        jid = task.get_user_data()
+
         if self.xml.get_object('information_notebook').get_n_pages() < 5:
             return
 
-        error = is_error_result(result)
         i = 0
         client = ''
         os_info = ''
         while i in self.os_info:
-            if self.os_info[i]['resource'] == JID(jid).getResource():
+            if self.os_info[i]['resource'] == JID.from_string(jid).resource:
                 if not error:
                     self.os_info[i]['client'] = '%s %s' % (result.name,
                                                            result.version)
@@ -286,12 +307,12 @@ class VcardWindow(EventHelper):
         if self.gc_contact:
             if obj.jid != self.contact.jid:
                 return
-        elif obj.jid.getStripped() != self.contact.jid:
+        elif obj.jid.bare != self.contact.jid:
             return
         i = 0
         time_s = ''
         while i in self.time_info:
-            if self.time_info[i]['resource'] == obj.jid.getResource():
+            if self.time_info[i]['resource'] == obj.jid.resource:
                 if obj.time_info:
                     self.time_info[i]['time'] = obj.time_info
                 else:
@@ -448,14 +469,11 @@ class VcardWindow(EventHelper):
 
         self.fill_status_label()
 
+        jid = self.contact.jid
         if self.gc_contact:
-            con.get_module('VCardTemp').request_vcard(
-                self._nec_vcard_received,
-                self.gc_contact.get_full_jid(),
-                room=True)
-        else:
-            con.get_module('VCardTemp').request_vcard(
-                self._nec_vcard_received, self.contact.jid)
+            jid = self.gc_contact.get_full_jid()
+
+        self._request_vcard(jid)
 
     def on_close_button_clicked(self, widget):
         self.window.destroy()

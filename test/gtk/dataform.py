@@ -4,7 +4,10 @@ from gi.repository import Gtk
 import nbxmpp
 from nbxmpp.modules.dataforms import extend_form
 
-from gajim.gtk.dataform import DataFormWidget
+from gajim import gui
+gui.init('gtk')
+
+from gajim.gui.dataform import DataFormWidget
 from gajim.common.const import CSSPriority
 from gajim.common import app
 
@@ -76,6 +79,9 @@ FORM = '''
     <option label='Polls'><value>polls</value></option>
     <option label='Reminders'><value>reminders</value></option>
     <option label='Search'><value>search</value></option>
+    <option label='Search1'><value>search1</value></option>
+    <option label='Really long long long long long long long long entry'><value>longentry</value></option>
+    <option label='Search3'><value>search3</value></option>
     <value>news</value>
     <value>search</value>
   </field>

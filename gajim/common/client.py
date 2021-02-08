@@ -28,12 +28,10 @@ from gajim.common import app
 from gajim.common import helpers
 from gajim.common import modules
 from gajim.common.const import ClientState
-from gajim.common.helpers import get_encryption_method
 from gajim.common.helpers import get_custom_host
 from gajim.common.helpers import get_user_proxy
 from gajim.common.helpers import warn_about_plain_connection
 from gajim.common.helpers import get_resource
-from gajim.common.helpers import get_ignored_tls_errors
 from gajim.common.helpers import get_idle_status_message
 from gajim.common.idle import Monitor
 from gajim.common.i18n import _
@@ -41,7 +39,7 @@ from gajim.common.i18n import _
 from gajim.common.connection_handlers import ConnectionHandlers
 from gajim.common.connection_handlers_events import MessageSentEvent
 
-from gajim.gtk.util import open_window
+from gajim.gui.util import open_window
 
 
 log = logging.getLogger('gajim.client')
@@ -52,14 +50,13 @@ class Client(ConnectionHandlers):
         self._client = None
         self._account = account
         self.name = account
-        self._hostname = app.config.get_per(
-            'accounts', self._account, 'hostname')
-        self._user = app.config.get_per('accounts', self._account, 'name')
+        self._hostname = app.settings.get_account_setting(self._account,
+                                                          'hostname')
+        self._user = app.settings.get_account_setting(self._account, 'name')
         self.password = None
 
         self._priority = 0
         self._connect_machine_calls = 0
-        self.avatar_conversion = False
         self.addressing_supported = False
 
         self.is_zeroconf = False
@@ -79,8 +76,6 @@ class Client(ConnectionHandlers):
         self._destroy_client = False
         self._remove_account = False
 
-        self._tls_errors = set()
-
         self._destroyed = False
 
         self.available_transports = {}
@@ -89,11 +84,11 @@ class Client(ConnectionHandlers):
 
         self._create_client()
 
-        self._idle_handler_id = Monitor.connect('state-changed',
-                                                self._idle_state_changed)
-
-        self._screensaver_handler_id = app.app.connect(
-            'notify::screensaver-active', self._screensaver_state_changed)
+        if Monitor.is_available():
+            self._idle_handler_id = Monitor.connect('state-changed',
+                                                    self._idle_state_changed)
+            self._screensaver_handler_id = app.app.connect(
+                'notify::screensaver-active', self._screensaver_state_changed)
 
         ConnectionHandlers.__init__(self)
 
@@ -104,6 +99,10 @@ class Client(ConnectionHandlers):
     @property
     def state(self):
         return self._state
+
+    @property
+    def account(self):
+        return self._account
 
     @property
     def status(self):
@@ -162,14 +161,14 @@ class Client(ConnectionHandlers):
         if custom_host is not None:
             self._client.set_custom_host(*custom_host)
 
-        pass_saved = app.config.get_per('accounts', self._account, 'savepass')
+        pass_saved = app.settings.get_account_setting(self._account, 'savepass')
         if pass_saved:
             # Request password from keyring only if the user chose to save
             # his password
             self.password = passwords.get_password(self._account)
 
-        anonymous = app.config.get_per(
-            'accounts', self._account, 'anonymous_auth')
+        anonymous = app.settings.get_account_setting(self._account,
+                                                     'anonymous_auth')
         if anonymous:
             self._client.set_mechs(['ANONYMOUS'])
 
@@ -177,11 +176,8 @@ class Client(ConnectionHandlers):
         self._client.set_accepted_certificates(
             app.cert_store.get_certificates())
 
-        self._client.set_ignored_tls_errors(
-            get_ignored_tls_errors(self._account))
-
-        if app.config.get_per('accounts', self._account,
-                              'use_plain_connection'):
+        if app.settings.get_account_setting(self._account,
+                                            'use_plain_connection'):
             self._client.set_connection_types([ConnectionType.PLAIN])
 
         proxy = get_user_proxy(self._account)
@@ -200,17 +196,6 @@ class Client(ConnectionHandlers):
         for handler in modules.get_handlers(self):
             self._client.register_handler(handler)
 
-    def process_tls_errors(self):
-        if not self._tls_errors:
-            self.connect(ignore_all_errors=True)
-            return
-
-        open_window('SSLErrorDialog',
-                    account=self._account,
-                    connection=self,
-                    cert=self._client.peer_certificate[0],
-                    error_num=self._tls_errors.pop())
-
     def _on_resume_failed(self, _client, _signal_name):
         log.info('Resume failed')
         app.nec.push_incoming_event(NetworkEvent(
@@ -226,7 +211,7 @@ class Client(ConnectionHandlers):
             self.update_presence()
         else:
             # Normally show is updated when we receive a presence reflection.
-            # On resume, if show has not changed while offline, we dont send
+            # On resume, if show has not changed while offline, we don’t send
             # a new presence so we have to trigger the event here.
             app.nec.push_incoming_event(
                 NetworkEvent('our-show',
@@ -261,22 +246,27 @@ class Client(ConnectionHandlers):
             self._reconnect = False
 
         elif domain == StreamError.BAD_CERTIFICATE:
-            self._tls_errors = self._client.peer_certificate[1]
-            self.get_module('Chatstate').enabled = False
             self._reconnect = False
-            self._after_disconnect()
-            app.nec.push_incoming_event(NetworkEvent(
-                'our-show', account=self._account, show='offline'))
-            self.process_tls_errors()
+            self._destroy_client = True
+
+            cert, errors = self._client.peer_certificate
+
+            open_window('SSLErrorDialog',
+                        account=self._account,
+                        client=self,
+                        cert=cert,
+                        error=errors.pop())
 
         elif domain in (StreamError.STREAM, StreamError.BIND):
             if error == 'conflict':
                 # Reset resource
-                app.config.set_per('accounts', self._account,
-                                   'resource', 'gajim.$rand')
+                app.settings.set_account_setting(self._account,
+                                                 'resource',
+                                                 'gajim.$rand')
 
         elif domain == StreamError.SASL:
             self._reconnect = False
+            self._destroy_client = True
 
             if error in ('not-authorized', 'no-password'):
                 def _on_password(password):
@@ -329,6 +319,7 @@ class Client(ConnectionHandlers):
 
     def _on_connected(self, _client, _signal_name):
         self._set_state(ClientState.CONNECTED)
+        self.get_module('MUC').get_manager().reset_state()
         self.get_module('Discovery').discover_server_info()
         self.get_module('Discovery').discover_account_info()
         self.get_module('Discovery').discover_server_items()
@@ -355,7 +346,7 @@ class Client(ConnectionHandlers):
                 return jid
 
         # This returns the bare jid
-        return nbxmpp.JID(app.get_jid_from_account(self._account))
+        return nbxmpp.JID.from_string(app.get_jid_from_account(self._account))
 
     def change_status(self, show, message):
         if not message:
@@ -396,6 +387,10 @@ class Client(ConnectionHandlers):
 
         # We are connected
         if show == 'offline':
+            self.set_user_activity(None)
+            self.set_user_mood(None)
+            self.set_user_tune(None)
+            self.set_user_location(None)
             presence = self.get_module('Presence').get_presence(
                 typ='unavailable',
                 status=message,
@@ -421,6 +416,18 @@ class Client(ConnectionHandlers):
         if include_muc:
             self.get_module('MUC').update_presence()
 
+    def set_user_activity(self, activity):
+        self.get_module('UserActivity').set_activity(activity)
+
+    def set_user_mood(self, mood):
+        self.get_module('UserMood').set_mood(mood)
+
+    def set_user_tune(self, tune):
+        self.get_module('UserTune').set_tune(tune)
+
+    def set_user_location(self, location):
+        self.get_module('UserLocation').set_location(location)
+
     def get_module(self, name):
         return modules.get(self._account, name)
 
@@ -442,10 +449,6 @@ class Client(ConnectionHandlers):
 
         # We did not resume the stream, so we are not joined any MUCs
         self.update_presence(include_muc=False)
-
-        if not self.avatar_conversion:
-            # ask our VCard
-            self.get_module('VCardTemp').request_vcard()
 
         self.get_module('Bookmarks').request_bookmarks()
         self.get_module('SoftwareVersion').set_enabled(True)
@@ -471,20 +474,24 @@ class Client(ConnectionHandlers):
         stanza = self.get_module('Message').build_message_stanza(message)
         message.stanza = stanza
 
-        method = get_encryption_method(message.account, message.jid)
-        if method is not None:
-            # TODO: Make extension point return encrypted message
-
-            extension = 'encrypt'
-            if message.is_groupchat:
-                extension = 'gc_encrypt'
-            app.plugin_manager.extension_point(extension + method,
-                                               self,
-                                               message,
-                                               self._send_message)
+        if message.contact is None:
+            # Only Single Message should have no contact
+            self._send_message(message)
             return
 
-        self._send_message(message)
+        method = message.contact.settings.get('encryption')
+        if not method:
+            self._send_message(message)
+            return
+
+        # TODO: Make extension point return encrypted message
+        extension = 'encrypt'
+        if message.is_groupchat:
+            extension = 'gc_encrypt'
+        app.plugin_manager.extension_point(extension + method,
+                                           self,
+                                           message,
+                                           self._send_message)
 
     def _send_message(self, message):
         message.set_sent_timestamp()
@@ -510,29 +517,29 @@ class Client(ConnectionHandlers):
             message.stanza = stanza
             self._send_message(message)
 
-    def connect(self, ignore_all_errors=False):
+    def connect(self, ignored_tls_errors=None):
         if self._state not in (ClientState.DISCONNECTED,
                                ClientState.RECONNECT_SCHEDULED):
             # Do not try to reco while we are already trying
             return
 
         log.info('Connect')
+
+        self._client.set_ignored_tls_errors(ignored_tls_errors)
         self._reconnect = True
         self._disable_reconnect_timer()
         self._set_state(ClientState.CONNECTING)
-        if ignore_all_errors:
-            self._client.set_ignore_tls_errors(True)
-            self._client.connect()
-        else:
-            if warn_about_plain_connection(self._account,
-                                           self._client.connection_types):
-                app.nec.push_incoming_event(NetworkEvent(
-                    'plain-connection',
-                    account=self._account,
-                    connect=self._client.connect,
-                    abort=self._abort_reconnect))
-                return
-            self._client.connect()
+
+        if warn_about_plain_connection(self._account,
+                                       self._client.connection_types):
+            app.nec.push_incoming_event(NetworkEvent(
+                'plain-connection',
+                account=self._account,
+                connect=self._client.connect,
+                abort=self._abort_reconnect))
+            return
+
+        self._client.connect()
 
     def _schedule_reconnect(self):
         self._set_state(ClientState.RECONNECT_SCHEDULED)
@@ -566,7 +573,7 @@ class Client(ConnectionHandlers):
             self._update_status()
             return
 
-        if not app.config.get(f'auto{state}'):
+        if not app.settings.get(f'auto{state}'):
             return
 
         if (state in ('away', 'xa') and self._status == 'online' or
@@ -608,8 +615,9 @@ class Client(ConnectionHandlers):
 
     def cleanup(self):
         self._destroyed = True
-        Monitor.disconnect(self._idle_handler_id)
-        app.app.disconnect(self._screensaver_handler_id)
+        if Monitor.is_available():
+            Monitor.disconnect(self._idle_handler_id)
+            app.app.disconnect(self._screensaver_handler_id)
         if self._client is not None:
             # cleanup() is called before nbmxpp.Client has disconnected,
             # when we disable the account. So we need to unregister

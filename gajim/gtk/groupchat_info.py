@@ -26,9 +26,10 @@ from gajim.common.i18n import Q_
 from gajim.common.helpers import open_uri
 from gajim.common.helpers import get_groupchat_name
 from gajim.common.const import RFC5646_LANGUAGE_TAGS
+from gajim.common.const import AvatarSize
 
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import make_href_markup
+from .util import get_builder
+from .util import make_href_markup
 
 
 MUC_FEATURES = {
@@ -100,14 +101,23 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
         Gtk.ScrolledWindow.__init__(self)
         if options is None:
             options = {}
+
+        self._minimal = options.get('minimal', False)
+
         self.set_size_request(options.get('width', 400), -1)
         self.set_halign(Gtk.Align.CENTER)
-        self.set_vexpand(True)
-        self.set_min_content_height(400)
-        self.set_policy(Gtk.PolicyType.NEVER,
-                        Gtk.PolicyType.AUTOMATIC)
+
+        if self._minimal:
+            self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
+        else:
+            self.set_vexpand(True)
+            self.set_min_content_height(400)
+            self.set_policy(Gtk.PolicyType.NEVER,
+                            Gtk.PolicyType.AUTOMATIC)
+
         self._account = account
         self._info = None
+
         self._ui = get_builder('groupchat_info_scrolled.ui')
         self.add(self._ui.info_grid)
         self._ui.connect_signals(self)
@@ -126,7 +136,7 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
         has_author = bool(author)
         if has_author and epoch_timestamp is not None:
             time_ = time.strftime('%c', time.localtime(epoch_timestamp))
-            author = '{} - {}'.format(author, time_)
+            author = f'{author} - {time_}'
 
         self._ui.author.set_text(author or '')
         self._ui.author.set_visible(has_author)
@@ -150,11 +160,25 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
         self._ui.name.set_text(name)
         self._ui.name.set_visible(True)
 
+        # Set avatar
+        surface = app.interface.avatar_storage.get_muc_surface(
+            self._account,
+            str(info.jid),
+            AvatarSize.GROUP_INFO,
+            self.get_scale_factor())
+        self._ui.avatar_image.set_from_surface(surface)
+
         # Set description
         has_desc = bool(info.muc_description)
         self._ui.description.set_text(info.muc_description or '')
         self._ui.description.set_visible(has_desc)
         self._ui.description_label.set_visible(has_desc)
+
+        # Set address
+        self._ui.address.set_text(str(info.jid))
+
+        if self._minimal:
+            return
 
         # Set subject
         self.set_subject(info.muc_subject)
@@ -164,9 +188,6 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
         self._ui.users.set_text(info.muc_users or '')
         self._ui.users.set_visible(has_users)
         self._ui.users_image.set_visible(has_users)
-
-        # Set address
-        self._ui.address.set_text(str(info.jid))
 
         # Set contacts
         self._ui.contact_box.foreach(self._ui.contact_box.remove)
@@ -181,7 +202,7 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
         # Set discussion logs
         has_log_uri = bool(info.muc_log_uri)
         self._ui.logs.set_uri(info.muc_log_uri or '')
-        self._ui.logs.set_label('Website')
+        self._ui.logs.set_label(_('Website'))
         self._ui.logs.set_visible(has_log_uri)
         self._ui.logs_label.set_visible(has_log_uri)
 
@@ -221,13 +242,17 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
                 row += 1
         grid.show_all()
 
+    def _on_copy_address(self, _button):
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(f'xmpp:{self._info.jid}?join', -1)
+
     @staticmethod
     def _on_activate_log_link(button):
         open_uri(button.get_uri())
         return Gdk.EVENT_STOP
 
     def _on_activate_contact_link(self, button):
-        open_uri('xmpp:%s?message' % button.get_uri(), account=self._account)
+        open_uri(f'xmpp:{button.get_uri()}?message', account=self._account)
         return Gdk.EVENT_STOP
 
     @staticmethod

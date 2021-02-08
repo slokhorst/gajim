@@ -21,7 +21,9 @@ from urllib.parse import urlparse
 import mimetypes
 
 from nbxmpp.namespaces import Namespace
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import StanzaError
+from nbxmpp.errors import MalformedStanzaError
+from nbxmpp.errors import HTTPUploadStanzaError
 from nbxmpp.util import convert_tls_error_flags
 from gi.repository import GLib
 from gi.repository import Soup
@@ -33,8 +35,7 @@ from gajim.common.helpers import get_user_proxy
 from gajim.common.const import FTState
 from gajim.common.filetransfer import FileTransfer
 from gajim.common.modules.base import BaseModule
-from gajim.common.structs import OutgoingMessage
-from gajim.common.connection_handlers_events import InformationEvent
+from gajim.common.exceptions import FileError
 
 
 class HTTPUpload(BaseModule):
@@ -85,10 +86,9 @@ class HTTPUpload(BaseModule):
         for ctrl in app.interface.msg_win_mgr.get_controls(acct=self._account):
             ctrl.update_actions()
 
-    def check_file_before_transfer(self, path, encryption, contact,
-                                   groupchat=False):
+    def make_transfer(self, path, encryption, contact, groupchat=False):
         if not path or not os.path.exists(path):
-            return
+            return None
 
         invalid_file = False
         stat = os.stat(path)
@@ -110,47 +110,41 @@ class HTTPUpload(BaseModule):
                     'maximum allowed file size is: %s') % size
 
         if invalid_file:
-            self._raise_information_event('open-file-error2', msg)
-            return
+            raise FileError(msg)
 
         mime = mimetypes.MimeTypes().guess_type(path)[0]
         if not mime:
             mime = 'application/octet-stream'  # fallback mime type
         self._log.info("Detected MIME type of file: %s", mime)
 
-        try:
-            transfer = HTTPFileTransfer(self._account,
-                                        self._cancel_upload,
-                                        path,
-                                        contact,
-                                        mime,
-                                        encryption,
-                                        groupchat)
-            app.interface.show_httpupload_progress(transfer)
-        except Exception as error:
-            self._log.exception('Error while loading file')
-            self._raise_information_event('open-file-error2', str(error))
-            return
+        return HTTPFileTransfer(self._account,
+                                path,
+                                contact,
+                                mime,
+                                encryption,
+                                groupchat)
 
-        if encryption is not None:
-            app.interface.encrypt_file(transfer,
-                                       self._account,
-                                       self._request_slot)
-        else:
-            self._request_slot(transfer)
-
-    def _cancel_upload(self, transfer):
+    def cancel_transfer(self, transfer):
+        transfer.set_cancelled()
         message = self._queued_messages.get(id(transfer))
         if message is None:
             return
+
         self._session.cancel_message(message, Soup.Status.CANCELLED)
 
-    @staticmethod
-    def _raise_information_event(dialog_name, args=None):
-        app.nec.push_incoming_event(InformationEvent(
-            None, dialog_name=dialog_name, args=args))
+    def start_transfer(self, transfer):
+        if transfer.encryption is not None and not transfer.is_encrypted:
+            transfer.set_encrypting()
+            plugin = app.plugin_manager.encryption_plugins[transfer.encryption]
+            if hasattr(plugin, 'encrypt_file'):
+                plugin.encrypt_file(transfer,
+                                    self._account,
+                                    self.start_transfer)
+            else:
+                transfer.set_error('encryption-not-available')
 
-    def _request_slot(self, transfer):
+            return
+
         transfer.set_preparing()
         self._log.info('Sending request for slot')
         self._nbxmpp('HTTPUpload').request_slot(
@@ -161,31 +155,34 @@ class HTTPUpload(BaseModule):
             callback=self._received_slot,
             user_data=transfer)
 
-    def _received_slot(self, result, transfer):
-        if is_error_result(result):
-            transfer.set_error()
+    def _received_slot(self, task):
+        transfer = task.get_user_data()
 
-            if result.app_condition == 'file-too-large':
+        try:
+            result = task.finish()
+        except (StanzaError,
+                HTTPUploadStanzaError,
+                MalformedStanzaError) as error:
+
+            if error.app_condition == 'file-too-large':
                 size_text = GLib.format_size_full(
-                    result.get_max_file_size(),
+                    error.get_max_file_size(),
                     GLib.FormatSizeFlags.IEC_UNITS)
 
                 error_text = _('File is too large, '
                                'maximum allowed file size is: %s' % size_text)
-            else:
-                error_text = str(result)
-                self._log.warning(result)
+                transfer.set_error('file-too-large', error_text)
 
-            self._raise_information_event('request-upload-slot-error',
-                                          error_text)
+            else:
+                transfer.set_error('misc', str(error))
+
             return
 
         transfer.process_result(result)
 
         if (urlparse(transfer.put_uri).scheme != 'https' or
                 urlparse(transfer.get_uri).scheme != 'https'):
-            transfer.set_error()
-            self._raise_information_event('unsecure-error')
+            transfer.set_error('unsecure')
             return
 
         self._log.info('Uploading file to %s', transfer.put_uri)
@@ -197,7 +194,7 @@ class HTTPUpload(BaseModule):
         transfer.set_started()
 
         message = Soup.Message.new('PUT', transfer.put_uri)
-        message.connect('starting', self._check_certificate)
+        message.connect('starting', self._check_certificate, transfer)
 
         # Set CAN_REBUILD so chunks get discarded after they have been
         # written to the network
@@ -208,7 +205,7 @@ class HTTPUpload(BaseModule):
 
         message.props.request_headers.set_content_type(transfer.mime, None)
         message.props.request_headers.set_content_length(transfer.size)
-        for name, value in transfer.headers:
+        for name, value in transfer.headers.items():
             message.props.request_headers.append(name, value)
 
         message.connect('wrote-headers', self._on_wrote_headers, transfer)
@@ -218,10 +215,11 @@ class HTTPUpload(BaseModule):
         self._set_proxy_if_available()
         self._session.queue_message(message, self._on_finish, transfer)
 
-    def _check_certificate(self, message):
+    def _check_certificate(self, message, transfer):
         https_used, tls_certificate, tls_errors = message.get_https_status()
         if not https_used:
             self._log.warning('HTTPS was not used for upload')
+            transfer.set_error('unsecure')
             self._session.cancel_message(message, Soup.Status.CANCELLED)
             return
 
@@ -232,12 +230,12 @@ class HTTPUpload(BaseModule):
         for error in tls_errors:
             phrase = get_tls_error_phrase(error)
             self._log.warning('TLS verification failed: %s', phrase)
+
+        transfer.set_error('tls-verification-failed', phrase)
         self._session.cancel_message(message, Soup.Status.CANCELLED)
-        self._raise_information_event('httpupload-error', phrase)
 
     def _on_finish(self, _session, message, transfer):
         self._queued_messages.pop(id(transfer), None)
-        transfer.set_finished()
 
         if message.props.status_code == Soup.Status.CANCELLED:
             self._log.info('Upload cancelled')
@@ -245,25 +243,14 @@ class HTTPUpload(BaseModule):
 
         if message.props.status_code in (Soup.Status.OK, Soup.Status.CREATED):
             self._log.info('Upload completed successfully')
-            uri = transfer.get_transformed_uri()
+            transfer.set_finished()
 
-            type_ = 'chat'
-            if transfer.is_groupchat:
-                type_ = 'groupchat'
-
-            message = OutgoingMessage(account=self._account,
-                                      contact=transfer.contact,
-                                      message=uri,
-                                      type_=type_,
-                                      oob_url=uri)
-
-            self._con.send_message(message)
 
         else:
             phrase = Soup.Status.get_phrase(message.props.status_code)
             self._log.error('Got unexpected http upload response code: %s',
                             phrase)
-            self._raise_information_event('httpupload-response-error', phrase)
+            transfer.set_error('http-response', phrase)
 
     def _on_wrote_chunk(self, message, transfer):
         transfer.update_progress()
@@ -294,15 +281,21 @@ class HTTPFileTransfer(FileTransfer):
         FTState.STARTED: _('Uploading via HTTP File Upload…'),
     }
 
+    _errors = {
+        'unsecure': _('The server returned an insecure transport (HTTP).'),
+        'encryption-not-available': _('There is no encryption method available '
+                                      'for the chosen encryption.')
+    }
+
     def __init__(self,
                  account,
-                 cancel_func,
                  path,
                  contact,
                  mime,
                  encryption,
                  groupchat):
-        FileTransfer.__init__(self, account, cancel_func=cancel_func)
+
+        FileTransfer.__init__(self, account)
 
         self._path = path
         self._encryption = encryption
@@ -318,6 +311,8 @@ class HTTPFileTransfer(FileTransfer):
         self._stream = None
         self._data = None
         self._headers = {}
+
+        self._is_encrypted = False
 
     @property
     def mime(self):
@@ -343,6 +338,10 @@ class HTTPFileTransfer(FileTransfer):
     def path(self):
         return self._path
 
+    @property
+    def is_encrypted(self):
+        return self._is_encrypted
+
     def get_transformed_uri(self):
         if self._uri_transform_func is not None:
             return self._uri_transform_func(self.get_uri)
@@ -355,9 +354,12 @@ class HTTPFileTransfer(FileTransfer):
     def filename(self):
         return os.path.basename(self._path)
 
-    def set_error(self, text=''):
+    def set_error(self, domain, text=''):
+        if not text:
+            text = self._errors[domain]
+
         self._close()
-        super().set_error(text)
+        super().set_error(domain, text)
 
     def set_finished(self):
         self._close()
@@ -365,6 +367,7 @@ class HTTPFileTransfer(FileTransfer):
 
     def set_encrypted_data(self, data):
         self._data = data
+        self._is_encrypted = True
 
     def _close(self):
         if self._stream is not None:

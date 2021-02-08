@@ -47,9 +47,9 @@ from gajim.common import app
 from gajim.common.const import StyleAttr
 from gajim.common.helpers import open_uri
 from gajim.common.helpers import parse_uri
-from gajim.gtk.util import get_cursor
-
 from gajim.gui_menu_builder import get_conv_context_menu
+
+from .util import get_cursor
 
 log = logging.getLogger('gajim.htmlview')
 
@@ -703,35 +703,40 @@ class HtmlTextView(Gtk.TextView):
 
     def __init__(self, account, standalone=False):
         Gtk.TextView.__init__(self)
-        self.set_wrap_mode(Gtk.WrapMode.CHAR)
-        self.set_editable(False)
+
         self.set_has_tooltip(True)
+        self.set_border_width(1)
+        self.set_accepts_tab(True)
+        self.set_editable(False)
+        self.set_cursor_visible(False)
+        self.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.set_left_margin(2)
+        self.set_right_margin(2)
+
+        self.drag_dest_unset()
+
         self.connect('copy-clipboard', self._on_copy_clipboard)
+        self.connect('destroy', self._on_destroy)
         self.get_buffer().eol_tag = self.get_buffer().create_tag('eol')
 
         self.account = account
         self.plugin_modified = False
         self._cursor_changed = False
 
-        self.connect('button-release-event', self._on_button_release)
         if standalone:
             self.connect('query-tooltip', self._query_tooltip)
             self.create_tags()
 
-    @staticmethod
-    def _on_button_release(textview, event):
-        if event.button == 1:
-            # Left Mouse button
-
-            if not app.config.get('auto_copy'):
-                return Gdk.EVENT_PROPAGATE
-
-            if not textview.get_buffer().get_has_selection():
-                return Gdk.EVENT_PROPAGATE
-            selected = textview.get_selected_text()
-            clipboard = textview.get_clipboard(Gdk.SELECTION_CLIPBOARD)
-            clipboard.set_text(selected, -1)
-        return Gdk.EVENT_PROPAGATE
+    def _on_destroy(self, *args):
+        # We restore the TextView’s drag destination to avoid a GTK warning
+        # when closing the control. ChatControlBase.shutdown() calls destroy()
+        # on the control’s main box, causing GTK to recursively destroy the
+        # child widgets. GTK then tries to set a target list on the TextView,
+        # resulting in a warning because the Widget has no drag destination.
+        self.drag_dest_set(
+            Gtk.DestDefaults.ALL,
+            None,
+            Gdk.DragAction.DEFAULT)
 
     def create_tags(self):
         color = app.css_config.get_value('.gajim-url', StyleAttr.COLOR)
@@ -887,3 +892,8 @@ class HtmlTextView(Gtk.TextView):
         self.add_child_at_anchor(emoji, anchor)
         buffer_.delete_mark(start_mark)
         buffer_.delete_mark(end_mark)
+
+    def unselect(self):
+        buffer_ = self.get_buffer()
+        insert_iter = buffer_.get_iter_at_mark(buffer_.get_insert())
+        buffer_.select_range(insert_iter, insert_iter)

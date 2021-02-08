@@ -34,8 +34,8 @@ import os
 import sys
 import logging
 import uuid
-from pathlib import Path
 from collections import namedtuple
+from collections import defaultdict
 
 import nbxmpp
 from gi.repository import Gdk
@@ -49,13 +49,14 @@ from gajim.common.const import Display
 from gajim.common.events import Events
 from gajim.common.types import NetworkEventsControllerT  # pylint: disable=unused-import
 from gajim.common.types import InterfaceT  # pylint: disable=unused-import
-from gajim.common.types import LoggerT  # pylint: disable=unused-import
 from gajim.common.types import ConnectionT  # pylint: disable=unused-import
 from gajim.common.types import LegacyContactsAPIT  # pylint: disable=unused-import
+from gajim.common.types import SettingsT  # pylint: disable=unused-import
 
 interface = cast(InterfaceT, None)
 thread_interface = lambda *args: None # Interface to run a thread and then a callback
 config = c_config.Config()
+settings = cast(SettingsT, None)
 version = gajim.__version__
 connections = {}  # type: Dict[str, ConnectionT]
 avatar_cache = {}  # type: Dict[str, Dict[str, Any]]
@@ -67,7 +68,12 @@ ged = ged_module.GlobalEventsDispatcher() # Global Events Dispatcher
 nec = cast(NetworkEventsControllerT, None)
 plugin_manager = None # Plugins Manager
 
-logger = cast(LoggerT, None)
+class Storage:
+    def __init__(self):
+        self.cache = None
+        self.archive = None
+
+storage = Storage()
 
 css_config = None
 
@@ -144,6 +150,11 @@ _dependencies = {
     'GSPELL': False,
     'IDLE': False,
 }
+
+_tasks = defaultdict(list)  # type: Dict[int, List[Any]]
+
+def print_version():
+    log('gajim').info('Gajim Version: %s', gajim.__version__)
 
 
 def get_client(account):
@@ -378,6 +389,13 @@ def get_number_of_connected_accounts(accounts_list=None):
             connected_accounts = connected_accounts + 1
     return connected_accounts
 
+def get_available_clients():
+    clients = []
+    for client in connections.values():
+        if client.state.is_available:
+            clients.append(client)
+    return clients
+
 def get_connected_accounts(exclude_local=False):
     """
     Returns a list of CONNECTED accounts
@@ -394,7 +412,7 @@ def get_accounts_sorted():
     '''
     Get all accounts alphabetically sorted with Local first
     '''
-    account_list = config.get_per('accounts')
+    account_list = settings.get_accounts()
     account_list.sort(key=str.lower)
     if 'Local' in account_list:
         account_list.remove('Local')
@@ -422,7 +440,7 @@ def get_enabled_accounts_with_labels(exclude_local=True, connected_only=False,
     return accounts
 
 def get_account_label(account):
-    return config.get_per('accounts', account, 'account_label') or account
+    return settings.get_account_setting(account, 'account_label') or account
 
 def account_is_zeroconf(account):
     return connections[account].is_zeroconf
@@ -448,7 +466,7 @@ def account_is_disconnected(account):
 
 def zeroconf_is_connected():
     return account_is_connected(ZEROCONF_ACC_NAME) and \
-            config.get_per('accounts', ZEROCONF_ACC_NAME, 'is_zeroconf')
+            settings.get_account_setting(ZEROCONF_ACC_NAME, 'is_zeroconf')
 
 def in_groupchat(account, room_jid):
     room_jid = str(room_jid)
@@ -498,13 +516,13 @@ def get_jid_from_account(account_name):
     """
     Return the jid we use in the given account
     """
-    name = config.get_per('accounts', account_name, 'name')
-    hostname = config.get_per('accounts', account_name, 'hostname')
+    name = settings.get_account_setting(account_name, 'name')
+    hostname = settings.get_account_setting(account_name, 'hostname')
     jid = name + '@' + hostname
     return jid
 
 def get_account_from_jid(jid):
-    for account in config.get_per('accounts'):
+    for account in settings.get_accounts():
         if jid == get_jid_from_account(account):
             return account
 
@@ -523,9 +541,9 @@ def get_hostname_from_account(account_name, use_srv=False):
     """
     if use_srv and connections[account_name].connected_hostname:
         return connections[account_name].connected_hostname
-    if config.get_per('accounts', account_name, 'use_custom_host'):
-        return config.get_per('accounts', account_name, 'custom_host')
-    return config.get_per('accounts', account_name, 'hostname')
+    if settings.get_account_setting(account_name, 'use_custom_host'):
+        return settings.get_account_setting(account_name, 'custom_host')
+    return settings.get_account_setting(account_name, 'hostname')
 
 def get_notification_image_prefix(jid):
     """
@@ -551,23 +569,22 @@ def get_name_from_jid(account, jid):
 
 
 def get_recent_groupchats(account):
-    recent_groupchats = config.get_per(
-        'accounts', account, 'recent_groupchats').split()
+    recent_groupchats = settings.get_account_setting(
+        account, 'recent_groupchats').split()
 
     RecentGroupchat = namedtuple('RecentGroupchat',
                                  ['room', 'server', 'nickname'])
 
     recent_list = []
     for groupchat in recent_groupchats:
-        jid = nbxmpp.JID(groupchat)
-        recent = RecentGroupchat(
-            jid.getNode(), jid.getDomain(), jid.getResource())
+        jid = nbxmpp.JID.from_string(groupchat)
+        recent = RecentGroupchat(jid.localpart, jid.domain, jid.resource)
         recent_list.append(recent)
     return recent_list
 
 def add_recent_groupchat(account, room_jid, nickname):
-    recent = config.get_per(
-        'accounts', account, 'recent_groupchats').split()
+    recent = settings.get_account_setting(
+        account, 'recent_groupchats').split()
     full_jid = room_jid + '/' + nickname
     if full_jid in recent:
         recent.remove(full_jid)
@@ -575,8 +592,7 @@ def add_recent_groupchat(account, room_jid, nickname):
     if len(recent) > 10:
         recent = recent[0:9]
     config_value = ' '.join(recent)
-    config.set_per(
-        'accounts', account, 'recent_groupchats', config_value)
+    settings.set_account_setting(account, 'recent_groupchats', config_value)
 
 def get_priority(account, show):
     """
@@ -586,10 +602,10 @@ def get_priority(account, show):
         show = 'online'
 
     if show in ('online', 'chat', 'away', 'xa', 'dnd') and \
-    config.get_per('accounts', account, 'adjust_priority_with_status'):
-        prio = config.get_per('accounts', account, 'autopriority_' + show)
+    settings.get_account_setting(account, 'adjust_priority_with_status'):
+        prio = settings.get_account_setting(account, 'autopriority_' + show)
     else:
-        prio = config.get_per('accounts', account, 'priority')
+        prio = settings.get_account_setting(account, 'priority')
     if prio < -128:
         prio = -128
     elif prio > 127:
@@ -610,11 +626,11 @@ def prefers_app_menu():
 
 def load_css_config():
     global css_config
-    from gajim.gtk.css_config import CSSConfig
+    from gajim.gui.css_config import CSSConfig
     css_config = CSSConfig()
 
 def set_debug_mode(enable: bool) -> None:
-    debug_folder = Path(configpaths.get('DEBUG'))
+    debug_folder = configpaths.get('DEBUG')
     debug_enabled = debug_folder / 'debug-enabled'
     if enable:
         debug_enabled.touch()
@@ -623,7 +639,7 @@ def set_debug_mode(enable: bool) -> None:
             debug_enabled.unlink()
 
 def get_debug_mode() -> bool:
-    debug_folder = Path(configpaths.get('DEBUG'))
+    debug_folder = configpaths.get('DEBUG')
     debug_enabled = debug_folder / 'debug-enabled'
     return debug_enabled.exists()
 
@@ -631,7 +647,7 @@ def get_stored_bob_data(algo_hash: str) -> Optional[bytes]:
     try:
         return bob_cache[algo_hash]
     except KeyError:
-        filepath = Path(configpaths.get('BOB')) / algo_hash
+        filepath = configpaths.get('BOB') / algo_hash
         if filepath.exists():
             with open(str(filepath), 'r+b') as file:
                 data = file.read()
@@ -646,3 +662,27 @@ def get_groupchat_control(account, jid):
         return app.interface.minimized_controls[account][jid]
     except Exception:
         return None
+
+
+def register_task(self, task):
+    _tasks[id(self)].append(task)
+
+
+def remove_task(task, id_):
+    try:
+        _tasks[id_].remove(task)
+    except Exception:
+        pass
+    else:
+        if not _tasks[id_]:
+            del _tasks[id_]
+
+
+def cancel_tasks(obj):
+    id_ = id(obj)
+    if id_ not in _tasks:
+        return
+
+    task_list = _tasks[id_]
+    for task in task_list:
+        task.cancel()

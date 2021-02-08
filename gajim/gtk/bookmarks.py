@@ -25,10 +25,10 @@ from gajim.common import app
 from gajim.common.helpers import validate_jid
 from gajim.common.i18n import _
 
-from gajim.gtk.util import get_builder
+from .util import get_builder
 
 
-log = logging.getLogger('gajim.gtk.bookmarks')
+log = logging.getLogger('gajim.gui.bookmarks')
 
 
 class Column(IntEnum):
@@ -45,7 +45,7 @@ class Bookmarks(Gtk.ApplicationWindow):
         self.set_application(app.app)
         self.set_position(Gtk.WindowPosition.CENTER)
         self.set_show_menubar(False)
-        self.set_title(_('Bookmarks for %s' % app.get_account_label(account)))
+        self.set_title(_('Bookmarks for %s') % app.get_account_label(account))
         self.set_default_size(700, 500)
 
         self.account = account
@@ -64,7 +64,7 @@ class Bookmarks(Gtk.ApplicationWindow):
         self._ui.bookmarks_view.set_search_equal_func(self._search_func)
 
         self._ui.connect_signals(self)
-        self.connect('key-press-event', self._on_key_press)
+        self.connect_after('key-press-event', self._on_key_press)
 
         self.show_all()
 
@@ -87,7 +87,7 @@ class Bookmarks(Gtk.ApplicationWindow):
             log.warning('Invalid JID: %s (%s)', error, new_value)
             return
 
-        if not jid.isBare:
+        if not jid.is_bare:
             log.warning('Invalid JID: only bare JIDs allowed (%s)', jid)
             return
 
@@ -144,7 +144,7 @@ class Bookmarks(Gtk.ApplicationWindow):
             if not row[Column.ADDRESS]:
                 continue
 
-            bookmark = BookmarkData(jid=JID(row[Column.ADDRESS]),
+            bookmark = BookmarkData(jid=JID.from_string(row[Column.ADDRESS]),
                                     name=row[Column.NAME],
                                     autojoin=row[Column.AUTOJOIN],
                                     password=row[Column.PASSWORD],

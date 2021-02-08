@@ -26,7 +26,7 @@ URI.__new__.__defaults__ = (None, None)  # type: ignore
 
 class MUCData:
     def __init__(self, room_jid, nick, password, config=None):
-        self._room_jid = JID(room_jid)
+        self._room_jid = JID.from_string(room_jid)
         self._config = config
         self.nick = nick
         self.password = password
@@ -40,9 +40,7 @@ class MUCData:
 
     @property
     def occupant_jid(self):
-        jid = self._room_jid.copy()
-        jid.setResource(self.nick)
-        return jid
+        return self._room_jid.new_with(resource=self.nick)
 
     @property
     def config(self):
@@ -57,6 +55,7 @@ class OutgoingMessage:
                  type_,
                  subject=None,
                  chatstate=None,
+                 marker=None,
                  resource=None,
                  user_nick=None,
                  label=None,
@@ -65,12 +64,13 @@ class OutgoingMessage:
                  correct_id=None,
                  oob_url=None,
                  xhtml=None,
-                 nodes=None):
+                 nodes=None,
+                 play_sound=True):
 
         if type_ not in ('chat', 'groupchat', 'normal', 'headline'):
             raise ValueError('Unknown message type: %s' % type_)
 
-        if not message and chatstate is None:
+        if not message and chatstate is None and marker is None:
             raise ValueError('Trying to send message without content')
 
         self.account = account
@@ -92,6 +92,7 @@ class OutgoingMessage:
 
         self.subject = subject
         self.chatstate = chatstate
+        self.marker = marker
         self.resource = resource
         self.user_nick = user_nick
         self.label = label
@@ -110,6 +111,7 @@ class OutgoingMessage:
             self.additional_data.set_value('gajim', 'xhtml', xhtml)
 
         self.nodes = nodes
+        self.play_sound = play_sound
 
         self.timestamp = None
         self.message_id = None

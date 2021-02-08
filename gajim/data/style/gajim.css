@@ -6,13 +6,13 @@
 	border: none;
 	}
 
-.scrolled-no-border {border: none}
+.scrolled-no-border { border: none; }
 .no-scroll-indicator undershoot.top, undershoot.bottom { background-image: none; }
 .scrollbar-style scrollbar trough {background-color:@theme_base_color; }
 .scrollbar-style scrollbar {border:none; }
 .one-line-scrollbar scrollbar.vertical slider { min-height: 20px; }
 
-.actionbar-no-border box {border: none}
+.actionbar-no-border box { border: none; }
 .actionbar-no-border button { 
 	padding: 0px;
 	background-color: @theme_base_color; 
@@ -30,10 +30,38 @@
 
 .chatcontrol-separator {margin-bottom: 5px;}
 
-.link-button { min-height: 0px }
+.link-button { min-height: 0px; }
 
 /* VCardWindow */
 .VCard-GtkLinkButton { padding-left: 5px; border-left: none; }
+
+#NicknameEntry:disabled {
+    font-size: 28px;
+    font-weight: bold;
+    border: none;
+    padding: 0px 0px 0px 0px;
+    background-color: @theme_unfocused_bg_color;
+    color: @theme_fg_color;
+}
+
+#ProfileWindow grid { padding: 18px; }
+#ProfileWindow grid > button {
+    padding-left: 4px;
+    padding-right: 4px;
+}
+#ProfileWindow popover { padding: 6px; }
+#ProfileWindow actionbar box  {
+    padding: 0px;
+}
+#ProfileWindow actionbar button {
+   margin-top: 12px;
+}
+
+.profile-scrolled {
+    border: 1px solid;
+    border-radius: 4px;
+    border-color: @borders;
+}
 
 /* Emoticon Popover */
 popover#EmoticonPopover button { background: none; border: none; box-shadow:none; padding: 0px;}
@@ -41,7 +69,7 @@ popover#EmoticonPopover button > label { font-size: 24px; }
 popover#EmoticonPopover flowboxchild > label { font-size: 24px; }
 popover#EmoticonPopover flowboxchild { padding-top: 5px; padding-bottom: 5px; }
 popover#EmoticonPopover scrolledwindow { border: none; }
-popover#EmoticonPopover { padding: 5px; background-color: @theme_unfocused_base_color}
+popover#EmoticonPopover { padding: 5px; background-color: @theme_unfocused_base_color; }
 
 .emoji-chooser-heading { font-size: 13px; font-weight: bold; padding: 5px;}
 .emoji-chooser-flowbox { padding-left: 5px; padding-right: 11px; }
@@ -52,10 +80,10 @@ popover#EmoticonPopover { padding: 5px; background-color: @theme_unfocused_base_
 #HistorySyncAssistant progressbar text { color: #000; font-size: 18px; padding: 10px;}
 #HistorySyncAssistant list { border: 1px solid; border-color: @borders; }
 #HistorySyncAssistant list > row { padding: 10px 30px 10px 30px; }
-#HistorySyncAssistant list > row > label { color: @insensitive_fg_color }
+#HistorySyncAssistant list > row > label { color: @insensitive_fg_color; }
 #HistorySyncAssistant list > row.activatable > label { color: @theme_text_color; }
 #HistorySyncAssistant list > row.activatable:selected > label { color: @theme_selected_fg_color; }
-#FinishedLabel { font-size: 14px; font-weight: bold }
+#FinishedLabel { font-size: 14px; font-weight: bold; }
 
 /* Server Info */
 #ServerInfo { border: 1px solid; border-color: @borders; }
@@ -74,10 +102,19 @@ popover#EmoticonPopover { padding: 5px; background-color: @theme_unfocused_base_
 
 /* SettingsBox */
 .settings-box > row { border-bottom: 1px solid; border-color: @theme_unfocused_bg_color; }
-.settings-box > row:last-child { border-bottom: 0px}
+.settings-box > row:last-child { border-bottom: 0px; }
 .settings-box > row.activatable:active { box-shadow: none; }
 .settings-box > row { padding: 10px 20px 10px 10px; }
-.settings-box > row:not(.activatable) label { color: @insensitive_fg_color }
+.settings-box > row:not(.activatable) label { color: @insensitive_fg_color; }
+
+window.settings-dialog row {
+    border-bottom: 0px;
+}
+
+window.settings-dialog list { 
+    background: transparent;
+    margin: 12px;
+}
 
 /* GenericSetting */
 #SubDescription { color: @insensitive_fg_color; font-size: small;}
@@ -88,12 +125,11 @@ popover#EmoticonPopover { padding: 5px; background-color: @theme_unfocused_base_
 .PopoverButtonListbox { padding-left: 0px; padding-right: 0px; }
 .PopoverButtonListbox > list { margin-top: 10px; margin-bottom: 10px; }
 .PopoverButtonListbox > list > row { padding: 10px 20px 10px 20px; }
-.PopoverButtonListbox > list > row.activatable:active { box-shadow: none; background-color: @theme_selected_bg_color }
+.PopoverButtonListbox > list > row.activatable:active { box-shadow: none; background-color: @theme_selected_bg_color; }
 
 /* Settings ListBox */
-
 list.settings {
-	border: @borders 1px solid;
+    border: @borders 1px solid;
 }
 list.settings > row:not(:last-child) {
 	border-bottom: @theme_unfocused_bg_color 1px solid;
@@ -101,6 +137,27 @@ list.settings > row:not(:last-child) {
 list.settings row { min-height: 52px; }
 list.settings > row > box {
     margin: 6px 18px;
+}
+
+/* Settings Window */
+list.settings-menu row {
+    border-bottom: 1px solid;
+    border-color: @theme_unfocused_bg_color;
+    padding: 14px;
+    min-width: 170px;
+}
+list.settings-menu row label {
+    padding-left: 12px;
+}
+.settings-stack viewport > box {
+    margin-left: 30px;
+    margin-right: 30px;
+    margin-bottom: 10px;
+    margin-top: 25px;
+}
+.settings-border {
+    border: 1px solid;
+    border-color: @borders;
 }
 
 /* InfoBar */
@@ -124,10 +181,6 @@ infobar.error > revealer > box {
 /*SendFileDialog*/
 #SendFileDialog grid list > row { padding: 10px 20px 10px 10px; }
 
-/* Preferences Window */
-.PreferencesWindow { background-color: @theme_base_color; }
-.PreferencesStack { background-color: @theme_bg_color; }
-
 /* Accounts Window */
 .accounts-menu { border-right: 1px solid; border-color: @borders;}
 .accounts-settings-border {border: 1px solid; border-color: @borders;}
@@ -148,7 +201,7 @@ infobar.error > revealer > box {
     padding: 6px;
 }
 .tls-error-list > row:last-child {
-    border-bottom: 0px
+    border-bottom: 0px;
 }
 
 /* Start Chat Accounts Treeview */
@@ -158,10 +211,10 @@ infobar.error > revealer > box {
 
 /* StartChatListBox */
 .start-chat-row { border-bottom: 1px solid; border-color: @theme_unfocused_bg_color; }
-.start-chat-row:last-child { border-bottom: 0px}
+.start-chat-row:last-child { border-bottom: 0px; }
 .start-chat-row.activatable:active { box-shadow: none; }
 .start-chat-row { padding: 10px 20px 10px 10px; }
-.start-chat-row:not(.activatable) label { color: @insensitive_fg_color }
+.start-chat-row:not(.activatable) label { color: @insensitive_fg_color; }
 .start-chat-row:focus { outline: none; }
 
 /* GroupChatRoster */
@@ -170,12 +223,12 @@ infobar.error > revealer > box {
 .groupchat-roster treeview { padding-left: 4px; }
 
 /* GroupchatConfig */
-#GroupchatConfig > box > buttonbox { margin: 0px 12px 12px 12px; }
 #GroupchatConfig stack { border-bottom: 1px solid; border-color: @borders;}
 #GroupchatConfig stacksidebar > scrolledwindow {
-    background-color:@theme_base_color;
+    background-color: @theme_base_color;
     border-bottom: 1px solid;
-    border-color: @borders;}
+    border-color: @borders;
+}
 #GroupchatConfig treeview { padding: 5px; }
 
 /* Popover Treeview */
@@ -213,11 +266,11 @@ infobar.error > revealer > box {
 #ThemesWindow grid { padding: 12px; }
 
 .theme_listbox row { border-bottom: 1px solid; border-color: @theme_unfocused_bg_color; padding: 5px 10px 5px 10px;}
-.theme_listbox row:last-child { border-bottom: 0px}
+.theme_listbox row:last-child { border-bottom: 0px; }
 .theme_listbox row.activatable:active { box-shadow: none; }
-.theme_listbox row:not(.activatable) label { color: @insensitive_fg_color }
+.theme_listbox row:not(.activatable) label { color: @insensitive_fg_color; }
 .theme_listbox row:focus { outline: none; }
-.theme_listbox row:hover { background-color: @theme_base_color }
+.theme_listbox row:hover { background-color: @theme_base_color; }
 
 .theme_remove_button {
     background-color: @theme_base_color; 
@@ -240,11 +293,13 @@ infobar.error > revealer > box {
 .insensitive-fg-color {color: @insensitive_fg_color;}
 
 /* Padding/Margins */
+.margin-right18 { margin-right: 18px; }
 .margin-top6 { margin-top: 6px; }
 .margin-top12 { margin-top: 12px; }
 .margin-3 { margin: 3px; }
 .margin-12 { margin: 12px; }
 .margin-18 { margin: 18px; }
+.padding-6 { margin: 6px; }
 .padding-18 { margin: 18px; }
 .padding-left30 { padding-left: 30px; }
 
@@ -255,7 +310,7 @@ treeview.space { padding: 6px; }
 button.flat.link { padding: 0; border: 0; }
 
 /*MessageWindow Notebook*/
-.notebook-tab-label {min-width: 80px}
+.notebook-tab-label { min-width: 80px; }
 
 /*Icon colors*/
 .success-color { color: @success_color; }
@@ -264,11 +319,11 @@ button.flat.link { padding: 0; border: 0; }
 .selected-color { color: @theme_selected_bg_color; }
 
 /*Encryption*/
-.encrypted-color { color: rgb(75, 181, 67) }
-.unencrypted-color { color: @error_color }
+.encrypted-color { color: rgb(75, 181, 67); }
+.unencrypted-color { color: @error_color; }
 
 /*Receipts*/
-.receipt-received-color { color: rgb(75, 181, 67) }
+.receipt-received-color { color: rgb(75, 181, 67); }
 
 /*Dataforms*/
 .field-fixed { font-size: 16px; font-weight: bold; padding-top:5px;}
@@ -291,6 +346,19 @@ button.flat.link { padding: 0; border: 0; }
     border-radius: 4px;
     font-size: 80%;
     font-weight: bold;
+}
+
+@keyframes pulse {
+    0%  { -gtk-icon-transform: scale(1.0); }
+    20% { -gtk-icon-transform: scale(1.1); }
+    35% { -gtk-icon-transform: scale(1.0); }
+}
+
+.audio-mic-animation {
+    animation-name: pulse;
+    animation-duration: 2.0s;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
 }
 
 /* Treeview */
@@ -330,3 +398,26 @@ button.flat.link { padding: 0; border: 0; }
 #NotificationPopupTitle {
     font-weight: bold;
 }
+
+
+popover.combo list {
+    min-width: 200px;
+    margin: 12px;
+}
+popover.combo { padding: 0px; }
+popover.combo list {
+    border-style: none;
+    background-color: transparent;
+}
+popover.combo list > row {
+    padding: 0px 12px 0px 12px;
+    min-height: 40px;
+}
+popover.combo list > row:not(:last-child) { border-bottom: 1px solid alpha(#cdc7c2, 0.5); }
+popover.combo scrollbar.vertical { padding-top: 2px; padding-bottom: 2px; }
+popover.combo scrollbar.vertical {
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+messagedialog.confirmation-dialog > box { margin-top: 18px; }

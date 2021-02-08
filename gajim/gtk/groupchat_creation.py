@@ -18,7 +18,7 @@ import random
 from gi.repository import Gtk
 from gi.repository import Gdk
 
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import StanzaError
 
 from gajim.common import app
 from gajim.common.const import MUC_CREATION_EXAMPLES
@@ -27,11 +27,11 @@ from gajim.common.i18n import _
 from gajim.common.helpers import validate_jid
 from gajim.common.helpers import to_user_string
 
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import ensure_not_destroyed
+from .dialogs import ErrorDialog
+from .util import get_builder
+from .util import ensure_not_destroyed
 
-log = logging.getLogger('gajim.gtk.groupchat_creation')
+log = logging.getLogger('gajim.gui.groupchat_creation')
 
 
 class CreateGroupchatWindow(Gtk.ApplicationWindow):
@@ -40,6 +40,8 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
         self.set_name('CreateGroupchat')
         self.set_application(app.app)
         self.set_position(Gtk.WindowPosition.CENTER)
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        self.set_default_size(500, -1)
         self.set_show_menubar(False)
         self.set_resizable(True)
         self.set_title(_('Create Group Chat'))
@@ -131,7 +133,7 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
 
         try:
             jid = validate_jid(text)
-            if jid.getResource():
+            if jid.resource:
                 raise ValueError
 
         except ValueError:
@@ -195,12 +197,14 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
             room_jid, callback=self._disco_info_received)
 
     @ensure_not_destroyed
-    def _disco_info_received(self, result):
-        if is_error_result(result):
-            if result.condition == 'item-not-found':
-                self._create_muc(result.jid)
+    def _disco_info_received(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            if error.condition == 'item-not-found':
+                self._create_muc(error.jid)
                 return
-            self._set_warning_from_error(result)
+            self._set_warning_from_error(error)
 
         else:
             self._set_warning_from_error_code(

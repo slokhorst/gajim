@@ -33,6 +33,7 @@ from typing import List  # pylint: disable=unused-import
 from typing import Tuple  # pylint: disable=unused-import
 
 import re
+import copy
 from enum import IntEnum, unique
 
 from gi.repository import GLib
@@ -64,13 +65,8 @@ class Config:
 
     __options = ({
         # name: [ type, default_value, help_string, restart ]
-        'verbose': [opt_bool, False, '', True],
         'autopopup': [opt_bool, False],
-        'notify_on_signin': [opt_bool, False],
-        'notify_on_signout': [opt_bool, False],
-        'notify_on_new_message': [opt_bool, True],
         'autopopupaway': [opt_bool, False],
-        'autopopup_chat_opened': [opt_bool, False, _('Show desktop notification even when a chat window is opened for this contact and does not have focus.')],
         'sounddnd': [opt_bool, False, _('Play sound even when being busy.')],
         'showoffline': [opt_bool, True],
         'show_only_chat_and_online': [opt_bool, False, _('Show only online and free for chat contacts in the contact list.')],
@@ -193,8 +189,7 @@ class Config:
             #always, never, peracct, pertype should not be translated
                 _('Controls the window where new messages are placed.\n\'always\' - All messages are sent to a single window.\n\'always_with_roster\' - Like \'always\' but the messages are in a single window along with the contact list.\n\'never\' - All messages get their own window.\n\'peracct\' - Messages for each account are sent to a specific window.\n\'pertype\' - Each message type (e.g. chats vs. group chats) is sent to a specific window.')],
         'show_roster_on_startup':[opt_str, 'always', _('Show contact list window on startup.\n\'always\' - Always show contact list window.\n\'never\' - Never show contact list window.\n\'last_state\' - Restore last state of the contact list window.')],
-        'show_avatar_in_chat': [opt_bool, True, _('If enabled, Gajim displays the avatar in the chat window.')],
-        'escape_key_closes': [opt_bool, True, _('If enabled, pressing Esc closes a tab/window.')],
+        'escape_key_closes': [opt_bool, False, _('If enabled, pressing Esc closes a tab/window.')],
         'hide_groupchat_banner': [opt_bool, False, _('Hides the banner in a group chat window.')],
         'hide_chat_banner': [opt_bool, False, _('Hides the banner in a 1:1 chat window.')],
         'hide_groupchat_occupants_list': [opt_bool, False, _('Hides the group chat participants list in a group chat window.')],
@@ -227,7 +222,6 @@ class Config:
         'use_keyring': [opt_bool, True, _('If enabled, Gajim will use the System\'s Keyring to store account passwords.')],
         'remote_commands': [opt_bool, False, _('If enabled, Gajim will execute XEP-0146 Commands.')],
         'dark_theme': [opt_int, 2, _('2: System, 1: Enabled, 0: Disabled')],
-        'threshold_options': [opt_str, '1, 2, 4, 10, 0', _('Options in days which can be chosen in the sync threshold menu'), True],
         'public_room_sync_threshold': [opt_int, 1, _('Maximum history in days we request from a public group chat archive. 0: As much as possible.')],
         'private_room_sync_threshold': [opt_int, 0, _('Maximum history in days we request from a private group chat archive. 0: As much as possible.')],
         'show_subject_on_join': [opt_bool, True, _('If enabled, Gajim shows the group chat subject in the chat window when joining.')],
@@ -237,15 +231,15 @@ class Config:
         'send_chatstate_default': [opt_str, 'composing_only', _('Chat state notifications that are sent to contacts. Possible values: all, composing_only, disabled')],
         'send_chatstate_muc_default': [opt_str, 'composing_only', _('Chat state notifications that are sent to the group chat. Possible values: \'all\', \'composing_only\', \'disabled\'')],
         'muclumbus_api_jid': [opt_str, 'rodrigo.de.mucobedo@dreckshal.de'],
-        'muclumbus_api_http_uri': [opt_str, 'https://search.jabbercat.org/api/1.0/search'],
+        'muclumbus_api_http_uri': [opt_str, 'https://search.jabber.network/api/1.0/search'],
         'muclumbus_api_pref': [opt_str, 'http', _('API Preferences. Possible values: \'http\', \'iq\'')],
-        'auto_copy': [opt_bool, True, _('Selecting text will copy it to the clipboard')],
         'command_system_execute': [opt_bool, False, _('If enabled, Gajim will execute commands (/show, /sh, /execute, /exec).')],
         'groupchat_roster_width': [opt_int, 210, _('Width of group chat roster in pixel')],
         'dev_force_bookmark_2': [opt_bool, False, _('Force Bookmark 2 usage')],
         'show_help_start_chat': [opt_bool, True, _('Shows an info bar with helpful hints in the Start / Join Chat dialog')],
         'check_for_update': [opt_bool, True, _('Check for Gajim updates periodically')],
         'last_update_check': [opt_str, '', _('Date of the last update check')],
+        'always_ask_for_status_message': [opt_bool, False],
     }, {})  # type: Tuple[Dict[str, List[Any]], Dict[Any, Any]]
 
     __options_per_key = {
@@ -269,7 +263,6 @@ class Config:
             'autopriority_xa': [opt_int, 30],
             'autopriority_dnd': [opt_int, 20],
             'autoconnect': [opt_bool, False, '', True],
-            'autoconnect_as': [opt_str, 'online', _('Status to be used automatically when connecting. Can be \'online\', \'chat\', \'away\', \'xa\' or \'dnd\'. NOTE: This option is used only if \'restore_last_status\' is disabled.'), True],
             'restore_last_status': [opt_bool, False, _('If enabled, the last status will be restored.')],
             'autoauth': [opt_bool, False, _('If enabled, contacts requesting authorization will be accepted automatically.')],
             'active': [opt_bool, True, _('If disabled, this account will be disabled and will not appear in the contact list window.'), True],
@@ -277,8 +270,7 @@ class Config:
             'keyid': [opt_str, '', '', True],
             'keyname': [opt_str, '', '', True],
             'use_plain_connection': [opt_bool, False, _('Use an unencrypted connection to the server')],
-            'action_when_plain_connection': [opt_str, 'warn', _('Show a warning dialog before sending password on an plaintext connection. Can be \'warn\', or \'none\'.')],
-            'ignore_ssl_errors': [opt_str, '', _('List of SSL errors to ignore (space separated).')],
+            'confirm_unencrypted_connection': [opt_bool, True],
             'use_custom_host': [opt_bool, False, '', True],
             'custom_port': [opt_int, 5222, '', True],
             'custom_host': [opt_str, '', '', True],
@@ -305,11 +297,7 @@ class Config:
             'answer_receipts': [opt_bool, True, _('If enabled, Gajim will answer to message receipt requests.')],
             'publish_tune': [opt_bool, False],
             'publish_location': [opt_bool, False],
-            'subscribe_mood': [opt_bool, True],
-            'subscribe_activity': [opt_bool, True],
-            'subscribe_tune': [opt_bool, True],
-            'subscribe_nick': [opt_bool, True],
-            'subscribe_location': [opt_bool, True],
+            'request_user_data': [opt_bool, True],
             'ignore_unknown_contacts': [opt_bool, False],
             'send_os_info': [opt_bool, True, _('Allow Gajim to send information about the operating system you are running.')],
             'send_time_info': [opt_bool, True, _('Allow Gajim to send your local time.')],
@@ -371,12 +359,6 @@ class Config:
         _('Working'): [_('I\'m working.'), 'working', 'other', '', '', ''],
         _('Phone'): [_('I\'m on the phone.'), 'talking', 'on_the_phone', '', '', ''],
         _('Out'): [_('I\'m out enjoying life.'), 'relaxing', 'going_out', '', '', ''],
-        '_last_online': ['', '', '', '', '', ''],
-        '_last_chat': ['', '', '', '', '', ''],
-        '_last_away': ['', '', '', '', '', ''],
-        '_last_xa': ['', '', '', '', '', ''],
-        '_last_dnd': ['', '', '', '', '', ''],
-        '_last_offline': ['', '', '', '', '', ''],
     }
 
     soundevents_default = {
@@ -576,6 +558,12 @@ class Config:
         if subname not in obj:
             return None
         return obj[subname]
+
+    def get_all(self):
+        return copy.deepcopy(self.__options[1])
+
+    def get_all_per(self, optname):
+        return copy.deepcopy(self.__options_per_key[optname][1])
 
     def get_default_per(self, optname, subname):
         if optname not in self.__options_per_key:

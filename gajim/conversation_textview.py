@@ -38,19 +38,21 @@ from gajim.common import app
 from gajim.common import helpers
 from gajim.common import i18n
 from gajim.common.i18n import _
+from gajim.common.i18n import Q_
 from gajim.common.helpers import AdditionalDataDict
 from gajim.common.const import StyleAttr
 from gajim.common.const import Trust
+from gajim.common.const import URI_SCHEMES
 from gajim.common.helpers import to_user_string
 
-from gajim.gtk import util
-from gajim.gtk.util import get_cursor
-from gajim.gtk.util import format_fingerprint
-from gajim.gtk.util import text_to_color
-from gajim.gtk.emoji_data import emoji_pixbufs
-from gajim.gtk.emoji_data import is_emoji
-from gajim.gtk.emoji_data import get_emoji_pixbuf
-from gajim.gtk.htmltextview import HtmlTextView
+from gajim.gui import util
+from gajim.gui.util import get_cursor
+from gajim.gui.util import format_fingerprint
+from gajim.gui.util import text_to_color
+from gajim.gui.emoji_data import emoji_pixbufs
+from gajim.gui.emoji_data import is_emoji
+from gajim.gui.emoji_data import get_emoji_pixbuf
+from gajim.gui.htmltextview import HtmlTextView
 
 NOT_SHOWN = 0
 ALREADY_RECEIVED = 1
@@ -67,102 +69,12 @@ TRUST_SYMBOL_DATA = {
                       'warning-color'),
     Trust.BLIND: ('security-medium-symbolic',
                   _('Unverified'),
-                  'success-color'),
+                  'encrypted-color'),
     Trust.VERIFIED: ('security-high-symbolic',
                      _('Verified'),
                      'encrypted-color')
 }
 
-
-def is_selection_modified(mark):
-    name = mark.get_name()
-    return name in ('selection_bound', 'insert')
-
-def has_focus(widget):
-    return widget.get_state_flags() & Gtk.StateFlags.FOCUSED == \
-        Gtk.StateFlags.FOCUSED
-
-class TextViewImage(Gtk.Image):
-
-    def __init__(self, anchor, text):
-        super(TextViewImage, self).__init__()
-        self.anchor = anchor
-        self._selected = False
-        self._disconnect_funcs = []
-        self.connect('parent-set', self.on_parent_set)
-        self.set_tooltip_markup(text)
-        self.anchor.plaintext = text
-
-    def _get_selected(self):
-        parent = self.get_parent()
-        if not parent or not self.anchor:
-            return False
-        buffer_ = parent.get_buffer()
-        position = buffer_.get_iter_at_child_anchor(self.anchor)
-        bounds = buffer_.get_selection_bounds()
-        return bounds and position.in_range(*bounds)
-
-    def get_state(self):
-        parent = self.get_parent()
-        if not parent:
-            return Gtk.StateType.NORMAL
-        if self._selected:
-            if has_focus(parent):
-                return Gtk.StateType.SELECTED
-            return Gtk.StateType.ACTIVE
-        return Gtk.StateType.NORMAL
-
-    def _update_selected(self):
-        selected = self._get_selected()
-        if self._selected != selected:
-            self._selected = selected
-            self.queue_draw()
-
-    def _do_connect(self, widget, signal, callback):
-        id_ = widget.connect(signal, callback)
-        def disconnect():
-            widget.disconnect(id_)
-        self._disconnect_funcs.append(disconnect)
-
-    def _disconnect_signals(self):
-        for func in self._disconnect_funcs:
-            func()
-        self._disconnect_funcs = []
-
-    def on_parent_set(self, widget, old_parent):
-        parent = self.get_parent()
-        if not parent:
-            self._disconnect_signals()
-            return
-        if isinstance(parent, Gtk.EventBox):
-            parent = parent.get_parent()
-            if not parent:
-                self._disconnect_signals()
-                return
-
-        self._do_connect(parent, 'style-set', self.do_queue_draw)
-        self._do_connect(parent, 'focus-in-event', self.do_queue_draw)
-        self._do_connect(parent, 'focus-out-event', self.do_queue_draw)
-
-        textbuf = parent.get_buffer()
-        self._do_connect(textbuf, 'mark-set', self.on_mark_set)
-        self._do_connect(textbuf, 'mark-deleted', self.on_mark_deleted)
-
-    def do_queue_draw(self, *args):
-        self.queue_draw()
-        return False
-
-    def on_mark_set(self, buf, iterat, mark):
-        self.on_mark_modified(mark)
-        return False
-
-    def on_mark_deleted(self, buf, mark):
-        self.on_mark_modified(mark)
-        return False
-
-    def on_mark_modified(self, mark):
-        if is_selection_modified(mark):
-            self._update_selected()
 
 class ConversationTextview(GObject.GObject):
     """
@@ -190,14 +102,6 @@ class ConversationTextview(GObject.GObject):
         self.tv = HtmlTextView(account)
         self.tv.connect('query-tooltip', self._query_tooltip)
 
-        # set properties
-        self.tv.set_border_width(1)
-        self.tv.set_accepts_tab(True)
-        self.tv.set_editable(False)
-        self.tv.set_cursor_visible(False)
-        self.tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self.tv.set_left_margin(2)
-        self.tv.set_right_margin(2)
         self._buffer = self.tv.get_buffer()
         self.handlers = {}
         self.image_cache = {}
@@ -291,14 +195,14 @@ class ConversationTextview(GObject.GObject):
         tag = buffer_.create_tag('italic')
         tag.set_property('style', Pango.Style.ITALIC)
 
-        tag = buffer_.create_tag('underline')
-        tag.set_property('underline', Pango.Underline.SINGLE)
+        tag = buffer_.create_tag('strikethrough')
+        tag.set_property('strikethrough', True)
 
         buffer_.create_tag('focus-out-line', justification=Gtk.Justification.CENTER)
         self.displaymarking_tags = {}
 
         # One mark at the beginning then 2 marks between each lines
-        size = app.config.get('max_conversation_lines')
+        size = app.settings.get('max_conversation_lines')
         size = 2 * size - 1
         self.marks_queue = queue.Queue(size)
 
@@ -408,6 +312,12 @@ class ConversationTextview(GObject.GObject):
             return
         line.set_receipt()
 
+    def show_displayed(self, id_):
+        line = self._get_message_line(id_)
+        if line is None:
+            return
+        line.set_displayed()
+
     def show_error(self, id_, error):
         line = self._get_message_line(id_)
         if line is None:
@@ -479,7 +389,7 @@ class ConversationTextview(GObject.GObject):
         buffer_ = self.tv.get_buffer()
         start, end = buffer_.get_bounds()
         buffer_.delete(start, end)
-        size = app.config.get('max_conversation_lines')
+        size = app.settings.get('max_conversation_lines')
         size = 2 * size - 1
         self.marks_queue = queue.Queue(size)
         self.focus_out_end_mark = None
@@ -530,7 +440,7 @@ class ConversationTextview(GObject.GObject):
             phrase_for_url = urllib.parse.quote(self.selected_phrase.encode(
                 'utf-8'))
 
-            always_use_en = app.config.get('always_english_wikipedia')
+            always_use_en = app.settings.get('always_english_wikipedia')
             if always_use_en:
                 link = 'https://en.wikipedia.org/wiki/Special:Search?search=%s'\
                         % phrase_for_url
@@ -543,10 +453,10 @@ class ConversationTextview(GObject.GObject):
             submenu.append(item)
 
             item = Gtk.MenuItem.new_with_mnemonic(_('Look it up in _Dictionary'))
-            dict_link = app.config.get('dictionary_url')
+            dict_link = app.settings.get('dictionary_url')
             if dict_link == 'WIKTIONARY':
                 # special link (yeah undocumented but default)
-                always_use_en = app.config.get('always_english_wiktionary')
+                always_use_en = app.settings.get('always_english_wiktionary')
                 if always_use_en:
                     link = 'https://en.wiktionary.org/wiki/Special:Search?search=%s'\
                             % phrase_for_url
@@ -569,7 +479,7 @@ class ConversationTextview(GObject.GObject):
             submenu.append(item)
 
 
-            search_link = app.config.get('search_engine')
+            search_link = app.settings.get('search_engine')
             if search_link.find('%s') == -1:
                 # we must have %s in the url
                 item = Gtk.MenuItem.new_with_label(
@@ -672,7 +582,7 @@ class ConversationTextview(GObject.GObject):
                 otext += '\n{} {}'.format(oob_desc, oob_url)
 
         # basic: links + mail + formatting is always checked (we like that)
-        if app.config.get('emoticons_theme') and graphics:
+        if app.settings.get('emoticons_theme') and graphics:
             # search for emoticons & urls
             iterator = app.interface.emot_and_basic_re.finditer(otext)
         else: # search for just urls + mail + formatting
@@ -728,7 +638,7 @@ class ConversationTextview(GObject.GObject):
         text_is_valid_uri = False
         is_xhtml_link = None
         show_ascii_formatting_chars = \
-            app.config.get('show_ascii_formatting_chars')
+            app.settings.get('show_ascii_formatting_chars')
         buffer_ = self.tv.get_buffer()
 
         # Detect XHTML-IM link
@@ -740,8 +650,7 @@ class ConversationTextview(GObject.GObject):
                 break
 
         # Check if we accept this as an uri
-        schemes = app.config.get('uri_schemes').split()
-        for scheme in schemes:
+        for scheme in URI_SCHEMES:
             if special_text.startswith(scheme):
                 text_is_valid_uri = True
 
@@ -750,7 +659,7 @@ class ConversationTextview(GObject.GObject):
         else:
             end_iter = buffer_.get_end_iter()
 
-        theme = app.config.get('emoticons_theme')
+        theme = app.settings.get('emoticons_theme')
         show_emojis = theme and theme != 'font'
         if show_emojis and graphics and is_emoji(special_text):
             # it's an emoticon
@@ -790,46 +699,46 @@ class ConversationTextview(GObject.GObject):
             tags.append('sth_at_sth')
         elif special_text.startswith('*'): # it's a bold text
             tags.append('bold')
-            if special_text[1] == '/' and special_text[-2] == '/' and\
+            if special_text[1] == '~' and special_text[-2] == '~' and\
+            len(special_text) > 4: # it's also strikethrough
+                tags.append('strikethrough')
+                if not show_ascii_formatting_chars:
+                    special_text = special_text[2:-2] # remove *~ ~*
+            elif special_text[1] == '_' and special_text[-2] == '_' and \
             len(special_text) > 4: # it's also italic
                 tags.append('italic')
-                if not show_ascii_formatting_chars:
-                    special_text = special_text[2:-2] # remove */ /*
-            elif special_text[1] == '_' and special_text[-2] == '_' and \
-            len(special_text) > 4: # it's also underlined
-                tags.append('underline')
                 if not show_ascii_formatting_chars:
                     special_text = special_text[2:-2] # remove *_ _*
             else:
                 if not show_ascii_formatting_chars:
                     special_text = special_text[1:-1] # remove * *
-        elif special_text.startswith('/'): # it's an italic text
+        elif special_text.startswith('~'): # it's a strikethrough text
+            tags.append('strikethrough')
+            if special_text[1] == '*' and special_text[-2] == '*' and \
+            len(special_text) > 4: # it's also bold
+                tags.append('bold')
+                if not show_ascii_formatting_chars:
+                    special_text = special_text[2:-2] # remove ~* *~
+            elif special_text[1] == '_' and special_text[-2] == '_' and \
+            len(special_text) > 4: # it's also italic
+                tags.append('italic')
+                if not show_ascii_formatting_chars:
+                    special_text = special_text[2:-2] # remove ~_ _~
+            else:
+                if not show_ascii_formatting_chars:
+                    special_text = special_text[1:-1] # remove ~ ~
+        elif special_text.startswith('_'): # it's an italic text
             tags.append('italic')
             if special_text[1] == '*' and special_text[-2] == '*' and \
             len(special_text) > 4: # it's also bold
                 tags.append('bold')
                 if not show_ascii_formatting_chars:
-                    special_text = special_text[2:-2] # remove /* */
-            elif special_text[1] == '_' and special_text[-2] == '_' and \
-            len(special_text) > 4: # it's also underlined
-                tags.append('underline')
-                if not show_ascii_formatting_chars:
-                    special_text = special_text[2:-2] # remove /_ _/
-            else:
-                if not show_ascii_formatting_chars:
-                    special_text = special_text[1:-1] # remove / /
-        elif special_text.startswith('_'): # it's an underlined text
-            tags.append('underline')
-            if special_text[1] == '*' and special_text[-2] == '*' and \
-            len(special_text) > 4: # it's also bold
-                tags.append('bold')
-                if not show_ascii_formatting_chars:
                     special_text = special_text[2:-2] # remove _* *_
-            elif special_text[1] == '/' and special_text[-2] == '/' and \
-            len(special_text) > 4: # it's also italic
-                tags.append('italic')
+            elif special_text[1] == '~' and special_text[-2] == '~' and \
+            len(special_text) > 4: # it's also strikethrough
+                tags.append('strikethrough')
                 if not show_ascii_formatting_chars:
-                    special_text = special_text[2:-2] # remove _/ /_
+                    special_text = special_text[2:-2] # remove _~ ~_
             else:
                 if not show_ascii_formatting_chars:
                     special_text = special_text[1:-1] # remove _ _
@@ -1011,12 +920,12 @@ class ConversationTextview(GObject.GObject):
             text_tags.append(other_text_tag)
 
         else:  # not status nor /me
-            if app.config.get('chat_merge_consecutive_nickname'):
+            if app.settings.get('chat_merge_consecutive_nickname'):
                 if kind != old_kind or self.just_cleared:
                     self.print_name(name, kind, other_tags_for_name,
                         direction_mark=direction_mark, iter_=iter_)
                 else:
-                    self.print_real_text(app.config.get(
+                    self.print_real_text(app.settings.get(
                         'chat_merge_consecutive_nickname_indent'),
                         mark=insert_mark, additional_data=additional_data)
             else:
@@ -1055,7 +964,10 @@ class ConversationTextview(GObject.GObject):
             message_line.set_error(to_user_string(error))
 
         if marker is not None:
-            message_line.set_receipt()
+            if marker == 'received':
+                message_line.set_receipt()
+            elif marker == 'displayed':
+                message_line.set_displayed()
 
         if index is None:
             # New Message
@@ -1086,7 +998,7 @@ class ConversationTextview(GObject.GObject):
         """
         Format the time according to config setting 'time_stamp'
         """
-        format_ = helpers.from_one_line(app.config.get('time_stamp'))
+        format_ = helpers.from_one_line(app.settings.get('time_stamp'))
         tim_format = time.strftime(format_, tim)
         return tim_format
 
@@ -1160,7 +1072,7 @@ class ConversationTextview(GObject.GObject):
     def print_time(self, text, kind, tim, direction_mark, other_tags_for_time, iter_):
         local_tim = time.localtime(tim)
         buffer_ = self.tv.get_buffer()
-        current_print_time = app.config.get('print_time')
+        current_print_time = app.settings.get('print_time')
 
         if current_print_time == 'always':
             timestamp_str = self.get_time_to_show(local_tim)
@@ -1172,7 +1084,7 @@ class ConversationTextview(GObject.GObject):
             else:
                 buffer_.insert(iter_, timestamp)
         elif current_print_time == 'sometimes':
-            every_foo_seconds = 60 * app.config.get(
+            every_foo_seconds = 60 * app.settings.get(
                 'print_ichat_every_foo_minutes')
             seconds_passed = tim - self.last_time_printout
             if seconds_passed > every_foo_seconds:
@@ -1182,9 +1094,9 @@ class ConversationTextview(GObject.GObject):
                     'time_sometimes')
 
     def print_displaymarking(self, displaymarking, iter_):
-        bgcolor = displaymarking.getAttr('bgcolor') or '#FFF'
-        fgcolor = displaymarking.getAttr('fgcolor') or '#000'
-        text = displaymarking.getData()
+        bgcolor = displaymarking.bgcolor
+        fgcolor = displaymarking.fgcolor
+        text = displaymarking.name
         if text:
             buffer_ = self.tv.get_buffer()
             tag = self.displaymarking_tags.setdefault(bgcolor + '/' + fgcolor,
@@ -1211,9 +1123,9 @@ class ConversationTextview(GObject.GObject):
                 if tag.startswith('muc_nickname_color_'):
                     self._add_new_colour_tags(tag, name)
 
-            before_str = app.config.get('before_nickname')
+            before_str = app.settings.get('before_nickname')
             before_str = helpers.from_one_line(before_str)
-            after_str = app.config.get('after_nickname')
+            after_str = app.settings.get('after_nickname')
             after_str = helpers.from_one_line(after_str)
             format_ = before_str + name + direction_mark + after_str + ' '
             buffer_.insert_with_tags_by_name(end_iter, format_, *name_tags)
@@ -1251,7 +1163,7 @@ class ConversationTextview(GObject.GObject):
             iter_ = buffer_.get_iter_at_mark(mark)
 
         xhtml = additional_data.get_value('gajim', 'xhtml', False)
-        if xhtml and app.config.get('show_xhtml'):
+        if xhtml and app.settings.get('show_xhtml'):
             try:
                 if name and (text.startswith('/me ') or text.startswith('/me\n')):
                     xhtml = xhtml.replace('/me', '<i>* %s</i>' % (name,), 1)
@@ -1292,15 +1204,26 @@ class MessageLine:
         self.timestamp = timestamp
         self.start_mark = start_mark
         self._has_receipt = False
+        self._has_displayed = False
         self._message_icons = message_icons
 
     @property
     def has_receipt(self):
         return self._has_receipt
 
+    @property
+    def has_displayed(self):
+        return self._has_displayed
+
     def set_receipt(self):
         self._has_receipt = True
+        if self._has_displayed:
+            return
         self._message_icons.set_receipt_icon_visible(True)
+
+    def set_displayed(self):
+        self._has_displayed = True
+        self._message_icons.set_displayed_icon_visible(True)
 
     def set_correction(self, tooltip):
         self._message_icons.set_correction_icon_visible(True)
@@ -1320,12 +1243,12 @@ class MessageIcons(Gtk.Box):
             'document-edit-symbolic', Gtk.IconSize.MENU)
         self._correction_image.set_no_show_all(True)
 
-        self._receipt_image = Gtk.Image.new_from_icon_name(
-            'emblem-ok-symbolic', Gtk.IconSize.MENU)
-        self._receipt_image.get_style_context().add_class(
+        self._marker_image = Gtk.Image.new_from_icon_name(
+            'feather-check-symbolic', Gtk.IconSize.MENU)
+        self._marker_image.get_style_context().add_class(
             'receipt-received-color')
-        self._receipt_image.set_tooltip_text(_('Received'))
-        self._receipt_image.set_no_show_all(True)
+        self._marker_image.set_tooltip_text(_('Received'))
+        self._marker_image.set_no_show_all(True)
 
         self._error_image = Gtk.Image.new_from_icon_name(
             'dialog-warning-symbolic', Gtk.IconSize.MENU)
@@ -1333,14 +1256,20 @@ class MessageIcons(Gtk.Box):
         self._error_image.set_no_show_all(True)
 
         self.add(self._correction_image)
-        self.add(self._receipt_image)
+        self.add(self._marker_image)
         self.add(self._error_image)
         self.show_all()
 
     def set_receipt_icon_visible(self, visible):
-        if not app.config.get('positive_184_ack'):
+        if not app.settings.get('positive_184_ack'):
             return
-        self._receipt_image.set_visible(visible)
+        self._marker_image.set_visible(visible)
+
+    def set_displayed_icon_visible(self, visible):
+        self._marker_image.set_visible(visible)
+        self._marker_image.set_from_icon_name(
+            'feather-check-double-symbolic', Gtk.IconSize.MENU)
+        self._marker_image.set_tooltip_text(Q_('?Message state:Read'))
 
     def set_correction_icon_visible(self, visible):
         self._correction_image.set_visible(visible)

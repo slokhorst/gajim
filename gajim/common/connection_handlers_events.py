@@ -220,7 +220,7 @@ class NotificationEvent(nec.NetworkIncomingEvent):
         else:
             self.sound_event = 'next_message_received_unfocused'
 
-        if app.config.get('notification_preview_message'):
+        if app.settings.get('notification_preview_message'):
             self.popup_text = msg_obj.msgtxt
             if self.popup_text and (self.popup_text.startswith('/me ') or \
             self.popup_text.startswith('/me\n')):
@@ -243,26 +243,26 @@ class NotificationEvent(nec.NetworkIncomingEvent):
             '%(n_msgs)i unread messages from %(nickname)s',
             num_unread) % {'nickname': nick, 'n_msgs': num_unread}
 
-        if app.config.get('notify_on_new_message'):
-            if self.first_unread or (app.config.get('autopopup_chat_opened') \
-            and not self.control_focused):
-                if app.config.get('autopopupaway'):
+        if app.settings.get('show_notifications'):
+            if self.first_unread or not self.control_focused:
+                if app.settings.get('autopopupaway'):
                     # always show notification
                     self.do_popup = True
                 if app.connections[self.conn.name].status in ('online', 'chat'):
                     # we're online or chat
                     self.do_popup = True
 
-        if msg_obj.properties.attention and not app.config.get(
+        if msg_obj.properties.attention and not app.settings.get(
         'ignore_incoming_attention'):
             self.popup_timeout = 0
             self.do_popup = True
         else:
-            self.popup_timeout = app.config.get('notification_timeout')
+            self.popup_timeout = app.settings.get('notification_timeout')
 
-        if msg_obj.properties.attention and not app.config.get(
-        'ignore_incoming_attention') and app.config.get_per('soundevents',
-        'attention_received', 'enabled'):
+        sound = app.settings.get_soundevent_settings('attention_received')
+
+        if msg_obj.properties.attention and not app.settings.get(
+        'ignore_incoming_attention') and sound['enabled']:
             self.sound_event = 'attention_received'
             self.do_sound = True
         elif self.first_unread and helpers.allow_sound_notification(
@@ -287,14 +287,15 @@ class NotificationEvent(nec.NetworkIncomingEvent):
 
         nick = msg_obj.properties.muc_nickname
 
-        if nick != msg_obj.gc_control.nick:
-            self.do_sound = True
-            if sound == 'received':
-                self.sound_event = 'muc_message_received'
-            elif sound == 'highlight':
-                self.sound_event = 'muc_message_highlight'
-            else:
-                self.do_sound = False
+        if nick == msg_obj.gc_control.nick:
+            # A message from ourself
+            return
+
+        self.do_sound = True
+        if sound == 'received':
+            self.sound_event = 'muc_message_received'
+        elif sound == 'highlight':
+            self.sound_event = 'muc_message_highlight'
         else:
             self.do_sound = False
 
@@ -304,17 +305,18 @@ class NotificationEvent(nec.NetworkIncomingEvent):
         if self.control is not None:
             self.control_focused = self.control.has_focus()
 
-        if app.config.get('notify_on_new_message'):
+        if app.settings.get('show_notifications'):
             contact = app.contacts.get_groupchat_contact(self.account,
                                                          self.jid)
             notify_for_muc = sound == 'highlight' or contact.can_notify()
+
             if not notify_for_muc:
                 self.do_popup = False
 
             elif self.control_focused:
                 self.do_popup = False
 
-            elif app.config.get('autopopupaway'):
+            elif app.settings.get('autopopupaway'):
                 # always show notification
                 self.do_popup = True
 
@@ -325,7 +327,7 @@ class NotificationEvent(nec.NetworkIncomingEvent):
         self.popup_msg_type = 'gc_msg'
         self.popup_event_type = _('New Group Chat Message')
 
-        if app.config.get('notification_preview_message'):
+        if app.settings.get('notification_preview_message'):
             self.popup_text = msg_obj.msgtxt
             if self.popup_text and (self.popup_text.startswith('/me ') or
                                     self.popup_text.startswith('/me\n')):
@@ -378,12 +380,9 @@ class NotificationEvent(nec.NetworkIncomingEvent):
             if account_server in app.block_signed_in_notifications and \
             app.block_signed_in_notifications[account_server]:
                 block_transport = True
-            if helpers.allow_showing_notification(account, 'notify_on_signin') \
-            and not app.block_signed_in_notifications[account] and \
-            not block_transport:
-                self.do_popup = True
-            if app.config.get_per('soundevents', 'contact_connected',
-            'enabled') and not app.block_signed_in_notifications[account] and\
+
+            sound = app.settings.get_soundevent_settings('contact_connected')
+            if sound['enabled'] and not app.block_signed_in_notifications[account] and\
             not block_transport and helpers.allow_sound_notification(account,
             'contact_connected'):
                 self.sound_event = event
@@ -391,10 +390,8 @@ class NotificationEvent(nec.NetworkIncomingEvent):
 
         elif pres_obj.old_show > 1 and pres_obj.new_show < 2:
             event = 'contact_disconnected'
-            if helpers.allow_showing_notification(account, 'notify_on_signout'):
-                self.do_popup = True
-            if app.config.get_per('soundevents', 'contact_disconnected',
-            'enabled') and helpers.allow_sound_notification(account, event):
+            sound = app.settings.get_soundevent_settings('contact_disconnected')
+            if sound['enabled'] and helpers.allow_sound_notification(account, event):
                 self.sound_event = event
                 self.do_sound = True
         # Status change (not connected/disconnected or error (<1))
@@ -408,7 +405,7 @@ class NotificationEvent(nec.NetworkIncomingEvent):
 
         self.show = pres_obj.show
 
-        self.popup_timeout = app.config.get('notification_timeout')
+        self.popup_timeout = app.settings.get('notification_timeout')
 
         nick = i18n.direction_mark + app.get_name_from_jid(account, self.jid)
         if event == 'status_change':
@@ -419,18 +416,7 @@ class NotificationEvent(nec.NetworkIncomingEvent):
             if pres_obj.status:
                 self.popup_text = self.popup_text + " : " + pres_obj.status
             self.popup_event_type = _('Contact Changed Status')
-        elif event == 'contact_connected':
-            self.popup_title = _('%(nickname)s Signed In') % {'nickname': nick}
-            self.popup_text = ''
-            if pres_obj.status:
-                self.popup_text = pres_obj.status
-            self.popup_event_type = _('Contact Signed In')
-        elif event == 'contact_disconnected':
-            self.popup_title = _('%(nickname)s Signed Out') % {'nickname': nick}
-            self.popup_text = ''
-            if pres_obj.status:
-                self.popup_text = pres_obj.status
-            self.popup_event_type = _('Contact Signed Out')
+
 
 class InformationEvent(nec.NetworkIncomingEvent):
     name = 'information'

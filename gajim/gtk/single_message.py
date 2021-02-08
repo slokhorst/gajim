@@ -26,12 +26,12 @@ from gajim.common.structs import OutgoingMessage
 
 from gajim.conversation_textview import ConversationTextview
 
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import get_icon_name
-from gajim.gtk.util import get_completion_liststore
-from gajim.gtk.util import move_window
-from gajim.gtk.util import resize_window
+from .dialogs import ErrorDialog
+from .util import get_builder
+from .util import get_icon_name
+from .util import get_completion_liststore
+from .util import move_window
+from .util import resize_window
 
 if app.is_installed('GSPELL'):
     from gi.repository import Gspell  # pylint: disable=ungrouped-imports
@@ -79,10 +79,10 @@ class SingleMessageWindow(Gtk.ApplicationWindow):
         else:
             self._ui.to_entry.set_text(to)
 
-        if (app.config.get('use_speller') and
+        if (app.settings.get('use_speller') and
                 app.is_installed('GSPELL') and
                 action == 'send'):
-            lang = app.config.get('speller_language')
+            lang = app.settings.get('speller_language')
             gspell_lang = Gspell.language_lookup(lang)
             if gspell_lang is None:
                 gspell_lang = Gspell.language_get_default()
@@ -125,11 +125,11 @@ class SingleMessageWindow(Gtk.ApplicationWindow):
 
         # get window position and size from config
         resize_window(self,
-                      app.config.get('single-msg-width'),
-                      app.config.get('single-msg-height'))
+                      app.settings.get('single-msg-width'),
+                      app.settings.get('single-msg-height'))
         move_window(self,
-                    app.config.get('single-msg-x-position'),
-                    app.config.get('single-msg-y-position'))
+                    app.settings.get('single-msg-x-position'),
+                    app.settings.get('single-msg-y-position'))
 
         self.show_all()
 
@@ -140,11 +140,11 @@ class SingleMessageWindow(Gtk.ApplicationWindow):
     def _save_position(self):
         # save the window size and position
         x_pos, y_pos = self.get_position()
-        app.config.set('single-msg-x-position', x_pos)
-        app.config.set('single-msg-y-position', y_pos)
+        app.settings.set('single-msg-x-position', x_pos)
+        app.settings.set('single-msg-y-position', y_pos)
         width, height = self.get_size()
-        app.config.set('single-msg-width', width)
-        app.config.set('single-msg-height', height)
+        app.settings.set('single-msg-width', width)
+        app.settings.set('single-msg-height', height)
 
     def _on_to_entry_changed(self, _widget):
         entry = self._ui.to_entry.get_text()

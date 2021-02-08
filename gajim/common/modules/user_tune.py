@@ -47,6 +47,9 @@ class UserTune(BaseModule):
             ('signed-in', ged.CORE, self._on_signed_in),
         ])
 
+    def get_current_tune(self):
+        return self._tune_data
+
     @event_node(Namespace.TUNE)
     def _tune_received(self, _con, _stanza, properties):
         if properties.pubsub_event.retracted:
@@ -65,11 +68,12 @@ class UserTune(BaseModule):
                 self._con.pep[PEPEventType.TUNE] = data
             else:
                 self._con.pep.pop(PEPEventType.TUNE, None)
+            self._tune_data = data
 
         app.nec.push_incoming_event(
             NetworkEvent('tune-received',
                          account=self._account,
-                         jid=properties.jid.getBare(),
+                         jid=properties.jid.bare,
                          tune=data,
                          is_self_message=properties.is_self_message))
 
@@ -78,27 +82,29 @@ class UserTune(BaseModule):
         if not self._con.get_module('PEP').supported:
             return
 
-        if not app.config.get_per('accounts',
-                                  self._account,
-                                  'publish_tune'):
+        if not app.settings.get_account_setting(self._account, 'publish_tune'):
             return
+
+        if tune == self._tune_data:
+            return
+
+        self._tune_data = tune
+
         self._log.info('Send %s', tune)
         self._nbxmpp('Tune').set_tune(tune)
 
     def set_enabled(self, enable):
         if enable:
-            app.config.set_per('accounts',
-                               self._account,
-                               'publish_tune',
-                               True)
+            app.settings.set_account_setting(self._account,
+                                             'publish_tune',
+                                             True)
             self._publish_current_tune()
 
         else:
             self.set_tune(None)
-            app.config.set_per('accounts',
-                               self._account,
-                               'publish_tune',
-                               False)
+            app.settings.set_account_setting(self._account,
+                                             'publish_tune',
+                                             False)
 
     def _publish_current_tune(self):
         self.set_tune(MusicTrackListener.get().current_tune)
@@ -110,7 +116,7 @@ class UserTune(BaseModule):
     def _on_music_track_changed(self, event):
         if self._tune_data == event.info:
             return
-        self._tune_data = event.info
+
         self.set_tune(event.info)
 
 

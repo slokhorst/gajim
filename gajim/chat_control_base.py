@@ -24,6 +24,7 @@
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
 import os
+import sys
 import time
 import uuid
 import tempfile
@@ -32,7 +33,6 @@ from gi.repository import Gtk
 from gi.repository import Gdk
 from gi.repository import GLib
 from gi.repository import Gio
-from gi.repository import GObject
 
 from gajim.common import events
 from gajim.common import app
@@ -51,19 +51,18 @@ from gajim import gtkgui_helpers
 
 from gajim.conversation_textview import ConversationTextview
 
-from gajim.gtk.dialogs import DialogButton
-from gajim.gtk.dialogs import NewConfirmationDialog
-from gajim.gtk.dialogs import NewConfirmationCheckDialog
-from gajim.gtk.message_input import MessageInputTextView
-from gajim.gtk import util
-from gajim.gtk.util import at_the_end
-from gajim.gtk.util import get_show_in_roster
-from gajim.gtk.util import get_show_in_systray
-from gajim.gtk.util import get_hardware_key_codes
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import generate_account_badge
-from gajim.gtk.const import ControlType  # pylint: disable=unused-import
-from gajim.gtk.emoji_chooser import emoji_chooser
+from gajim.gui.dialogs import DialogButton
+from gajim.gui.dialogs import ConfirmationDialog
+from gajim.gui.dialogs import PastePreviewDialog
+from gajim.gui.message_input import MessageInputTextView
+from gajim.gui.util import at_the_end
+from gajim.gui.util import get_show_in_roster
+from gajim.gui.util import get_show_in_systray
+from gajim.gui.util import get_hardware_key_codes
+from gajim.gui.util import get_builder
+from gajim.gui.util import generate_account_badge
+from gajim.gui.const import ControlType  # pylint: disable=unused-import
+from gajim.gui.emoji_chooser import emoji_chooser
 
 from gajim.command_system.implementation.middleware import ChatCommandProcessor
 from gajim.command_system.implementation.middleware import CommandTools
@@ -80,6 +79,20 @@ from gajim.command_system.implementation import execute
 if app.is_installed('GSPELL'):
     from gi.repository import Gspell  # pylint: disable=ungrouped-imports
 
+# This is needed so copying text from the conversation textview
+# works with different language layouts. Pressing the key c on a russian
+# layout yields another keyval than with the english layout.
+# So we match hardware keycodes instead of keyvals.
+# Multiple hardware keycodes can trigger a keyval like Gdk.KEY_c.
+KEYCODES_KEY_C = get_hardware_key_codes(Gdk.KEY_c)
+
+if sys.platform == 'darwin':
+    COPY_MODIFIER = Gdk.ModifierType.META_MASK
+    COPY_MODIFIER_KEYS = (Gdk.KEY_Meta_L, Gdk.KEY_Meta_R)
+else:
+    COPY_MODIFIER = Gdk.ModifierType.CONTROL_MASK
+    COPY_MODIFIER_KEYS = (Gdk.KEY_Control_L, Gdk.KEY_Control_R)
+
 
 ################################################################################
 class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
@@ -87,12 +100,6 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
     A base class containing a banner, ConversationTextview, MessageInputTextView
     """
 
-    # This is needed so copying text from the conversation textview
-    # works with different language layouts. Pressing the key c on a russian
-    # layout yields another keyval than with the english layout.
-    # So we match hardware keycodes instead of keyvals.
-    # Multiple hardware keycodes can trigger a keyval like Gdk.KEY_c.
-    keycodes_c = get_hardware_key_codes(Gdk.KEY_c)
     _type = None  # type: ControlType
 
     def __init__(self, parent_win, widget_name, contact, acct,
@@ -127,19 +134,6 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         self.xml.connect_signals(self)
         self.widget = self.xml.get_object('%s_hbox' % widget_name)
 
-        if not self._type.is_groupchat:
-            # Create banner and connect signals
-            id_ = self.xml.banner_eventbox.connect(
-                'button-press-event',
-                self._on_banner_eventbox_button_press_event)
-            self.handlers[id_] = self.xml.banner_eventbox
-
-        if self.xml.banner_label is not None:
-            id_ = self.xml.banner_label.connect(
-                'populate_popup',
-                self.on_banner_label_populate_popup)
-            self.handlers[id_] = self.xml.banner_label
-
         self._accounts = app.get_enabled_accounts_with_labels()
         if len(self._accounts) > 1:
             account_badge = generate_account_badge(self.account)
@@ -151,6 +145,10 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         # Drag and drop
         self.xml.overlay.add_overlay(self.xml.drop_area)
         self.xml.drop_area.hide()
+        self.xml.overlay.connect(
+            'drag-data-received', self._on_drag_data_received)
+        self.xml.overlay.connect('drag-motion', self._on_drag_motion)
+        self.xml.overlay.connect('drag-leave', self._on_drag_leave)
 
         self.TARGET_TYPE_URI_LIST = 80
         uri_entry = Gtk.TargetEntry.new(
@@ -165,15 +163,6 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                               Gtk.TargetFlags.SAME_APP,
                               0)]
 
-        id_ = self.xml.overlay.connect('drag_data_received',
-                                       self._on_drag_data_received)
-
-        self.handlers[id_] = self.xml.overlay
-        id_ = self.xml.overlay.connect('drag_motion', self._on_drag_motion)
-        self.handlers[id_] = self.xml.overlay
-        id_ = self.xml.overlay.connect('drag_leave', self._on_drag_leave)
-        self.handlers[id_] = self.xml.overlay
-
         self.xml.overlay.drag_dest_set(
             Gtk.DestDefaults.ALL,
             self._dnd_list,
@@ -182,47 +171,45 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
 
         # Create textviews and connect signals
         self.conv_textview = ConversationTextview(self.account)
-        self.conv_textview.tv.drag_dest_unset()
+
         id_ = self.conv_textview.connect('quote', self.on_quote)
-        self.handlers[id_] = self.conv_textview.tv
+        self.handlers[id_] = self.conv_textview
 
-        id_ = self.conv_textview.tv.connect('grab-focus',
-                                            self._on_html_textview_grab_focus)
-        self.handlers[id_] = self.conv_textview.tv
+        self.conv_textview.tv.connect('key-press-event',
+                                      self._on_conv_textview_key_press_event)
 
-        self.conv_scrolledwindow = self.xml.conversation_scrolledwindow
-        self.conv_scrolledwindow.add(self.conv_textview.tv)
-        widget = self.conv_scrolledwindow.get_vadjustment()
-        id_ = widget.connect('changed',
-                             self.on_conversation_vadjustment_changed)
-        self.handlers[id_] = widget
+        self.xml.conversation_scrolledwindow.add(self.conv_textview.tv)
+        widget = self.xml.conversation_scrolledwindow.get_vadjustment()
+        widget.connect('changed', self.on_conversation_vadjustment_changed)
 
-        vscrollbar = self.conv_scrolledwindow.get_vscrollbar()
-        id_ = vscrollbar.connect('button-release-event',
-                                 self._on_scrollbar_button_release)
-        self.handlers[id_] = vscrollbar
+        vscrollbar = self.xml.conversation_scrolledwindow.get_vscrollbar()
+        vscrollbar.connect('button-release-event',
+                           self._on_scrollbar_button_release)
 
-        self.correcting = False
-        self.last_sent_msg = None
-
-        # add MessageInputTextView to UI and connect signals
         self.msg_textview = MessageInputTextView()
-        self.msg_textview.drag_dest_unset()
+        self.msg_textview.connect('paste-clipboard',
+                                  self._on_message_textview_paste_event)
+        self.msg_textview.connect('key-press-event',
+                                  self._on_message_textview_key_press_event)
+        self.msg_textview.connect('populate-popup',
+                                  self.on_msg_textview_populate_popup)
+        self.msg_textview.connect('text-changed',
+                                  self._on_message_tv_buffer_changed)
+
+        # Send message button
+        self.xml.send_message_button.set_action_name(
+            'win.send-message-%s' % self.control_id)
+        self.xml.send_message_button.set_visible(
+            app.settings.get('show_send_message_button'))
+        app.settings.bind_signal(
+            'show_send_message_button',
+            self.xml.send_message_button,
+            'set_visible')
+
         self.msg_scrolledwindow = ScrolledWindow()
         self.msg_scrolledwindow.add(self.msg_textview)
 
         self.xml.hbox.pack_start(self.msg_scrolledwindow, True, True, 0)
-
-        id_ = self.msg_textview.connect('paste-clipboard',
-                                        self._on_message_textview_paste_event)
-        self.handlers[id_] = self.msg_textview
-        id_ = self.msg_textview.connect(
-            'key_press_event',
-            self._on_message_textview_key_press_event)
-        self.handlers[id_] = self.msg_textview
-        id_ = self.msg_textview.connect('populate_popup',
-                                        self.on_msg_textview_populate_popup)
-        self.handlers[id_] = self.msg_textview
 
         # the following vars are used to keep history of user's messages
         self.sent_history = []
@@ -230,6 +217,12 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         self.received_history = []
         self.received_history_pos = 0
         self.orig_msg = None
+
+        # For XEP-0333
+        self.last_msg_id = None
+
+        self.correcting = False
+        self.last_sent_msg = None
 
         self.set_emoticon_popover()
 
@@ -248,9 +241,6 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         con = app.connections[self.account]
         con.get_module('Chatstate').set_active(self.contact)
 
-        id_ = self.msg_textview.connect('text-changed',
-                                        self._on_message_tv_buffer_changed)
-        self.handlers[id_] = self.msg_textview
         if parent_win is not None:
             id_ = parent_win.window.connect('motion-notify-event',
                                             self._on_window_motion_notify)
@@ -277,6 +267,36 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         # This is basically a very nasty hack to surpass the inability
         # to properly use the super, because of the old code.
         CommandTools.__init__(self)
+
+    def _on_conv_textview_key_press_event(self, textview, event):
+        if event.get_state() & Gdk.ModifierType.SHIFT_MASK:
+            if event.keyval in (Gdk.KEY_Page_Down, Gdk.KEY_Page_Up):
+                return Gdk.EVENT_PROPAGATE
+
+        if event.keyval in COPY_MODIFIER_KEYS:
+            # Don’t route modifier keys for copy action to the Message Input
+            # otherwise pressing CTRL/META + c (the next event after that)
+            # will not reach the textview (because the Message Input would get
+            # focused).
+            return Gdk.EVENT_PROPAGATE
+
+        if event.get_state() & COPY_MODIFIER:
+            # Don’t reroute the event if it is META + c and the
+            # textview has a selection
+            if event.hardware_keycode in KEYCODES_KEY_C:
+                if textview.get_buffer().props.has_selection:
+                    return Gdk.EVENT_PROPAGATE
+
+        if not self.msg_textview.get_sensitive():
+            # If the input textview is not sensitive it can’t get the focus.
+            # In that case propagate_key_event() would send the event again
+            # to the conversation textview. This would mean a recursion.
+            return Gdk.EVENT_PROPAGATE
+
+        # Focus the Message Input and resend the event
+        self.msg_textview.grab_focus()
+        self.msg_textview.get_toplevel().propagate_key_event(event)
+        return Gdk.EVENT_STOP
 
     @property
     def type(self):
@@ -349,9 +369,6 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         Derived types MAY implement this.
         """
         self.draw_banner_text()
-        self._update_banner_state_image()
-        app.plugin_manager.gui_extension_point('chat_control_base_draw_banner',
-                                               self)
 
     def update_toolbar(self):
         """
@@ -377,11 +394,6 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         Derived types MAY implement this
         """
         self.draw_banner()
-
-    def _update_banner_state_image(self):
-        """
-        Derived types MAY implement this
-        """
 
     def _update_toolbar(self):
         """
@@ -477,7 +489,8 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         model.clear()
 
         sel = 0
-        _label, labellist, default = event.catalog
+        labellist = event.catalog.get_label_names()
+        default = event.catalog.default
         for index, label in enumerate(labellist):
             model.append([label])
             if label == default:
@@ -504,11 +517,10 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             return Gdk.EVENT_STOP
 
         if action == 'show-emoji-chooser':
-            self.xml.emoticons_button.get_popover().show()
-            return Gdk.EVENT_STOP
-
-        if action == 'copy-text':
-            self.conv_textview.tv.emit('copy-clipboard')
+            if sys.platform in ('win32', 'darwin'):
+                self.xml.emoticons_button.get_popover().show()
+                return Gdk.EVENT_STOP
+            self.msg_textview.emit('insert-emoji')
             return Gdk.EVENT_STOP
 
         return Gdk.EVENT_PROPAGATE
@@ -522,6 +534,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         self.parent_win.window.add_action(action)
 
         actions = {
+            'send-message-%s': self._on_send_message,
             'send-file-%s': self._on_send_file,
             'send-file-httpupload-%s': self._on_send_file,
             'send-file-jingle-%s': self._on_send_file,
@@ -532,6 +545,18 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             action.connect('activate', func)
             action.set_enabled(False)
             self.parent_win.window.add_action(action)
+
+    def remove_actions(self):
+        actions = [
+            'send-message-',
+            'set-encryption-',
+            'send-file-',
+            'send-file-httpupload-',
+            'send-file-jingle-',
+        ]
+
+        for action in actions:
+            self.parent_win.window.remove_action(f'{action}{self.control_id}')
 
     def change_encryption(self, action, param):
         encryption = param.get_string()
@@ -583,15 +608,12 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             'encryption_dialog' + self.encryption, self)
 
     def set_encryption_state(self, encryption):
-        config_key = '%s-%s' % (self.account, self.contact.jid)
         self.encryption = encryption
         self.conv_textview.encryption_enabled = encryption is not None
-        app.config.set_per('encryption', config_key,
-                           'encryption', self.encryption or '')
+        self.contact.settings.set('encryption', self.encryption or '')
 
     def get_encryption_state(self):
-        config_key = '%s-%s' % (self.account, self.contact.jid)
-        state = app.config.get_per('encryption', config_key, 'encryption')
+        state = self.contact.settings.get('encryption')
         if not state:
             return None
         if state not in app.plugin_manager.encryption_plugins:
@@ -612,7 +634,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                                      Gtk.IconSize.MENU)
 
     def set_speller(self):
-        if not app.is_installed('GSPELL') or not app.config.get('use_speller'):
+        if not app.is_installed('GSPELL') or not app.settings.get('use_speller'):
             return
 
         gspell_lang = self.get_speller_language()
@@ -627,14 +649,10 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         spell_checker.connect('notify::language', self.on_language_changed)
 
     def get_speller_language(self):
-        per_type = 'contacts'
-        if self._type.is_groupchat:
-            per_type = 'rooms'
-        lang = app.config.get_per(
-            per_type, self.contact.jid, 'speller_language')
+        lang = self.contact.settings.get('speller_language')
         if not lang:
             # use the default one
-            lang = app.config.get('speller_language')
+            lang = app.settings.get('speller_language')
             if not lang:
                 lang = i18n.LANG
         gspell_lang = Gspell.language_lookup(lang)
@@ -644,20 +662,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
 
     def on_language_changed(self, checker, _param):
         gspell_lang = checker.get_language()
-        per_type = 'contacts'
-        if self._type.is_groupchat:
-            per_type = 'rooms'
-        if not app.config.get_per(per_type, self.contact.jid):
-            app.config.add_per(per_type, self.contact.jid)
-        app.config.set_per(per_type, self.contact.jid,
-                           'speller_language', gspell_lang.get_code())
-
-    def _on_html_textview_grab_focus(self, textview):
-        # Abort signal so the textview does not get focused
-        # Focus the MessageInputTextView instead
-        GObject.signal_stop_emission_by_name(textview, 'grab-focus')
-        self.msg_textview.grab_focus()
-        return Gdk.EVENT_STOP
+        self.contact.settings.set('speller_language', gspell_lang.get_code())
 
     def on_banner_label_populate_popup(self, _label, menu):
         """
@@ -676,13 +681,28 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         menu.show_all()
 
     def shutdown(self):
-        # PluginSystem: removing GUI extension points
-        # connected with ChatControlBase instance object
+        # remove_gui_extension_point() is called on shutdown, but also when
+        # a plugin is getting disabled. Plugins don’t know the difference.
+        # Plugins might want to remove their widgets on
+        # remove_gui_extension_point(), so delete the objects only afterwards.
         app.plugin_manager.remove_gui_extension_point('chat_control_base', self)
         app.plugin_manager.remove_gui_extension_point(
-            'chat_control_base_draw_banner', self)
-        app.plugin_manager.remove_gui_extension_point(
             'chat_control_base_update_toolbar', self)
+
+        for i in list(self.handlers.keys()):
+            if self.handlers[i].handler_is_connected(i):
+                self.handlers[i].disconnect(i)
+        self.handlers.clear()
+
+        self.conv_textview.del_handlers()
+        del self.conv_textview
+        del self.msg_textview
+        del self.msg_scrolledwindow
+
+        self.widget.destroy()
+        del self.widget
+
+        del self.xml
 
         self.unregister_events()
 
@@ -720,6 +740,8 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
     def paste_clipboard_as_quote(self, _item: Gtk.MenuItem) -> None:
         clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
         text = clipboard.wait_for_text()
+        if text is None:
+            return
         self.insert_as_quote(text)
 
     def on_quote(self, _widget, text):
@@ -737,15 +759,16 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
         image = clipboard.wait_for_image()
         if image is not None:
-            if not app.config.get('confirm_paste_image'):
+            if not app.settings.get('confirm_paste_image'):
                 self._paste_event_confirmed(True, image)
                 return
-            NewConfirmationCheckDialog(
+            PastePreviewDialog(
                 _('Paste Image'),
                 _('You are trying to paste an image'),
                 _('Are you sure you want to paste your '
                   'clipboard\'s image into the chat window?'),
                 _('_Do not ask me again'),
+                image,
                 [DialogButton.make('Cancel'),
                  DialogButton.make('Accept',
                                    text=_('_Paste'),
@@ -754,7 +777,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
 
     def _paste_event_confirmed(self, is_checked, image):
         if is_checked:
-            app.config.set('confirm_paste_image', False)
+            app.settings.set('confirm_paste_image', False)
 
         dir_ = tempfile.gettempdir()
         path = os.path.join(dir_, '%s.png' % str(uuid.uuid4()))
@@ -763,8 +786,8 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         self._start_filetransfer(path)
 
     def _get_pref_ft_method(self):
-        ft_pref = app.config.get_per('accounts', self.account,
-                                     'filetransfer_preference')
+        ft_pref = app.settings.get_account_setting(self.account,
+                                                   'filetransfer_preference')
         httpupload = self.parent_win.window.lookup_action(
             'send-file-httpupload-%s' % self.control_id)
         jingle = self.parent_win.window.lookup_action(
@@ -790,20 +813,14 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         if method is None:
             return
 
-        con = app.connections[self.account]
-
         if method == 'httpupload':
-            con.get_module('HTTPUpload').check_file_before_transfer(
-                path,
-                self.encryption,
-                self.contact,
-                groupchat=self._type.is_groupchat)
+            app.interface.send_httpupload(self, path)
 
         else:
             ft = app.interface.instances['file_transfers']
             ft.send_file(self.account, self.contact, path)
 
-    def _on_message_textview_key_press_event(self, widget, event):
+    def _on_message_textview_key_press_event(self, textview, event):
         if event.keyval == Gdk.KEY_space:
             self.space_pressed = True
 
@@ -813,7 +830,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             # If the space key has been pressed and now it hasn't,
             # we save the buffer into the undo list. But be careful we're not
             # pressing Control again (as in ctrl+z)
-            _buffer = widget.get_buffer()
+            _buffer = textview.get_buffer()
             start_iter, end_iter = _buffer.get_bounds()
             self.msg_textview.save_undo(_buffer.get_text(start_iter,
                                                          end_iter,
@@ -824,20 +841,20 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         if self._type.is_groupchat:
             if event.keyval not in (Gdk.KEY_ISO_Left_Tab, Gdk.KEY_Tab):
                 self.last_key_tabs = False
+
         if event.get_state() & Gdk.ModifierType.SHIFT_MASK:
-            # CTRL + SHIFT + TAB
             if event.get_state() & Gdk.ModifierType.CONTROL_MASK and \
                             event.keyval == Gdk.KEY_ISO_Left_Tab:
                 self.parent_win.move_to_next_unread_tab(False)
                 return True
-            # SHIFT + PAGE_[UP|DOWN]: send to conv_textview
-            if event.keyval == Gdk.KEY_Page_Down or \
-                            event.keyval == Gdk.KEY_Page_Up:
+
+            if event.keyval in (Gdk.KEY_Page_Down, Gdk.KEY_Page_Up):
                 self.conv_textview.tv.event(event)
                 self._on_scroll(None, event.keyval)
                 return True
+
         if event.get_state() & Gdk.ModifierType.CONTROL_MASK:
-            if event.keyval == Gdk.KEY_Tab:  # CTRL + TAB
+            if event.keyval == Gdk.KEY_Tab:
                 self.parent_win.move_to_next_unread_tab(True)
                 return True
 
@@ -892,34 +909,30 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                 else:  # Ctrl+Down
                     self.scroll_messages('down', message_buffer, 'sent')
                 return True
-        elif event.keyval == Gdk.KEY_Return or \
-        event.keyval == Gdk.KEY_KP_Enter:  # ENTER
-            message_textview = widget
-            message_buffer = message_textview.get_buffer()
-            message_textview.replace_emojis()
-            start_iter, end_iter = message_buffer.get_bounds()
-            message = message_buffer.get_text(start_iter, end_iter, False)
-            xhtml = self.msg_textview.get_xhtml()
+        elif (event.keyval == Gdk.KEY_Return or
+              event.keyval == Gdk.KEY_KP_Enter):  # ENTER
 
             if event_state & Gdk.ModifierType.SHIFT_MASK:
-                send_message = False
-            else:
-                is_ctrl_enter = bool(event_state & Gdk.ModifierType.CONTROL_MASK)
-                send_message = is_ctrl_enter == app.config.get('send_on_ctrl_enter')
+                textview.insert_newline()
+                return True
 
-            if send_message and not app.account_is_available(self.account):
+            if event_state & Gdk.ModifierType.CONTROL_MASK:
+                if not app.settings.get('send_on_ctrl_enter'):
+                    textview.insert_newline()
+                    return True
+            else:
+                if app.settings.get('send_on_ctrl_enter'):
+                    textview.insert_newline()
+                    return True
+
+            if not app.account_is_available(self.account):
                 # we are not connected
                 app.interface.raise_dialog('not-connected-while-sending')
-            elif send_message:
-                self.send_message(message, xhtml=xhtml)
-            else:
-                message_buffer.insert_at_cursor('\n')
-                mark = message_buffer.get_insert()
-                iter_ = message_buffer.get_iter_at_mark(mark)
-                if message_buffer.get_end_iter().equal(iter_):
-                    GLib.idle_add(util.scroll_to_end, self.msg_scrolledwindow)
+                return True
 
+            self._on_send_message()
             return True
+
         elif event.keyval == Gdk.KEY_z: # CTRL+z
             if event_state & Gdk.ModifierType.CONTROL_MASK:
                 self.msg_textview.undo()
@@ -961,10 +974,16 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         if self._type.is_privatechat:
             jid = self.gc_contact.room_jid
         catalog = con.get_module('SecLabels').get_catalog(jid)
-        labels, label_list, _ = catalog
+        labels, label_list = catalog.labels, catalog.get_label_names()
         lname = label_list[idx]
         label = labels[lname]
         return label
+
+    def _on_send_message(self, *args):
+        self.msg_textview.replace_emojis()
+        message = self.msg_textview.get_text()
+        xhtml = self.msg_textview.get_xhtml()
+        self.send_message(message, xhtml=xhtml)
 
     def send_message(self,
                      message,
@@ -1032,6 +1051,11 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                 self.contact, self.msg_textview.has_text())
 
     def _on_message_tv_buffer_changed(self, textview, textbuffer):
+        has_text = self.msg_textview.has_text()
+        if self.parent_win is not None:
+            self.parent_win.window.lookup_action(
+                'send-message-' + self.control_id).set_enabled(has_text)
+
         if textbuffer.get_char_count() and self.encryption:
             app.plugin_manager.extension_point(
                 'typing' + self.encryption, self)
@@ -1056,7 +1080,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         size = len(history)
         scroll = pos != size
         # we don't want size of the buffer to grow indefinitely
-        max_size = app.config.get('key_up_lines')
+        max_size = app.settings.get('key_up_lines')
         for _i in range(size - max_size + 1):
             if pos == 0:
                 break
@@ -1093,6 +1117,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                     displaymarking=None,
                     msg_log_id=None,
                     message_id=None,
+                    stanza_id=None,
                     correct_id=None,
                     additional_data=None,
                     marker=None,
@@ -1136,6 +1161,12 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         if restored:
             return
 
+        if message_id:
+            if self._type.is_groupchat:
+                self.last_msg_id = stanza_id or message_id
+            else:
+                self.last_msg_id = message_id
+
         if kind == 'incoming':
             if (not self._type.is_groupchat or
                     self.contact.can_notify() or
@@ -1148,6 +1179,17 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         if kind in ('incoming', 'incoming_queue'):
             # Record the history of received messages
             self.save_message(text, 'received')
+
+            # Send chat marker if we’re actively following the chat
+            if self.parent_win and self.contact.settings.get('send_marker'):
+                if (self.parent_win.get_active_control() == self and
+                        self.parent_win.is_active() and
+                        self.has_focus() and end):
+                    con = app.connections[self.account]
+                    con.get_module('ChatMarkers').send_displayed_marker(
+                        self.contact,
+                        self.last_msg_id,
+                        self._type)
 
         if kind in ('incoming', 'incoming_queue', 'error'):
             gc_message = False
@@ -1180,7 +1222,10 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
 
                 event = event_type(text,
                                    subject,
-                                   self, msg_log_id,
+                                   self,
+                                   msg_log_id,
+                                   message_id=message_id,
+                                   stanza_id=stanza_id,
                                    show_in_roster=show_in_roster,
                                    show_in_systray=show_in_systray)
                 app.events.add_event(self.account, full_jid, event)
@@ -1206,7 +1251,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         """
         Hide show emoticons_button
         """
-        if app.config.get('emoticons_theme'):
+        if app.settings.get('emoticons_theme'):
             self.xml.emoticons_button.set_no_show_all(False)
             self.xml.emoticons_button.show()
         else:
@@ -1214,14 +1259,26 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             self.xml.emoticons_button.hide()
 
     def set_emoticon_popover(self):
-        if not app.config.get('emoticons_theme'):
+        if not app.settings.get('emoticons_theme'):
             return
 
         if not self.parent_win:
             return
 
-        emoji_chooser.text_widget = self.msg_textview
-        self.xml.emoticons_button.set_popover(emoji_chooser)
+        if sys.platform in ('win32', 'darwin'):
+            emoji_chooser.text_widget = self.msg_textview
+            self.xml.emoticons_button.set_popover(emoji_chooser)
+            return
+
+        self.xml.emoticons_button.set_sensitive(True)
+        self.xml.emoticons_button.connect('clicked',
+                                          self._on_emoticon_button_clicked)
+
+    def _on_emoticon_button_clicked(self, _widget):
+        self.msg_textview.remove_placeholder()
+        # Present GTK emoji chooser (not cross platform compatible)
+        self.msg_textview.emit('insert-emoji')
+        self.xml.emoticons_button.set_property('active', False)
 
     def on_color_menuitem_activate(self, _widget):
         color_dialog = Gtk.ColorChooserDialog(None, self.parent_win.window)
@@ -1300,11 +1357,11 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             contact = app.contacts.get_contact(self.account, gc_contact.jid)
             if not contact or contact.sub not in ('both', 'to'):
 
-                NewConfirmationDialog(
+                ConfirmationDialog(
                     _('Privacy'),
                     _('Warning'),
                     _('If you send a file to <b>%s</b>, your real XMPP '
-                      'address will be revealed.' % gc_contact.name),
+                      'address will be revealed.') % gc_contact.name,
                     [DialogButton.make('Cancel'),
                      DialogButton.make(
                          'OK',
@@ -1320,7 +1377,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             jid = self.contact.jid
             if self.conv_textview.autoscroll:
                 # we are at the end
-                type_ = ['printed_%s' % self._type]
+                type_ = [f'printed_{self._type}']
                 if self._type.is_groupchat:
                     type_ = ['printed_gc_msg', 'printed_marked_gc_msg']
                 if not app.events.remove_events(self.account,
@@ -1328,6 +1385,12 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                                                 types=type_):
                     # There were events to remove
                     self.redraw_after_event_removed(jid)
+                    # XEP-0333 Send <displayed> marker
+                    con.get_module('ChatMarkers').send_displayed_marker(
+                        self.contact,
+                        self.last_msg_id,
+                        self._type)
+                    self.last_msg_id = None
             # send chatstate inactive to the one we're leaving
             # and active to the one we visit
             if self.msg_textview.has_text():
@@ -1356,20 +1419,27 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         types_list = []
         if self._type.is_groupchat:
             types_list = ['printed_gc_msg', 'gc_msg', 'printed_marked_gc_msg']
-        else: # Not a GC
-            types_list = ['printed_%s' % self._type, str(self._type)]
+        else:
+            types_list = [f'printed_{self._type}', str(self._type)]
 
         if not app.events.get_events(self.account, jid, types_list):
             return
         if not self.parent_win:
             return
-        if self.parent_win.get_active_control() == self and \
-        self.parent_win.window.is_active():
+        if (self.parent_win.get_active_control() == self and
+                self.parent_win.window.is_active()):
             # we are at the end
             if not app.events.remove_events(
                     self.account, jid, types=types_list):
                 # There were events to remove
                 self.redraw_after_event_removed(jid)
+                # XEP-0333 Send <displayed> tag
+                con = app.connections[self.account]
+                con.get_module('ChatMarkers').send_displayed_marker(
+                    self.contact,
+                    self.last_msg_id,
+                    self._type)
+                self.last_msg_id = None
 
     def _on_scrollbar_button_release(self, scrollbar, event):
         if event.get_button()[1] != 1:
@@ -1421,7 +1491,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             if direction != Gdk.ScrollDirection.UP:
                 return
         # Check if we have a Scrollbar
-        adjustment = self.conv_scrolledwindow.get_vadjustment()
+        adjustment = self.xml.conversation_scrolledwindow.get_vadjustment()
         if adjustment.get_upper() != adjustment.get_page_size():
             app.log('autoscroll').info('Autoscroll disabled')
             self.conv_textview.autoscroll = False
@@ -1434,6 +1504,8 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         We just removed a 'printed_*' event, redraw contact in roster or
         gc_roster and titles in roster and msg_win
         """
+        if not self.parent_win:  # minimized groupchat
+            return
         self.parent_win.redraw_tab(self)
         self.parent_win.show_title()
         # TODO : get the contact and check get_show_in_roster()

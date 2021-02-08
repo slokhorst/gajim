@@ -25,11 +25,11 @@ from gajim.common.nec import NetworkEvent
 from gajim.common.i18n import _
 from gajim.common.const import StyleAttr
 
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.dialogs import DialogButton
-from gajim.gtk.dialogs import NewConfirmationDialog
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import get_app_window
+from .dialogs import ErrorDialog
+from .dialogs import DialogButton
+from .dialogs import ConfirmationDialog
+from .util import get_builder
+from .util import get_app_window
 
 StyleOption = namedtuple('StyleOption', 'label selector attr')
 
@@ -182,7 +182,7 @@ class Column(IntEnum):
 
 class Themes(Gtk.ApplicationWindow):
     def __init__(self, transient):
-        Gtk.Window.__init__(self)
+        Gtk.ApplicationWindow.__init__(self)
         self.set_application(app.app)
         self.set_title(_('Gajim Themes'))
         self.set_name('ThemesWindow')
@@ -191,6 +191,7 @@ class Themes(Gtk.ApplicationWindow):
         self.set_transient_for(transient)
         self.set_resizable(True)
         self.set_default_size(600, 400)
+        self.set_modal(True)
 
         self._ui = get_builder('themes_window.ui')
         self.add(self._ui.theme_grid)
@@ -199,10 +200,15 @@ class Themes(Gtk.ApplicationWindow):
         self._ui.option_listbox.set_placeholder(self._ui.placeholder)
 
         self._ui.connect_signals(self)
-        self.connect('destroy', self._on_destroy)
+        self.connect_after('key-press-event', self._on_key_press)
+
         self.show_all()
 
         self._fill_choose_listbox()
+
+    def _on_key_press(self, widget, event):
+        if event.keyval == Gdk.KEY_Escape:
+            self.destroy()
 
     def _get_themes(self):
         for theme in app.css_config.themes:
@@ -233,6 +239,7 @@ class Themes(Gtk.ApplicationWindow):
         if result is False:
             return
 
+        app.settings.set('roster_theme', new_name)
         self._ui.theme_store.set_value(iter_, Column.THEME, new_name)
 
     def _select_theme_row(self, iter_):
@@ -297,6 +304,8 @@ class Themes(Gtk.ApplicationWindow):
         if not app.css_config.add_new_theme(name):
             return
 
+        self._update_preferences_window()
+
         self._ui.remove_theme_button.set_sensitive(True)
         iter_ = self._ui.theme_store.append([name])
         self._select_theme_row(iter_)
@@ -304,7 +313,7 @@ class Themes(Gtk.ApplicationWindow):
 
     @staticmethod
     def _apply_theme(theme):
-        app.config.set('roster_theme', theme)
+        app.settings.set('roster_theme', theme)
         app.css_config.change_theme(theme)
         app.nec.push_incoming_event(NetworkEvent('theme-update'))
 
@@ -312,7 +321,7 @@ class Themes(Gtk.ApplicationWindow):
         app.interface.roster.repaint_themed_widgets()
         app.interface.roster.change_roster_style(None)
 
-        # Update Preferences theme combobox
+    def _update_preferences_window(self):
         window = get_app_window('Preferences')
         if window is not None:
             window.update_theme_list()
@@ -332,10 +341,11 @@ class Themes(Gtk.ApplicationWindow):
         theme = store[iter_][Column.THEME]
 
         def _remove_theme():
-            if theme == app.config.get('roster_theme'):
+            if theme == app.settings.get('roster_theme'):
                 self._apply_theme('default')
 
             app.css_config.remove_theme(theme)
+            self._update_preferences_window()
             store.remove(iter_)
 
             first = store.get_iter_first()
@@ -344,11 +354,11 @@ class Themes(Gtk.ApplicationWindow):
                 self._clear_options()
 
         text = _('Do you want to delete this theme?')
-        if theme == app.config.get('roster_theme'):
+        if theme == app.settings.get('roster_theme'):
             text = _('This is the theme you are currently using.\n'
                      'Do you want to delete this theme?')
 
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('Delete'),
             _('Delete Theme'),
             text,
@@ -356,12 +366,6 @@ class Themes(Gtk.ApplicationWindow):
              DialogButton.make('Delete',
                                callback=_remove_theme)],
             transient_for=self).show()
-
-    @staticmethod
-    def _on_destroy(*args):
-        window = get_app_window('Preferences')
-        if window is not None:
-            window.update_theme_list()
 
 
 class Option(Gtk.ListBoxRow):

@@ -40,12 +40,12 @@ from gajim.common.const import StyleAttr
 from gajim.common.i18n import _
 from gajim.common.nec import EventHelper
 
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import get_icon_name
-from gajim.gtk.util import get_monitor_scale_factor
-from gajim.gtk.util import get_total_screen_geometry
+from .util import get_builder
+from .util import get_icon_name
+from .util import get_monitor_scale_factor
+from .util import get_total_screen_geometry
 
-log = logging.getLogger('gajim.gtk.notification')
+log = logging.getLogger('gajim.gui.notification')
 
 
 class Notification(EventHelper):
@@ -129,7 +129,7 @@ class Notification(EventHelper):
                 self._withdraw('gc-invitation', event.account, event.muc)
             if event.type_ in ('normal', 'printed_chat', 'chat',
                                'printed_pm', 'pm', 'printed_marked_gc_msg',
-                               'printed_gc_msg'):
+                               'printed_gc_msg', 'jingle-incoming'):
                 self._withdraw('new-message', event.account, event.jid)
 
     def _nec_our_status(self, event):
@@ -159,7 +159,7 @@ class Notification(EventHelper):
             icon_name = 'mail-message-new'
 
         if timeout < 0:
-            timeout = app.config.get('notification_timeout')
+            timeout = app.settings.get('notification_timeout')
 
         if sys.platform == 'win32':
             self._withdraw()
@@ -181,14 +181,13 @@ class Notification(EventHelper):
             notification.set_body(text)
         notif_id = None
         if event_type in (
-                _('Contact Signed In'), _('Contact Signed Out'),
                 _('New Message'), _('New Private Message'),
                 _('New Group Chat Message'),
                 _('Contact Changed Status'), _('File Transfer Request'),
                 _('File Transfer Error'), _('File Transfer Completed'),
                 _('File Transfer Stopped'), _('Group Chat Invitation'),
                 _('Connection Failed'), _('Subscription request'),
-                _('Unsubscribed')):
+                _('Unsubscribed'), _('Incoming Call')):
             if 'actions' in self._daemon_capabilities:
                 # Create Variant Dict
                 dict_ = {'account': GLib.Variant('s', account),
@@ -196,16 +195,21 @@ class Notification(EventHelper):
                          'type_': GLib.Variant('s', type_)}
                 variant_dict = GLib.Variant('a{sv}', dict_)
                 action = 'app.{}-open-event'.format(account)
-                #Button in notification
-                notification.add_button_with_target(_('Open'), action,
-                                                    variant_dict)
-                notification.set_default_action_and_target(action,
-                                                           variant_dict)
+                # Notification button
+                notification.add_button_with_target(
+                    _('Open'), action, variant_dict)
+                notification.set_default_action_and_target(
+                    action, variant_dict)
+                if event_type in (
+                        _('New Message'),
+                        _('New Private Message'),
+                        _('New Group Chat Message')):
+                    action = 'app.{}-remove-event'.format(account)
+                    notification.add_button_with_target(
+                        _('Mark as Read'), action, variant_dict)
 
             # Only one notification per JID
-            if event_type in (_('Contact Signed In'),
-                              _('Contact Signed Out'),
-                              _('Contact Changed Status')):
+            if event_type == _('Contact Changed Status'):
                 notif_id = self._make_id('contact-status-changed', account, jid)
             elif event_type == _('Group Chat Invitation'):
                 notif_id = self._make_id('gc-invitation', account, room_jid)
@@ -264,15 +268,9 @@ class PopupNotification(Gtk.Window):
         self._ui = get_builder('popup_notification_window.ui')
         self.add(self._ui.eventbox)
 
-        if event_type == _('Contact Signed In'):
-            bg_color = app.css_config.get_value('.gajim-notify-signin',
-                                                StyleAttr.COLOR)
-        elif event_type == _('Contact Signed Out'):
-            bg_color = app.css_config.get_value('.gajim-notify-signout',
-                                                StyleAttr.COLOR)
-        elif event_type in (_('New Message'),
-                            _('New Private Message'),
-                            _('New E-mail')):
+        if event_type in (_('New Message'),
+                          _('New Private Message'),
+                          _('New E-mail')):
             bg_color = app.css_config.get_value('.gajim-notify-message',
                                                 StyleAttr.COLOR)
         elif event_type == _('File Transfer Request'):
@@ -324,11 +322,11 @@ class PopupNotification(Gtk.Window):
 
     @staticmethod
     def _get_window_pos():
-        pos_x = app.config.get('notification_position_x')
+        pos_x = app.settings.get('notification_position_x')
         screen_w, screen_h = get_total_screen_geometry()
         if pos_x < 0:
             pos_x = screen_w - 312 + pos_x + 1
-        pos_y = app.config.get('notification_position_y')
+        pos_y = app.settings.get('notification_position_y')
         if pos_y < 0:
             pos_y = screen_h - 95 - 80 + pos_y + 1
         return pos_x, pos_y

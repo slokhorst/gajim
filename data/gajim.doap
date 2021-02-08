@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<rdf:RDF xmlns="http://usefulinc.com/ns/doap#"
-         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+<?xml-stylesheet href="https://gajim.org/files/doap-style.xsl" type="text/xsl"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<Project xmlns="http://usefulinc.com/ns/doap#"
          xmlns:xmpp="https://linkmauve.fr/ns/xmpp-doap#"
-         xmlns:foaf="http://xmlns.com/foaf/0.1/">
-  <Project>
-
+         xmlns:schema="https://schema.org/">
     <name>Gajim</name>
     <short-name>gajim</short-name>
 
@@ -16,12 +15,18 @@
       Gajim integrates well with your other devices: simply continue conversations on your mobile device.
     </description>
 
-    <homepage rdf:resource="https://gajim.org/" />
-    <wiki rdf:resource="https://dev.gajim.org/gajim/gajim/-/wikis/home" />
-    <bug-database rdf:resource="https://dev.gajim.org/gajim/gajim/issues" />
-    <category rdf:resource="https://linkmauve.fr/ns/xmpp-doap#category-client" />
-    <category rdf:resource="http://api.gnome.org/doap-extensions#apps" />
-    <license rdf:resource="http://usefulinc.com/doap/licenses/gplv3" />
+    <homepage rdf:resource="https://gajim.org/"/>
+    <download-page rdf:resource="https://gajim.org/download"/>
+    <schema:documentation rdf:resource="https://dev.gajim.org/gajim/gajim/-/wikis/home"/>
+    <wiki rdf:resource="https://dev.gajim.org/gajim/gajim/-/wikis/home"/>
+    <bug-database rdf:resource="https://dev.gajim.org/gajim/gajim/issues"/>
+    <developer-forum rdf:resource="xmpp:gajim@conference.gajim.org?join"/>
+    <support-forum rdf:resource="xmpp:gajim@conference.gajim.org?join"/>
+    <category rdf:resource="https://linkmauve.fr/ns/xmpp-doap#category-client"/>
+    <category rdf:resource="http://api.gnome.org/doap-extensions#apps"/>
+    <license rdf:resource="http://usefulinc.com/doap/licenses/gplv3"/>
+    <schema:logo rdf:resource="https://gajim.org/img/gajim-logo.svg"/>
+    <schema:screenshot rdf:resource="https://gajim.org/img/screenshots/single-window-mode.png"/>
 
     <programming-language>Python</programming-language>
     <os>Linux</os>
@@ -37,8 +42,8 @@
     <implements rdf:resource="https://xmpp.org/rfcs/rfc6120.html" />
     <implements rdf:resource="https://xmpp.org/rfcs/rfc6121.html" />
     <implements rdf:resource="https://xmpp.org/rfcs/rfc6122.html" />
-    <implements rdf:resource="https://tools.ietf.org/html/rfc7395" />
-    <implements rdf:resource="https://tools.ietf.org/html/rfc7590" />
+    <implements rdf:resource="https://xmpp.org/rfcs/rfc7395.html" />
+    <implements rdf:resource="https://xmpp.org/rfcs/rfc7590.html" />
     <implements>
       <xmpp:SupportedXep>
         <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0004.html" />
@@ -184,6 +189,13 @@
         <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0082.html" />
         <xmpp:status>complete</xmpp:status>
         <xmpp:version>1.1</xmpp:version>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0083.html" />
+        <xmpp:status>complete</xmpp:status>
+        <xmpp:version>1.0</xmpp:version>
       </xmpp:SupportedXep>
     </implements>
     <implements>
@@ -403,6 +415,13 @@
     </implements>
     <implements>
       <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0222.html" />
+        <xmpp:status>complete</xmpp:status>
+        <xmpp:version>1.0</xmpp:version>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
         <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0223.html" />
         <xmpp:status>complete</xmpp:status>
         <xmpp:version>1.1</xmpp:version>
@@ -439,6 +458,13 @@
     </implements>
     <implements>
       <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0245.html" />
+        <xmpp:status>complete</xmpp:status>
+        <xmpp:version>1.0</xmpp:version>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
         <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0249.html" />
         <xmpp:status>complete</xmpp:status>
         <xmpp:version>1.2</xmpp:version>
@@ -471,6 +497,13 @@
         <xmpp:status>complete</xmpp:status>
         <xmpp:version>0.1</xmpp:version>
         <xmpp:note>Whiteboard plugin.</xmpp:note>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0292.html" />
+        <xmpp:status>complete</xmpp:status>
+        <xmpp:version>0.10</xmpp:version>
       </xmpp:SupportedXep>
     </implements>
     <implements>
@@ -515,6 +548,14 @@
         <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0319.html" />
         <xmpp:status>complete</xmpp:status>
         <xmpp:version>1.0</xmpp:version>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0333.html" />
+        <xmpp:status>partial</xmpp:status>
+        <xmpp:version>0.4</xmpp:version>
+        <xmpp:note>'displayed' markers are supported, but 'acknowledged' markers are not.</xmpp:note>
       </xmpp:SupportedXep>
     </implements>
     <implements>
@@ -580,6 +621,13 @@
     <implements>
       <xmpp:SupportedXep>
         <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0411.html" />
+        <xmpp:status>complete</xmpp:status>
+        <xmpp:version>0.2</xmpp:version>
+      </xmpp:SupportedXep>
+    </implements>
+    <implements>
+      <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0441.html" />
         <xmpp:status>complete</xmpp:status>
         <xmpp:version>0.2</xmpp:version>
       </xmpp:SupportedXep>

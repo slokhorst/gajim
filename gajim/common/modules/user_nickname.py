@@ -30,6 +30,7 @@ class UserNickname(BaseModule):
     _nbxmpp_extends = 'Nickname'
     _nbxmpp_methods = [
         'set_nickname',
+        'set_access_model',
     ]
 
     def __init__(self, con):
@@ -44,7 +45,7 @@ class UserNickname(BaseModule):
         nick = properties.pubsub_event.data
         if properties.is_self_message:
             if nick is None:
-                nick = app.config.get_per('accounts', self._account, 'name')
+                nick = app.settings.get_account_setting(self._account, 'name')
             app.nicks[self._account] = nick
 
         for contact in app.contacts.get_contacts(self._account,
@@ -56,7 +57,7 @@ class UserNickname(BaseModule):
         app.nec.push_incoming_event(
             NetworkEvent('nickname-received',
                          account=self._account,
-                         jid=properties.jid.getBare(),
+                         jid=properties.jid.bare,
                          nickname=nick))
 
 

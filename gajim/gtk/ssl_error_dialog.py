@@ -21,12 +21,12 @@ from gajim.common import app
 from gajim.common.const import GIO_TLS_ERRORS
 from gajim.common.i18n import _
 
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import open_window
+from .util import get_builder
+from .util import open_window
 
 
 class SSLErrorDialog(Gtk.ApplicationWindow):
-    def __init__(self, account, connection, cert, error_num):
+    def __init__(self, account, client, cert, error):
         Gtk.ApplicationWindow.__init__(self)
         self.set_name('SSLErrorDialog')
         self.set_application(app.app)
@@ -39,10 +39,11 @@ class SSLErrorDialog(Gtk.ApplicationWindow):
         self.add(self._ui.ssl_error_box)
 
         self.account = account
-        self._error_num = error_num
-        self._con = connection
+        self._error = error
+        self._client = client
         self._cert = cert
-        self._server = app.config.get_per('accounts', self.account, 'hostname')
+        self._server = app.settings.get_account_setting(self.account,
+                                                        'hostname')
 
         self._process_error()
 
@@ -54,12 +55,19 @@ class SSLErrorDialog(Gtk.ApplicationWindow):
             _('There was an error while attempting to verify the SSL '
               'certificate of your XMPP server (%s).') % self._server)
 
-        unknown_error = _('Unknown SSL error \'%s\'') % self._error_num
-        ssl_error = GIO_TLS_ERRORS.get(self._error_num, unknown_error)
+        unknown_error = _('Unknown SSL error \'%s\'') % self._error
+        ssl_error = GIO_TLS_ERRORS.get(self._error, unknown_error)
         self._ui.ssl_error.set_text(ssl_error)
 
-        if self._error_num == Gio.TlsCertificateFlags.UNKNOWN_CA:
+        if self._error == Gio.TlsCertificateFlags.UNKNOWN_CA:
             self._ui.add_certificate_checkbutton.show()
+
+        elif self._error == Gio.TlsCertificateFlags.EXPIRED:
+            self._ui.connect_button.set_sensitive(True)
+
+        else:
+            self._ui.connect_button.set_no_show_all(True)
+            self._ui.connect_button.hide()
 
     def _on_view_cert_clicked(self, _button):
         open_window('CertificateDialog',
@@ -67,17 +75,16 @@ class SSLErrorDialog(Gtk.ApplicationWindow):
                     transient_for=self,
                     cert=self._cert)
 
-    def _on_connect_clicked(self, _button):
-        # Ignore this error
-        if self._ui.ignore_error_checkbutton.get_active():
-            ignore_ssl_errors = app.config.get_per(
-                'accounts', self.account, 'ignore_ssl_errors').split()
-            ignore_ssl_errors.append(str(int(self._error_num)))
-            app.config.set_per('accounts', self.account, 'ignore_ssl_errors',
-                               ' '.join(ignore_ssl_errors))
+    def _on_add_certificate_toggled(self, checkbutton):
+        self._ui.connect_button.set_sensitive(checkbutton.get_active())
 
+    def _on_connect_clicked(self, _button):
         if self._ui.add_certificate_checkbutton.get_active():
             app.cert_store.add_certificate(self._cert)
 
+        ignored_tls_errors = None
+        if self._error == Gio.TlsCertificateFlags.EXPIRED:
+            ignored_tls_errors = set([Gio.TlsCertificateFlags.EXPIRED])
+
         self.destroy()
-        self._con.process_tls_errors()
+        self._client.connect(ignored_tls_errors=ignored_tls_errors)

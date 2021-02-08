@@ -201,7 +201,7 @@ class AdHocCommands(BaseModule):
 
         # a list of all commands exposed: node -> command class
         self._commands = {}
-        if app.config.get('remote_commands'):
+        if app.settings.get('remote_commands'):
             for cmdobj in (ChangeStatusCommand,):
                 self._commands[cmdobj.commandnode] = cmdobj
 
@@ -209,13 +209,13 @@ class AdHocCommands(BaseModule):
         self._sessions = {}
 
     def get_own_bare_jid(self):
-        return self._con.get_own_jid().getStripped()
+        return self._con.get_own_jid().bare
 
     def is_same_jid(self, jid):
         """
         Test if the bare jid given is the same as our bare jid
         """
-        return nbxmpp.JID(jid).getStripped() == self.get_own_bare_jid()
+        return nbxmpp.JID.from_string(jid).bare == self.get_own_bare_jid()
 
     def command_list_query(self, stanza):
         iq = stanza.buildReply('result')

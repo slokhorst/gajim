@@ -19,7 +19,8 @@ from datetime import datetime, timedelta
 from gi.repository import Gtk
 from gi.repository import GLib
 
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import StanzaError
+from nbxmpp.errors import MalformedStanzaError
 
 from gajim.common import app
 from gajim.common import ged
@@ -27,10 +28,10 @@ from gajim.common.i18n import _
 from gajim.common.const import ArchiveState
 from gajim.common.helpers import event_filter
 
-from gajim.gtk.util import load_icon
-from gajim.gtk.util import EventHelper
+from .util import load_icon
+from .util import EventHelper
 
-log = logging.getLogger('gajim.gtk.history_sync')
+log = logging.getLogger('gajim.gui.history_sync')
 
 
 class Pages(IntEnum):
@@ -61,10 +62,10 @@ class HistorySyncAssistant(Gtk.Assistant, EventHelper):
 
         self._hide_buttons()
 
-        own_jid = self.con.get_own_jid().getStripped()
+        own_jid = self.con.get_own_jid().bare
 
         mam_start = ArchiveState.NEVER
-        archive = app.logger.get_archive_infos(own_jid)
+        archive = app.storage.archive.get_archive_infos(own_jid)
         if archive is not None and archive.oldest_mam_timestamp is not None:
             mam_start = int(float(archive.oldest_mam_timestamp))
 
@@ -141,7 +142,7 @@ class HistorySyncAssistant(Gtk.Assistant, EventHelper):
         log.info('Start: %s', self.start)
         log.info('End: %s', self.end)
 
-        jid = self.con.get_own_jid().getBare()
+        jid = self.con.get_own_jid().bare
 
         self.con.get_module('MAM').make_query(jid,
                                               start=self.start,
@@ -149,9 +150,10 @@ class HistorySyncAssistant(Gtk.Assistant, EventHelper):
                                               max_=0,
                                               callback=self._received_count)
 
-
-    def _received_count(self, result):
-        if is_error_result(result):
+    def _received_count(self, task):
+        try:
+            result = task.finish()
+        except (StanzaError, MalformedStanzaError):
             return
 
         if result.rsm.count is not None:
@@ -248,11 +250,11 @@ class DownloadHistoryPage(Gtk.Box):
         self.received += 1
         if self.count:
             self.progress.set_fraction(self.received / self.count)
-            self.progress.set_text(_('%(received)s of %(max)s' % {
-                'received': self.received, 'max': self.count}))
+            self.progress.set_text(_('%(received)s of %(max)s') % {
+                'received': self.received, 'max': self.count})
         else:
             self.progress.pulse()
-            self.progress.set_text(_('Downloaded %s messages' % self.received))
+            self.progress.set_text(_('Downloaded %s messages') % self.received)
 
     def finished(self):
         self.progress.set_fraction(1)
@@ -273,7 +275,7 @@ class SummaryPage(Gtk.Box):
     def finished(self):
         received = self.assistant.download_history.received
         self.label.set_text(_('Finished synchronising chat history:\n'
-                              '%s messages downloaded' % received))
+                              '%s messages downloaded') % received)
 
     def nothing_to_do(self):
         self.label.set_text(_('Gajim is fully synchronised with the archive.'))

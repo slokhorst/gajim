@@ -28,8 +28,8 @@ from gajim.common import contacts
 from gajim.common import ged
 from gajim.common.helpers import AdditionalDataDict
 from gajim.common.const import KindConstant
-from gajim.gtk.util import get_show_in_roster
-from gajim.gtk.util import get_show_in_systray
+from gajim.gui.util import get_show_in_roster
+from gajim.gui.util import get_show_in_systray
 
 
 class ChatControlSession:
@@ -37,7 +37,7 @@ class ChatControlSession:
         self.conn = conn
         self.jid = jid
         self.type_ = type_
-        self.resource = jid.getResource()
+        self.resource = jid.resource
         self.control = None
 
         if thread_id:
@@ -66,10 +66,10 @@ class ChatControlSession:
         )
 
     def is_loggable(self):
-        return helpers.should_log(self.conn.name, self.jid.getStripped())
+        return helpers.should_log(self.conn.name, self.jid.bare)
 
     def get_to(self):
-        bare_jid = self.jid.getBare()
+        bare_jid = self.jid.bare
         if not self.resource:
             return bare_jid
         return bare_jid + '/' + self.resource
@@ -110,7 +110,7 @@ class ChatControlSession:
             if not obj.properties.is_muc_pm:
                 jid = obj.jid
 
-            obj.msg_log_id = app.logger.insert_into_logs(
+            obj.msg_log_id = app.storage.archive.insert_into_logs(
                 self.conn.name,
                 jid,
                 obj.properties.timestamp,
@@ -212,7 +212,7 @@ class ChatControlSession:
             read_ids = []
             for msg in unread_events:
                 read_ids.append(msg.msg_log_id)
-            app.logger.set_read_messages(read_ids)
+            app.storage.archive.set_read_messages(read_ids)
             app.events.remove_events(self.conn.name, fjid, types=['chat'])
             do_event = False
         else:
@@ -314,7 +314,7 @@ class ChatControlSession:
                                      additional_data=additional_data)
 
             if msg_log_id:
-                app.logger.set_read_messages([msg_log_id])
+                app.storage.archive.set_read_messages([msg_log_id])
 
             return
 

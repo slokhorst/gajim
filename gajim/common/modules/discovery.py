@@ -17,11 +17,13 @@
 import nbxmpp
 from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import StanzaHandler
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import StanzaError
+from nbxmpp.errors import is_error
 
 from gajim.common import app
 from gajim.common.nec import NetworkIncomingEvent
 from gajim.common.nec import NetworkEvent
+from gajim.common.modules.util import as_task
 from gajim.common.modules.base import BaseModule
 
 
@@ -59,13 +61,15 @@ class Discovery(BaseModule):
         return self._server_info
 
     def discover_server_items(self):
-        server = self._con.get_own_jid().getDomain()
+        server = self._con.get_own_jid().domain
         self.disco_items(server, callback=self._server_items_received)
 
-    def _server_items_received(self, result):
-        if is_error_result(result):
+    def _server_items_received(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
             self._log.warning('Server disco failed')
-            self._log.error(result)
+            self._log.error(error)
             return
 
         self._log.info('Server items received')
@@ -76,10 +80,12 @@ class Discovery(BaseModule):
                 continue
             self.disco_info(item.jid, callback=self._server_items_info_received)
 
-    def _server_items_info_received(self, result):
-        if is_error_result(result):
+    def _server_items_info_received(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
             self._log.warning('Server item disco info failed')
-            self._log.warning(result)
+            self._log.warning(error)
             return
 
         self._log.info('Server item info received: %s', result.jid)
@@ -95,13 +101,15 @@ class Discovery(BaseModule):
             NetworkIncomingEvent('server-disco-received'))
 
     def discover_account_info(self):
-        own_jid = self._con.get_own_jid().getStripped()
+        own_jid = self._con.get_own_jid().bare
         self.disco_info(own_jid, callback=self._account_info_received)
 
-    def _account_info_received(self, result):
-        if is_error_result(result):
+    def _account_info_received(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
             self._log.warning('Account disco info failed')
-            self._log.warning(result)
+            self._log.warning(error)
             return
 
         self._log.info('Account info received: %s', result.jid)
@@ -112,21 +120,21 @@ class Discovery(BaseModule):
         self._con.get_module('PEP').pass_disco(result)
         self._con.get_module('PubSub').pass_disco(result)
         self._con.get_module('Bookmarks').pass_disco(result)
-
-        if 'urn:xmpp:pep-vcard-conversion:0' in result.features:
-            self._con.avatar_conversion = True
+        self._con.get_module('VCardAvatars').pass_disco(result)
 
         self._con.get_module('Caps').update_caps()
 
     def discover_server_info(self):
         # Calling this method starts the connect_maschine()
-        server = self._con.get_own_jid().getDomain()
+        server = self._con.get_own_jid().domain
         self.disco_info(server, callback=self._server_info_received)
 
-    def _server_info_received(self, result):
-        if is_error_result(result):
+    def _server_info_received(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
             self._log.error('Server disco info failed')
-            self._log.error(result)
+            self._log.error(error)
             return
 
         self._log.info('Server info received: %s', result.jid)
@@ -153,7 +161,6 @@ class Discovery(BaseModule):
             jid = str(info.jid)
             if jid not in app.transport_type:
                 app.transport_type[jid] = identity.type
-            app.logger.save_transport_type(jid, identity.type)
 
             if identity.type in self._con.available_transports:
                 self._con.available_transports[identity.type].append(jid)
@@ -187,28 +194,71 @@ class Discovery(BaseModule):
         if self._con.get_module('AdHocCommands').command_info_query(stanza):
             raise nbxmpp.NodeProcessed
 
-    def disco_muc(self, jid, callback=None):
-        if not app.account_is_available(self._account):
-            return
+    @as_task
+    def disco_muc(self,
+                  jid,
+                  request_vcard=False,
+                  allow_redirect=False):
+
+        _task = yield
 
         self._log.info('Request MUC info for %s', jid)
 
-        self.disco_info(jid,
-                        callback=self._muc_info_received,
-                        user_data=callback)
+        result = yield self._nbxmpp('MUC').request_info(
+            jid,
+            request_vcard=request_vcard,
+            allow_redirect=allow_redirect)
 
-    def _muc_info_received(self, result, callback=None):
-        self._log.info('MUC info received: %s', result.jid)
-        if not is_error_result(result):
-            app.logger.set_last_disco_info(result.jid, result)
-            self._con.get_module('VCardAvatars').muc_disco_info_update(result)
-            app.nec.push_incoming_event(NetworkEvent(
-                'muc-disco-update',
-                account=self._account,
-                room_jid=result.jid))
+        if is_error(result):
+            raise result
 
-        if callback is not None:
-            callback(result)
+        if result.redirected:
+            self._log.info('MUC info received after redirect: %s -> %s',
+                           jid, result.info.jid)
+        else:
+            self._log.info('MUC info received: %s', result.info.jid)
+
+        app.storage.cache.set_last_disco_info(result.info.jid, result.info)
+
+        if result.vcard is not None:
+            avatar, avatar_sha = result.vcard.get_avatar()
+            if avatar is not None:
+                if not app.interface.avatar_exists(avatar_sha):
+                    app.interface.save_avatar(avatar)
+
+                app.storage.cache.set_muc_avatar_sha(result.info.jid,
+                                                     avatar_sha)
+                app.interface.avatar_storage.invalidate_cache(result.info.jid)
+
+        self._con.get_module('VCardAvatars').muc_disco_info_update(result.info)
+        app.nec.push_incoming_event(NetworkEvent(
+            'muc-disco-update',
+            account=self._account,
+            room_jid=result.info.jid))
+
+        yield result
+
+    @as_task
+    def disco_contact(self, contact):
+        _task = yield
+
+        fjid = contact.get_full_jid()
+
+        result = yield self.disco_info(fjid)
+        if is_error(result):
+            raise result
+
+        self._log.info('Disco Info received: %s', fjid)
+
+        app.storage.cache.set_last_disco_info(result.jid,
+                                              result,
+                                              cache_only=True)
+
+        app.nec.push_incoming_event(
+            NetworkEvent('caps-update',
+                         account=self._account,
+                         fjid=fjid,
+                         jid=contact.jid))
 
 
 def get_instance(*args, **kwargs):

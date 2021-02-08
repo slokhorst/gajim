@@ -95,7 +95,7 @@ class Presence(BaseModule):
                              show=properties.show.value))
             return
 
-        jid = properties.jid.getBare()
+        jid = properties.jid.bare
         roster_item = self._con.get_module('Roster').get_item(jid)
         if not properties.is_self_bare and roster_item is None:
             # Handle only presence from roster contacts
@@ -114,8 +114,8 @@ class Presence(BaseModule):
             'need_add_in_roster': False,
             'popup': False,
             'ptype': properties.type.value,
-            'jid': properties.jid.getBare(),
-            'resource': properties.jid.getResource(),
+            'jid': properties.jid.bare,
+            'resource': properties.jid.resource,
             'id_': properties.id,
             'fjid': str(properties.jid),
             'timestamp': properties.timestamp,
@@ -139,8 +139,8 @@ class Presence(BaseModule):
 
     def _update_contact(self, event, properties):
         # Note: A similar method also exists in connection_zeroconf
-        jid = properties.jid.getBare()
-        resource = properties.jid.getResource()
+        jid = properties.jid.bare
+        resource = properties.jid.resource
 
         status_strings = ['offline', 'error', 'online', 'chat', 'away',
                           'xa', 'dnd']
@@ -156,8 +156,8 @@ class Presence(BaseModule):
         event.contact_list = contact_list
 
         contact = app.contacts.get_contact_strict(self._account,
-                                                  properties.jid.getBare(),
-                                                  properties.jid.getResource())
+                                                  properties.jid.bare,
+                                                  properties.jid.resource)
         if contact is None:
             contact = app.contacts.get_first_contact_from_jid(self._account,
                                                               jid)
@@ -227,28 +227,28 @@ class Presence(BaseModule):
         return contact_list[0].show not in ('not in roster', 'offline')
 
     def _log_presence(self, properties):
-        if not app.config.get('log_contact_status_changes'):
+        if not app.settings.get('log_contact_status_changes'):
             return
-        if not should_log(self._account, properties.jid.getBare()):
+        if not should_log(self._account, properties.jid.bare):
             return
 
         show = ShowConstant[properties.show.name]
         if properties.type.is_unavailable:
             show = ShowConstant.OFFLINE
 
-        app.logger.insert_into_logs(self._account,
-                                    properties.jid.getBare(),
-                                    time.time(),
-                                    KindConstant.STATUS,
-                                    message=properties.status,
-                                    show=show)
+        app.storage.archive.insert_into_logs(self._account,
+                                             properties.jid.bare,
+                                             time.time(),
+                                             KindConstant.STATUS,
+                                             message=properties.status,
+                                             show=show)
 
     def _subscribe_received(self, _con, _stanza, properties):
-        jid = properties.jid.getBare()
+        jid = properties.jid.bare
         fjid = str(properties.jid)
 
         is_transport = app.jid_is_transport(fjid)
-        auto_auth = app.config.get_per('accounts', self._account, 'autoauth')
+        auto_auth = app.settings.get_account_setting(self._account, 'autoauth')
 
         self._log.info('Received Subscribe: %s, transport: %s, '
                        'auto_auth: %s, user_nick: %s',
@@ -276,7 +276,7 @@ class Presence(BaseModule):
         raise nbxmpp.NodeProcessed
 
     def _subscribed_received(self, _con, _stanza, properties):
-        jid = properties.jid.getBare()
+        jid = properties.jid.bare
         self._log.info('Received Subscribed: %s', properties.jid)
         if jid in self.automatically_added:
             self.automatically_added.remove(jid)
@@ -296,7 +296,7 @@ class Presence(BaseModule):
         self._log.info('Received Unsubscribed: %s', properties.jid)
         app.nec.push_incoming_event(NetworkEvent(
             'unsubscribed-presence-received',
-            conn=self._con, jid=properties.jid.getBare()))
+            conn=self._con, jid=properties.jid.bare))
         raise nbxmpp.NodeProcessed
 
     def subscribed(self, jid):
@@ -318,10 +318,6 @@ class Presence(BaseModule):
             return
         if remove_auth:
             self._con.get_module('Roster').del_item(jid)
-            jid_list = app.config.get_per('contacts')
-            for j in jid_list:
-                if j.startswith(jid):
-                    app.config.del_per('contacts', j)
         else:
             self._log.info('Unsubscribe from %s', jid)
             self._jids_for_auto_auth.discard(jid)
@@ -366,14 +362,9 @@ class Presence(BaseModule):
             nick_tag = presence.setTag('nick', namespace=Namespace.NICK)
             nick_tag.setData(nick)
 
-        if not self._con.avatar_conversion:
-            # XEP-0398 not supported by server so
-            # we add the avatar sha to our presence
-            self._con.get_module('VCardAvatars').add_update_node(presence)
-
         if (idle_time and
                 app.is_installed('IDLE') and
-                app.config.get('autoaway')):
+                app.settings.get('autoaway')):
             idle_sec = idle.Monitor.get_idle_sec()
             time_ = time.strftime('%Y-%m-%dT%H:%M:%SZ',
                                   time.gmtime(time.time() - idle_sec))

@@ -27,13 +27,11 @@
 
 from typing import Any  # pylint: disable=unused-import
 from typing import Dict  # pylint: disable=unused-import
-from typing import Optional
 
 import sys
 import re
 import os
 import subprocess
-import webbrowser
 import base64
 import hashlib
 import shlex
@@ -47,12 +45,14 @@ import functools
 from collections import defaultdict
 import random
 import weakref
+import inspect
 import string
 from string import Template
 import urllib
 from urllib.parse import unquote
 from encodings.punycode import punycode_encode
 from functools import wraps
+from pathlib import Path
 from packaging.version import Version as V
 
 from nbxmpp.namespaces import Namespace
@@ -436,10 +436,9 @@ def get_contact_dict_for_account(account):
     return contacts_dict
 
 def play_sound(event):
-    if not app.config.get('sounds_on'):
+    if not app.settings.get('sounds_on'):
         return
-    path_to_soundfile = app.config.get_per('soundevents', event, 'path')
-    play_sound_file(path_to_soundfile)
+    play_sound_file(app.settings.get_soundevent_settings(event)['path'])
 
 def check_soundfile_path(file_, dirs=None):
     """
@@ -450,18 +449,18 @@ def check_soundfile_path(file_, dirs=None):
                                      (eg: ~/.gajim/sounds/, DATADIR/sounds...).
     :return      the path to file or None if it doesn't exists.
     """
+    if not file_:
+        return None
+    if Path(file_).exists():
+        return Path(file_)
+
     if dirs is None:
         dirs = [configpaths.get('MY_DATA'),
                 configpaths.get('DATA')]
 
-    if not file_:
-        return None
-    if os.path.exists(file_):
-        return file_
-
     for dir_ in dirs:
-        dir_ = os.path.join(dir_, 'sounds', file_)
-        if os.path.exists(dir_):
+        dir_ = dir_ / 'sounds' / file_
+        if dir_.exists():
             return dir_
     return None
 
@@ -485,11 +484,12 @@ def strip_soundfile_path(file_, dirs=None, abs_=True):
         dirs = [configpaths.get('MY_DATA'),
                 configpaths.get('DATA')]
 
-    name = os.path.basename(file_)
+    file_ = Path(file_)
+    name = file_.name
     for dir_ in dirs:
-        dir_ = os.path.join(dir_, 'sounds', name)
+        dir_ = dir_ / 'sounds' / name
         if abs_:
-            dir_ = os.path.abspath(dir_)
+            dir_ = dir_.absolute()
         if file_ == dir_:
             return name
     return file_
@@ -499,6 +499,7 @@ def play_sound_file(path_to_soundfile):
     if path_to_soundfile is None:
         return
 
+    path_to_soundfile = str(path_to_soundfile)
     if sys.platform == 'win32':
         import winsound
         try:
@@ -539,8 +540,8 @@ def get_connection_status(account):
 def get_global_show():
     maxi = 0
     for account in app.connections:
-        if not app.config.get_per('accounts', account,
-                                  'sync_with_global_status'):
+        if not app.settings.get_account_setting(account,
+                                                'sync_with_global_status'):
             continue
         status = get_connection_status(account)
         index = SHOW_LIST.index(status)
@@ -551,8 +552,8 @@ def get_global_show():
 def get_global_status_message():
     maxi = 0
     for account in app.connections:
-        if not app.config.get_per('accounts', account,
-                                  'sync_with_global_status'):
+        if not app.settings.get_account_setting(account,
+                                                'sync_with_global_status'):
             continue
         status = app.connections[account].status
         index = SHOW_LIST.index(status)
@@ -567,8 +568,8 @@ def statuses_unified():
     """
     reference = None
     for account in app.connections:
-        if not app.config.get_per('accounts', account,
-                                  'sync_with_global_status'):
+        if not app.settings.get_account_setting(account,
+                                                'sync_with_global_status'):
             continue
         if reference is None:
             reference = app.connections[account].status
@@ -657,21 +658,12 @@ def get_os_info():
             info = platform.system()
     return info
 
-def allow_showing_notification(account,
-                               type_='notify_on_new_message',
-                               is_first_message=True):
-    """
-    Is it allowed to show nofication?
-
-    Check OUR status and if we allow notifications for that status type is the
-    option that need to be True e.g.: notify_on_signing is_first_message: set it
-    to false when it's not the first message
-    """
-    if type_ and (not app.config.get(type_) or not is_first_message):
+def allow_showing_notification(account):
+    if not app.settings.get('show_notifications'):
         return False
-    if app.config.get('autopopupaway'):
+    if app.settings.get('autopopupaway'):
         return True
-    if app.connections[account].status in ('online', 'chat'):
+    if app.account_is_available(account):
         return True
     return False
 
@@ -679,17 +671,17 @@ def allow_popup_window(account):
     """
     Is it allowed to popup windows?
     """
-    autopopup = app.config.get('autopopup')
-    autopopupaway = app.config.get('autopopupaway')
+    autopopup = app.settings.get('autopopup')
+    autopopupaway = app.settings.get('autopopupaway')
     if autopopup and (autopopupaway or \
     app.connections[account].status in ('online', 'chat')):
         return True
     return False
 
 def allow_sound_notification(account, sound_event):
-    if (app.config.get('sounddnd') or
+    if (app.settings.get('sounddnd') or
             app.connections[account].status != 'dnd' and
-            app.config.get_per('soundevents', sound_event, 'enabled')):
+            app.settings.get_soundevent_settings(sound_event)['enabled']):
         return True
     return False
 
@@ -802,19 +794,18 @@ def get_current_show(account):
 
 def get_optional_features(account):
     features = []
-    if app.config.get_per('accounts', account, 'subscribe_mood'):
+
+    if app.settings.get_account_setting(account, 'request_user_data'):
         features.append(Namespace.MOOD + '+notify')
-    if app.config.get_per('accounts', account, 'subscribe_activity'):
         features.append(Namespace.ACTIVITY + '+notify')
-    if app.config.get_per('accounts', account, 'subscribe_tune'):
         features.append(Namespace.TUNE + '+notify')
-    if app.config.get_per('accounts', account, 'subscribe_nick'):
-        features.append(Namespace.NICK + '+notify')
-    if app.config.get_per('accounts', account, 'subscribe_location'):
         features.append(Namespace.LOCATION + '+notify')
-    if app.connections[account].get_module('Bookmarks').using_bookmark_2:
-        features.append(Namespace.BOOKMARKS_2 + '+notify')
-    elif app.connections[account].get_module('Bookmarks').using_bookmark_1:
+
+    features.append(Namespace.NICK + '+notify')
+
+    if app.connections[account].get_module('Bookmarks').nativ_bookmarks_used:
+        features.append(Namespace.BOOKMARKS_1 + '+notify')
+    elif app.connections[account].get_module('Bookmarks').pep_bookmarks_used:
         features.append(Namespace.BOOKMARKS + '+notify')
     if app.is_installed('AV'):
         features.append(Namespace.JINGLE_RTP)
@@ -831,38 +822,33 @@ def jid_is_blocked(account, jid):
     return jid in con.get_module('Blocking').blocked
 
 def get_subscription_request_msg(account=None):
-    s = app.config.get_per('accounts', account, 'subscription_request_msg')
+    s = app.settings.get_account_setting(account, 'subscription_request_msg')
     if s:
         return s
     s = _('I would like to add you to my contact list.')
     if account:
         s = _('Hello, I am $name.') + ' ' + s
-        name = app.connections[account].get_module('VCardTemp').get_vard_name()
-        nick = app.nicks[account]
-        if name and nick:
-            name += ' (%s)' % nick
-        elif nick:
-            name = nick
-        s = Template(s).safe_substitute({'name': name})
+        s = Template(s).safe_substitute({'name': app.nicks[account]})
         return s
 
 def get_user_proxy(account):
-    proxy_name = app.config.get_per('accounts', account, 'proxy')
+    proxy_name = app.settings.get_account_setting(account, 'proxy')
     if not proxy_name:
         return None
     return get_proxy(proxy_name)
 
 def get_proxy(proxy_name):
-    proxy = app.config.get_per('proxies', proxy_name)
-    if proxy is None:
+    try:
+        settings = app.settings.get_proxy_settings(proxy_name)
+    except ValueError:
         return None
 
     username, password = None, None
-    if proxy['useauth']:
-        username, password = proxy['user'], proxy['pass']
+    if settings['useauth']:
+        username, password = settings['user'], settings['pass']
 
-    return ProxyData(type=proxy['type'],
-                     host='%s:%s' % (proxy['host'], proxy['port']),
+    return ProxyData(type=settings['type'],
+                     host='%s:%s' % (settings['host'], settings['port']),
                      username=username,
                      password=password)
 
@@ -872,25 +858,19 @@ def version_condition(current_version, required_version):
     return True
 
 def get_available_emoticon_themes():
-    emoticons_themes = ['font']
     files = []
-    dir_iterator = os.scandir(configpaths.get('EMOTICONS'))
-    for folder in dir_iterator:
+    for folder in configpaths.get('EMOTICONS').iterdir():
         if not folder.is_dir():
             continue
-        file_iterator = os.scandir(folder.path)
-        for theme in file_iterator:
-            if theme.is_file():
-                files.append(theme.name)
+        files += [theme for theme in folder.iterdir() if theme.is_file()]
 
-    if os.path.isdir(configpaths.get('MY_EMOTS')):
-        files += os.listdir(configpaths.get('MY_EMOTS'))
+    my_emots = configpaths.get('MY_EMOTS')
+    if my_emots.is_dir():
+        files += list(my_emots.iterdir())
 
-    for file in files:
-        if file.endswith('.png'):
-            emoticons_themes.append(file[:-4])
-    emoticons_themes.sort()
-    return emoticons_themes
+    emoticons_themes = ['font']
+    emoticons_themes += [file.stem for file in files if file.suffix == '.png']
+    return sorted(emoticons_themes)
 
 def call_counter(func):
     def helper(self, restart=False):
@@ -900,20 +880,9 @@ def call_counter(func):
         return func(self)
     return helper
 
-def get_sync_threshold(jid, archive_info):
-    disco_info = app.logger.get_last_disco_info(jid)
-    if archive_info is None or archive_info.sync_threshold is None:
-        if disco_info is not None and disco_info.muc_is_members_only:
-            threshold = app.config.get('private_room_sync_threshold')
-        else:
-            threshold = app.config.get('public_room_sync_threshold')
-        app.logger.set_archive_infos(jid, sync_threshold=threshold)
-        return threshold
-    return archive_info.sync_threshold
-
 def load_json(path, key=None, default=None):
     try:
-        with open(path, 'r') as file:
+        with path.open('r') as file:
             json_dict = json.loads(file.read())
     except Exception:
         log.exception('Parsing error')
@@ -926,7 +895,8 @@ def load_json(path, key=None, default=None):
 def ignore_contact(account, jid):
     jid = str(jid)
     known_contact = app.contacts.get_contacts(account, jid)
-    ignore = app.config.get_per('accounts', account, 'ignore_unknown_contacts')
+    ignore = app.settings.get_account_setting(account,
+                                              'ignore_unknown_contacts')
     if ignore and not known_contact:
         log.info('Ignore unknown contact %s', jid)
         return True
@@ -985,14 +955,14 @@ class AdditionalDataDict(collections.UserDict):
 
 
 def save_roster_position(window):
-    if not app.config.get('save-roster-position'):
+    if not app.settings.get('save-roster-position'):
         return
     if app.is_display(Display.WAYLAND):
         return
     x_pos, y_pos = window.get_position()
     log.debug('Save roster position: %s %s', x_pos, y_pos)
-    app.config.set('roster_x-position', x_pos)
-    app.config.set('roster_y-position', y_pos)
+    app.settings.set('roster_x-position', x_pos)
+    app.settings.set('roster_y-position', y_pos)
 
 
 class Singleton(type):
@@ -1093,6 +1063,10 @@ def parse_uri(uri):
         uri = uri[7:]
         return URI(type=URIType.MAIL, data=uri)
 
+    if uri.startswith('tel:'):
+        uri = uri[4:]
+        return URI(type=URIType.TEL, data=uri)
+
     if app.interface.sth_at_sth_dot_sth_re.match(uri):
         return URI(type=URIType.AT, data=uri)
 
@@ -1101,6 +1075,9 @@ def parse_uri(uri):
         lat, _, lon = location.partition(',')
         if not lon:
             return URI(type=URIType.UNKNOWN, data=uri)
+
+        if Gio.AppInfo.get_default_for_uri_scheme('geo'):
+            return URI(type=URIType.GEO, data=uri)
 
         uri = geo_provider_from_location(lat, lon)
         return URI(type=URIType.GEO, data=uri)
@@ -1119,18 +1096,14 @@ def open_uri(uri, account=None):
     if uri.type == URIType.FILE:
         open_file(uri.data)
 
+    elif uri.type == URIType.TEL:
+        Gio.AppInfo.launch_default_for_uri(f'tel:{uri.data}')
+
     elif uri.type == URIType.MAIL:
-        uri = 'mailto:%s' % uri.data
-        if os.name == 'nt':
-            webbrowser.open(uri)
-        else:
-            Gio.AppInfo.launch_default_for_uri(uri)
+        Gio.AppInfo.launch_default_for_uri(f'mailto:{uri.data}')
 
     elif uri.type in (URIType.WEB, URIType.GEO):
-        if os.name == 'nt':
-            webbrowser.open(uri.data)
-        else:
-            Gio.AppInfo.launch_default_for_uri(uri.data)
+        Gio.AppInfo.launch_default_for_uri(uri.data)
 
     elif uri.type == URIType.AT:
         app.interface.new_chat_from_jid(account, uri.data)
@@ -1172,14 +1145,14 @@ def geo_provider_from_location(lat, lon):
 
 
 def get_resource(account):
-    resource = app.config.get_per('accounts', account, 'resource')
+    resource = app.settings.get_account_setting(account, 'resource')
     if not resource:
         return None
 
     resource = Template(resource).safe_substitute(
         {'hostname': socket.gethostname(),
          'rand': get_random_string()})
-    app.config.set_per('accounts', account, 'resource', resource)
+    app.settings.set_account_setting(account, 'resource', resource)
     return resource
 
 
@@ -1205,17 +1178,17 @@ def get_default_muc_config():
 
 def validate_jid(jid, type_=None):
     try:
-        jid = JID(str(jid))
+        jid = JID.from_string(str(jid))
     except InvalidJid as error:
         raise ValueError(error)
 
     if type_ is None:
         return jid
-    if type_ == 'bare' and jid.isBare:
+    if type_ == 'bare' and jid.is_bare:
         return jid
-    if type_ == 'full' and jid.isFull:
+    if type_ == 'full' and jid.is_full:
         return jid
-    if type_ == 'domain' and jid.isDomain:
+    if type_ == 'domain' and jid.is_domain:
         return jid
 
     raise ValueError('Not a %s JID' % type_)
@@ -1237,20 +1210,12 @@ def get_groupchat_name(con, jid):
     if name:
         return name
 
-    disco_info = app.logger.get_last_disco_info(jid)
+    disco_info = app.storage.cache.get_last_disco_info(jid)
     if disco_info is not None:
         if disco_info.muc_name:
             return disco_info.muc_name
 
     return jid.split('@')[0]
-
-
-def get_alternative_venue(error):
-    if error.condition == 'gone' and error.condition_data is not None:
-        uri = parse_uri(error.condition_data)
-        if uri.type == URIType.XMPP and uri.action == URIAction.JOIN:
-            return uri.data['jid']
-    return None
 
 
 def is_affiliation_change_allowed(self_contact, contact, target_aff):
@@ -1299,7 +1264,11 @@ class Observable:
                     self._callbacks[signal_name].remove(handler)
 
     def connect(self, signal_name, func):
-        weak_func = weakref.WeakMethod(func)
+        if inspect.ismethod(func):
+            weak_func = weakref.WeakMethod(func)
+        elif inspect.isfunction(func):
+            weak_func = weakref.ref(func)
+
         self._callbacks[signal_name].append(weak_func)
 
     def notify(self, signal_name, *args, **kwargs):
@@ -1366,50 +1335,38 @@ def _on_load_finished(file, result, user_data):
         callback(contents, None, user_data)
 
 
-def get_encryption_method(account: str, jid: str) -> Optional[str]:
-    config_key = '%s-%s' % (account, jid)
-    state = app.config.get_per('encryption', config_key, 'encryption')
-    return state or None
-
-
 def convert_gio_to_openssl_cert(cert):
     cert = load_certificate(FILETYPE_PEM, cert.props.certificate_pem.encode())
     return cert
 
 
 def get_custom_host(account):
-    if not app.config.get_per('accounts', account, 'use_custom_host'):
+    if not app.settings.get_account_setting(account, 'use_custom_host'):
         return None
-    host = app.config.get_per('accounts', account, 'custom_host')
-    port = app.config.get_per('accounts', account, 'custom_port')
-    type_ = app.config.get_per('accounts', account, 'custom_type')
+    host = app.settings.get_account_setting(account, 'custom_host')
+    port = app.settings.get_account_setting(account, 'custom_port')
+    type_ = app.settings.get_account_setting(account, 'custom_type')
 
-    protocol = ConnectionProtocol.TCP
     if host.startswith('ws://') or host.startswith('wss://'):
         protocol = ConnectionProtocol.WEBSOCKET
+    else:
+        host = f'{host}:{port}'
+        protocol = ConnectionProtocol.TCP
 
-    return ('%s:%s' % (host, port),
-            protocol,
-            ConnectionType(type_))
+    return (host, protocol, ConnectionType(type_))
 
 
 def warn_about_plain_connection(account, connection_types):
-    warn = app.config.get_per(
-        'accounts', account, 'action_when_plain_connection') == 'warn'
+    warn = app.settings.get_account_setting(
+        account, 'confirm_unencrypted_connection')
     for type_ in connection_types:
         if type_.is_plain and warn:
             return True
     return False
 
 
-def get_ignored_tls_errors(account):
-    ignore_ssl_errors = app.config.get_per(
-        'accounts', account, 'ignore_ssl_errors').split()
-    return {Gio.TlsCertificateFlags(int(err)) for err in ignore_ssl_errors}
-
-
 def get_idle_status_message(state, status_message):
-    message = app.config.get(f'auto{state}_message')
+    message = app.settings.get(f'auto{state}_message')
     if not message:
         message = status_message
     else:
@@ -1417,7 +1374,7 @@ def get_idle_status_message(state, status_message):
         message = message.replace('$T', '%(time)s')
         message = message % {
             'status': status_message,
-            'time': app.config.get(f'auto{state}time')
+            'time': app.settings.get(f'auto{state}time')
         }
     return message
 
@@ -1426,7 +1383,7 @@ def should_log(account, jid):
     """
     Should conversations between a local account and a remote jid be logged?
     """
-    no_log_for = app.config.get_per('accounts', account, 'no_log_for')
+    no_log_for = app.settings.get_account_setting(account, 'no_log_for')
 
     if not no_log_for:
         no_log_for = ''
@@ -1434,3 +1391,40 @@ def should_log(account, jid):
     no_log_for = no_log_for.split()
 
     return (account not in no_log_for) and (jid not in no_log_for)
+
+
+def ask_for_status_message(status, signin=False):
+    if status is None:
+        # We try to change the message
+        return True
+
+    if signin:
+        return app.settings.get('ask_online_status')
+
+    if status == 'offline':
+        return app.settings.get('ask_offline_status')
+
+    return app.settings.get('always_ask_for_status_message')
+
+
+def get_group_chat_nick(account, room_jid):
+    nick = app.nicks[account]
+
+    client = app.get_client(account)
+
+    bookmark = client.get_module('Bookmarks').get_bookmark(room_jid)
+    if bookmark is not None:
+        if bookmark.nick is not None:
+            nick = bookmark.nick
+
+    return nick
+
+
+def get_muc_context(jid):
+    disco_info = app.storage.cache.get_last_disco_info(jid)
+    if disco_info is None:
+        return None
+
+    if (disco_info.muc_is_members_only and disco_info.muc_is_nonanonymous):
+        return 'private'
+    return 'public'

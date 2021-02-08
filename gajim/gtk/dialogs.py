@@ -18,6 +18,7 @@ from collections import namedtuple
 from gi.repository import GLib
 from gi.repository import Gtk
 from gi.repository import Gdk
+from gi.repository import GdkPixbuf
 from gi.repository import Pango
 
 from gajim.common import app
@@ -25,7 +26,8 @@ from gajim.common.i18n import _
 from gajim.common.const import ButtonAction
 from gajim.common.helpers import convert_gio_to_openssl_cert
 
-from gajim.gtk.util import get_builder
+from .util import get_builder
+from .util import get_thumbnail_size
 
 
 class DialogButton(namedtuple('DialogButton', ('response text callback args '
@@ -293,64 +295,6 @@ class CertificateDialog(Gtk.ApplicationWindow):
         self._clipboard.set_text(clipboard_text, -1)
 
 
-class InvitationReceivedDialog(Gtk.ApplicationWindow):
-    def __init__(self, account, event):
-        Gtk.ApplicationWindow.__init__(self)
-        self.set_name('InvitationReceivedDialog')
-        self.set_application(app.app)
-        self.set_position(Gtk.WindowPosition.CENTER)
-        self.set_resizable(False)
-        self.set_show_menubar(False)
-        self.set_title(_('Group Chat Invitation '))
-
-        self._ui = get_builder('groupchat_invitation_received.ui')
-        self.add(self._ui.grid)
-        self.show_all()
-        self._ui.connect_signals(self)
-
-        self.account = account
-        self.room_jid = str(event.muc)
-        self.from_ = str(event.from_)
-        self.password = event.password
-
-        if event.from_.bareMatch(event.muc):
-            contact_text = event.from_.getResource()
-        else:
-            contact = app.contacts.get_first_contact_from_jid(
-                self.account, event.from_.getBare())
-            if contact is None:
-                contact_text = str(event.from_)
-            else:
-                contact_text = contact.get_shown_name()
-
-        invitation_label = _('<b>%(contact)s</b> has invited you to the '
-                             'group chat <b>%(room_jid)s</b>') % \
-                            {'contact': contact_text,
-                             'room_jid': self.room_jid}
-        self._ui.invitation_label.set_markup(invitation_label)
-
-        if event.reason:
-            comment = GLib.markup_escape_text(event.reason)
-            comment = _('Comment: %s') % comment
-            self._ui.comment_label.show()
-            self._ui.comment_label.set_text(comment)
-
-    def on_message_mnemonic_activate(self, _widget, _group_cycling=False):
-        self._ui.message_expander.set_expanded(True)
-
-    def on_accept_button_clicked(self, _widget):
-        app.interface.show_or_join_groupchat(self.account,
-                                             self.room_jid,
-                                             password=self.password)
-        self.destroy()
-
-    def on_decline_button_clicked(self, _widget):
-        text = self._ui.decline_message.get_text()
-        app.connections[self.account].get_module('MUC').decline(
-            self.room_jid, self.from_, text)
-        self.destroy()
-
-
 class PassphraseDialog:
     """
     Class for Passphrase dialog
@@ -410,7 +354,7 @@ class PassphraseDialog:
             self.cancel_handler()
 
 
-class NewConfirmationDialog(Gtk.MessageDialog):
+class ConfirmationDialog(Gtk.MessageDialog):
     def __init__(self, title, text, sec_text, buttons,
                  modal=True, transient_for=None):
         if transient_for is None:
@@ -421,6 +365,8 @@ class NewConfirmationDialog(Gtk.MessageDialog):
                                    transient_for=transient_for,
                                    message_type=Gtk.MessageType.QUESTION,
                                    modal=modal)
+
+        self.get_style_context().add_class('confirmation-dialog')
 
         self._buttons = {}
 
@@ -458,16 +404,19 @@ class NewConfirmationDialog(Gtk.MessageDialog):
         self.show_all()
 
 
-class NewConfirmationCheckDialog(NewConfirmationDialog):
+NewConfirmationDialog = ConfirmationDialog
+
+
+class ConfirmationCheckDialog(ConfirmationDialog):
     def __init__(self, title, text, sec_text, check_text,
                  buttons, modal=True, transient_for=None):
-        NewConfirmationDialog.__init__(self,
-                                       title,
-                                       text,
-                                       sec_text,
-                                       buttons,
-                                       transient_for=transient_for,
-                                       modal=modal)
+        ConfirmationDialog.__init__(self,
+                                    title,
+                                    text,
+                                    sec_text,
+                                    buttons,
+                                    transient_for=transient_for,
+                                    modal=modal)
 
         self._checkbutton = Gtk.CheckButton.new_with_mnemonic(check_text)
         self._checkbutton.set_can_focus(False)
@@ -489,16 +438,51 @@ class NewConfirmationCheckDialog(NewConfirmationDialog):
         super()._on_response(_dialog, response)
 
 
-class InputDialog(NewConfirmationDialog):
+NewConfirmationCheckDialog = ConfirmationCheckDialog
+
+
+class PastePreviewDialog(ConfirmationCheckDialog):
+    def __init__(self, title, text, sec_text, check_text, image,
+                 buttons, modal=True, transient_for=None):
+        ConfirmationCheckDialog.__init__(self,
+                                         title,
+                                         text,
+                                         sec_text,
+                                         check_text,
+                                         buttons,
+                                         transient_for=transient_for,
+                                         modal=modal)
+
+        preview = Gtk.Image()
+        preview.set_halign(Gtk.Align.CENTER)
+        preview.get_style_context().add_class('preview-image')
+        size = 300
+        image_width = image.get_width()
+        image_height = image.get_height()
+
+        if size > image_width and size > image_height:
+            preview.set_from_pixbuf(image)
+        else:
+            thumb_width, thumb_height = get_thumbnail_size(image, size)
+            pixbuf_scaled = image.scale_simple(
+                thumb_width, thumb_height, GdkPixbuf.InterpType.BILINEAR)
+            preview.set_from_pixbuf(pixbuf_scaled)
+
+        content_area = self.get_content_area()
+        content_area.pack_start(preview, True, True, 0)
+        content_area.reorder_child(preview, 2)
+
+
+class InputDialog(ConfirmationDialog):
     def __init__(self, title, text, sec_text, buttons, input_str=None,
                  transient_for=None, modal=True):
-        NewConfirmationDialog.__init__(self,
-                                       title,
-                                       text,
-                                       sec_text,
-                                       buttons,
-                                       transient_for=transient_for,
-                                       modal=modal)
+        ConfirmationDialog.__init__(self,
+                                    title,
+                                    text,
+                                    sec_text,
+                                    buttons,
+                                    transient_for=transient_for,
+                                    modal=modal)
 
         self._entry = Gtk.Entry()
         self._entry.set_activates_default(True)
@@ -516,6 +500,45 @@ class InputDialog(NewConfirmationDialog):
         if button is not None:
             button.args.insert(0, self._entry.get_text())
         super()._on_response(_dialog, response)
+
+
+class TimeoutWindow:
+    """
+    Class designed to be derivated by other windows
+    Derived windows close automatically after reaching the timeout
+    """
+    def __init__(self, timeout):
+        self.title_text = ''
+        self._countdown_left = timeout
+        self._timeout_source_id = None
+
+    def start_timeout(self):
+        if self._countdown_left > 0:
+            self.countdown()
+            self._timeout_source_id = GLib.timeout_add_seconds(
+                1, self.countdown)
+
+    def stop_timeout(self, *args, **kwargs):
+        if self._timeout_source_id is not None:
+            GLib.source_remove(self._timeout_source_id)
+            self._timeout_source_id = None
+        self.set_title(self.title_text)
+
+    def on_timeout(self):
+        """
+        To be implemented by derivated classes
+        """
+
+    def countdown(self):
+        if self._countdown_left <= 0:
+            self._timeout_source_id = None
+            self.on_timeout()
+            return False
+
+        self.set_title('%s [%s]' % (
+            self.title_text, str(self._countdown_left)))
+        self._countdown_left -= 1
+        return True
 
 
 class ShortcutsWindow:

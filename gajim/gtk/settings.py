@@ -17,20 +17,20 @@
 from gi.repository import Gtk
 from gi.repository import GLib
 from gi.repository import Gdk
-from gi.repository import GObject
 from gi.repository import Pango
 
 from gajim.common import app
 from gajim.common import passwords
 from gajim.common.i18n import _
+from gajim.common.i18n import Q_
 
 from gajim import gtkgui_helpers
 
-from gajim.gtk.util import get_image_button
-from gajim.gtk.util import MaxWidthComboBoxText
-from gajim.gtk.util import open_window
-from gajim.gtk.const import SettingKind
-from gajim.gtk.const import SettingType
+from .util import get_image_button
+from .util import MaxWidthComboBoxText
+from .util import open_window
+from .const import SettingKind
+from .const import SettingType
 
 
 class SettingsDialog(Gtk.ApplicationWindow):
@@ -44,13 +44,14 @@ class SettingsDialog(Gtk.ApplicationWindow):
         self.set_resizable(False)
         self.set_default_size(250, -1)
         self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        self.get_style_context().add_class('settings-dialog')
         self.account = account
         if flags == Gtk.DialogFlags.MODAL:
             self.set_modal(True)
         elif flags == Gtk.DialogFlags.DESTROY_WITH_PARENT:
             self.set_destroy_with_parent(True)
 
-        self.listbox = SettingsBox(account, extend)
+        self.listbox = SettingsBox(account, extend=extend)
         self.listbox.set_hexpand(True)
         self.listbox.set_selection_mode(Gtk.SelectionMode.NONE)
 
@@ -61,26 +62,22 @@ class SettingsDialog(Gtk.ApplicationWindow):
         self.add(self.listbox)
 
         self.show_all()
-        self.listbox.connect('row-activated', self.on_row_activated)
-        self.connect('key-press-event', self.on_key_press)
+        self.connect_after('key-press-event', self.on_key_press)
 
     def on_key_press(self, _widget, event):
         if event.keyval == Gdk.KEY_Escape:
             self.destroy()
-
-    @staticmethod
-    def on_row_activated(_listbox, row):
-        row.on_row_activated()
 
     def get_setting(self, name):
         return self.listbox.get_setting(name)
 
 
 class SettingsBox(Gtk.ListBox):
-    def __init__(self, account, extend=None):
+    def __init__(self, account=None, jid=None, extend=None):
         Gtk.ListBox.__init__(self)
         self.get_style_context().add_class('settings-box')
         self.account = account
+        self.jid = jid
         self.named_settings = {}
 
         self.map = {
@@ -93,25 +90,39 @@ class SettingsBox(Gtk.ListBox):
             SettingKind.LOGIN: LoginSetting,
             SettingKind.FILECHOOSER: FileChooserSetting,
             SettingKind.CALLBACK: CallbackSetting,
-            SettingKind.PROXY: ProxyComboSetting,
             SettingKind.PRIORITY: PrioritySetting,
             SettingKind.HOSTNAME: CutstomHostnameSetting,
             SettingKind.CHANGEPASSWORD: ChangePasswordSetting,
             SettingKind.COMBO: ComboSetting,
+            SettingKind.POPOVER: PopoverSetting,
+            SettingKind.AUTO_AWAY: CutstomAutoAwaySetting,
+            SettingKind.AUTO_EXTENDED_AWAY: CutstomAutoExtendedAwaySetting,
+            SettingKind.USE_STUN_SERVER: CustomStunServerSetting,
+            SettingKind.NOTIFICATIONS: NotificationsSetting,
         }
 
         if extend is not None:
             for setting, callback in extend:
                 self.map[setting] = callback
 
+        self.connect('row-activated', self.on_row_activated)
+
+    @staticmethod
+    def on_row_activated(_listbox, row):
+        row.on_row_activated()
+
     def add_setting(self, setting):
         if not isinstance(setting, Gtk.ListBoxRow):
             if setting.props is not None:
-                listitem = self.map[setting.kind](
-                    self.account, *setting[1:-1], **setting.props)
+                listitem = self.map[setting.kind](self.account,
+                                                  self.jid,
+                                                  *setting[1:-1],
+                                                  **setting.props)
             else:
-                listitem = self.map[setting.kind](self.account, *setting[1:-1])
-        listitem.connect('notify::setting-value', self.on_setting_changed)
+                listitem = self.map[setting.kind](self.account,
+                                                  self.jid,
+                                                  *setting[1:-1])
+
         if setting.name is not None:
             self.named_settings[setting.name] = listitem
         self.add(listitem)
@@ -120,28 +131,25 @@ class SettingsBox(Gtk.ListBox):
         return self.named_settings[name]
 
     def update_states(self):
-        values = []
-        values.append((None, None))
         for row in self.get_children():
-            name = row.name
-            if name is None:
-                continue
-            value = row.get_property('setting-value')
-            values.append((name, value))
-
-        for name, value in values:
-            for row in self.get_children():
-                row.update_activatable(name, value)
-
-    def on_setting_changed(self, widget, *args):
-        value = widget.get_property('setting-value')
-        for row in self.get_children():
-            row.update_activatable(widget.name, value)
+            row.update_activatable()
 
 
 class GenericSetting(Gtk.ListBoxRow):
-    def __init__(self, account, label, type_, value,
-                 name, callback, data, desc, enabledif, enabled_func):
+    def __init__(self,
+                 account,
+                 jid,
+                 label,
+                 type_,
+                 value,
+                 name,
+                 callback,
+                 data,
+                 desc,
+                 bind,
+                 inverted,
+                 enabled_func):
+
         Gtk.ListBoxRow.__init__(self)
         self._grid = Gtk.Grid()
         self._grid.set_size_request(-1, 30)
@@ -153,8 +161,10 @@ class GenericSetting(Gtk.ListBoxRow):
         self.data = data
         self.label = label
         self.account = account
+        self.jid = jid
         self.name = name
-        self.enabledif = enabledif
+        self.bind = bind
+        self.inverted = inverted
         self.enabled_func = enabled_func
         self.setting_value = self.get_value()
 
@@ -183,45 +193,90 @@ class GenericSetting(Gtk.ListBoxRow):
 
         self._grid.add(description_box)
 
-        self.setting_box = Gtk.Box(spacing=6)
+        self.setting_box = Gtk.Box(spacing=12)
         self.setting_box.set_size_request(200, -1)
         self.setting_box.set_valign(Gtk.Align.CENTER)
         self.setting_box.set_name('GenericSettingBox')
         self._grid.add(self.setting_box)
         self.add(self._grid)
 
-    def do_get_property(self, prop):
-        if prop.name == 'setting-value':
-            return self.setting_value
-        raise AttributeError('unknown property %s' % prop.name)
+        self._bind_sensitive_state()
 
-    def do_set_property(self, prop, value):
-        if prop.name == 'setting-value':
-            self.setting_value = value
+    def _bind_sensitive_state(self):
+        if self.bind is None:
+            return
+
+        bind_setting_type, setting, account, jid = self._parse_bind()
+
+        app.settings.bind_signal(setting,
+                                 self,
+                                 'set_sensitive',
+                                 account=account,
+                                 jid=jid,
+                                 inverted=self.inverted)
+
+        if bind_setting_type == SettingType.CONTACT:
+            value = app.settings.get_contact_setting(account, jid, setting)
+
+        elif bind_setting_type == SettingType.GROUP_CHAT:
+            value = app.settings.get_group_chat_setting(account, jid, setting)
+
+        elif bind_setting_type == SettingType.ACCOUNT_CONFIG:
+            value = app.settings.get_account_setting(account, setting)
+
         else:
-            raise AttributeError('unknown property %s' % prop.name)
+            value = app.settings.get(setting)
+
+        if self.inverted:
+            value = not value
+        self.set_sensitive(value)
+
+    def _parse_bind(self):
+        if '::' not in self.bind:
+            return SettingType.CONFIG, self.bind, None, None
+
+        bind_setting_type, setting = self.bind.split('::')
+        if bind_setting_type == 'account':
+            return SettingType.ACCOUNT_CONFIG, setting, self.account, None
+
+        if bind_setting_type == 'contact':
+            return SettingType.CONTACT, setting, self.account, self.jid
+
+        if bind_setting_type == 'group_chat':
+            return SettingType.GROUP_CHAT, setting, self.account, self.jid
+        raise ValueError(f'Invalid bind argument: {self.bind}')
 
     def get_value(self):
-        return self.__get_value(self.type_, self.value, self.account)
+        return self.__get_value(self.type_,
+                                self.value,
+                                self.account,
+                                self.jid)
 
     @staticmethod
-    def __get_value(type_, value, account):
+    def __get_value(type_, value, account, jid):
         if value is None:
             return None
         if type_ == SettingType.VALUE:
             return value
 
+        if type_ == SettingType.CONTACT:
+            return app.settings.get_contact_setting(account, jid, value)
+
+        if type_ == SettingType.GROUP_CHAT:
+            return app.settings.get_group_chat_setting(
+                account, jid, value)
+
         if type_ == SettingType.CONFIG:
-            return app.config.get(value)
+            return app.settings.get(value)
 
         if type_ == SettingType.ACCOUNT_CONFIG:
             if value == 'password':
                 return passwords.get_password(account)
             if value == 'no_log_for':
-                no_log = app.config.get_per(
-                    'accounts', account, 'no_log_for').split()
+                no_log = app.settings.get_account_setting(
+                    account, 'no_log_for').split()
                 return account not in no_log
-            return app.config.get_per('accounts', account, value)
+            return app.settings.get_account_setting(account, value)
 
         if type_ == SettingType.ACTION:
             if value.startswith('-'):
@@ -232,52 +287,77 @@ class GenericSetting(Gtk.ListBoxRow):
 
     def set_value(self, state):
         if self.type_ == SettingType.CONFIG:
-            app.config.set(self.value, state)
-        if self.type_ == SettingType.ACCOUNT_CONFIG:
+            app.settings.set(self.value, state)
+
+        elif self.type_ == SettingType.ACCOUNT_CONFIG:
             if self.value == 'password':
                 passwords.save_password(self.account, state)
             if self.value == 'no_log_for':
                 self.set_no_log_for(self.account, state)
             else:
-                app.config.set_per('accounts', self.account, self.value, state)
+                app.settings.set_account_setting(self.account,
+                                                 self.value,
+                                                 state)
+
+        elif self.type_ == SettingType.CONTACT:
+            app.settings.set_contact_setting(
+                self.account, self.jid, self.value, state)
+
+        elif self.type_ == SettingType.GROUP_CHAT:
+            app.settings.set_group_chat_setting(
+                self.account, self.jid, self.value, state)
 
         if self.callback is not None:
             self.callback(state, self.data)
 
-        self.set_property('setting-value', state)
-
     @staticmethod
     def set_no_log_for(account, state):
-        no_log = app.config.get_per('accounts', account, 'no_log_for').split()
+        no_log = app.settings.get_account_setting(account, 'no_log_for').split()
         if state and account in no_log:
             no_log.remove(account)
         elif not state and account not in no_log:
             no_log.append(account)
-        app.config.set_per('accounts', account, 'no_log_for', ' '.join(no_log))
+        app.settings.set_account_setting(account,
+                                         'no_log_for',
+                                         ' '.join(no_log))
 
     def on_row_activated(self):
         raise NotImplementedError
 
-    def update_activatable(self, name, value):
-        enabled_func_value = True
-        if self.enabled_func is not None:
-            enabled_func_value = self.enabled_func()
+    def update_activatable(self):
+        if self.enabled_func is None:
+            return
 
-        enabledif_value = True
-        if self.enabledif is not None and self.enabledif[0] == name:
-            enabledif_value = (name, value) == self.enabledif
+        enabled_func_value = self.enabled_func()
+        self.set_activatable(enabled_func_value)
+        self.set_sensitive(enabled_func_value)
 
-        self.set_activatable(enabled_func_value and enabledif_value)
-        self.set_sensitive(enabled_func_value and enabledif_value)
+    def _add_action_button(self, kwargs):
+        icon_name = kwargs.get('button-icon-name')
+        button_text = kwargs.get('button-text')
+        tooltip_text = kwargs.get('button-tooltip') or ''
+        style = kwargs.get('button-style')
+
+        if icon_name is not None:
+            button = Gtk.Button.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+
+        elif button_text is not None:
+            button = Gtk.Button(label=button_text)
+
+        else:
+            return
+
+        if style is not None:
+            for css_class in style.split(' '):
+                button.get_style_context().add_class(css_class)
+
+        button.connect('clicked', kwargs['button-callback'])
+        button.set_tooltip_text(tooltip_text)
+        self.setting_box.add(button)
 
 
 class SwitchSetting(GenericSetting):
-
-    __gproperties__ = {
-        "setting-value": (bool, 'Switch Value', '', False,
-                          GObject.ParamFlags.READWRITE),}
-
-    def __init__(self, *args):
+    def __init__(self, *args, **kwargs):
         GenericSetting.__init__(self, *args)
 
         self.switch = Gtk.Switch()
@@ -292,7 +372,18 @@ class SwitchSetting(GenericSetting):
         self.switch.set_halign(Gtk.Align.END)
         self.switch.set_valign(Gtk.Align.CENTER)
 
-        self.setting_box.add(self.switch)
+        self._switch_state_label = Gtk.Label()
+        self._switch_state_label.set_xalign(1)
+        self._switch_state_label.set_valign(Gtk.Align.CENTER)
+        self._set_label(self.setting_value)
+
+        box = Gtk.Box(spacing=12)
+        box.set_halign(Gtk.Align.END)
+        box.add(self._switch_state_label)
+        box.add(self.switch)
+        self.setting_box.add(box)
+
+        self._add_action_button(kwargs)
 
         self.show_all()
 
@@ -303,14 +394,14 @@ class SwitchSetting(GenericSetting):
     def on_switch(self, switch, *args):
         value = switch.get_active()
         self.set_value(value)
+        self._set_label(value)
+
+    def _set_label(self, active):
+        text = Q_('?switch:On') if active else Q_('?switch:Off')
+        self._switch_state_label.set_text(text)
 
 
 class EntrySetting(GenericSetting):
-
-    __gproperties__ = {
-        "setting-value": (str, 'Entry Value', '', '',
-                          GObject.ParamFlags.READWRITE),}
-
     def __init__(self, *args):
         GenericSetting.__init__(self, *args)
 
@@ -337,12 +428,6 @@ class EntrySetting(GenericSetting):
 
 
 class ColorSetting(GenericSetting):
-
-    __gproperties__ = {
-        "setting-value": (str, 'Color Value', '', '',
-                          GObject.ParamFlags.READWRITE),
-    }
-
     def __init__(self, *args):
         GenericSetting.__init__(self, *args)
 
@@ -368,11 +453,6 @@ class ColorSetting(GenericSetting):
 
 
 class DialogSetting(GenericSetting):
-
-    __gproperties__ = {
-        "setting-value": (str, 'Dummy', '', '',
-                          GObject.ParamFlags.READWRITE),}
-
     def __init__(self, *args, dialog):
         GenericSetting.__init__(self, *args)
         self.dialog = dialog
@@ -401,11 +481,6 @@ class DialogSetting(GenericSetting):
 
 
 class SpinSetting(GenericSetting):
-
-    __gproperties__ = {
-        "setting-value": (int, 'Priority', '', -128, 127, 0,
-                          GObject.ParamFlags.READWRITE),}
-
     def __init__(self, *args, range_):
         GenericSetting.__init__(self, *args)
 
@@ -439,11 +514,6 @@ class SpinSetting(GenericSetting):
 
 
 class FileChooserSetting(GenericSetting):
-
-    __gproperties__ = {
-        "setting-value": (str, 'Certificate Path', '', '',
-                          GObject.ParamFlags.READWRITE),}
-
     def __init__(self, *args, filefilter):
         GenericSetting.__init__(self, *args)
 
@@ -489,11 +559,6 @@ class FileChooserSetting(GenericSetting):
 
 
 class CallbackSetting(GenericSetting):
-
-    __gproperties__ = {
-        "setting-value": (str, 'Dummy', '', '',
-                          GObject.ParamFlags.READWRITE),}
-
     def __init__(self, *args, callback):
         GenericSetting.__init__(self, *args)
         self.callback = callback
@@ -504,11 +569,6 @@ class CallbackSetting(GenericSetting):
 
 
 class ActionSetting(GenericSetting):
-
-    __gproperties__ = {
-        "setting-value": (str, 'Dummy', '', '',
-                          GObject.ParamFlags.READWRITE),}
-
     def __init__(self, *args, account):
         GenericSetting.__init__(self, *args)
         action_name = '%s%s' % (account, self.value)
@@ -535,18 +595,118 @@ class LoginSetting(DialogSetting):
         jid = app.get_jid_from_account(self.account)
         return jid
 
-    def update_activatable(self, name, value):
-        super().update_activatable(name, value)
-        anonym = app.config.get_per('accounts', self.account, 'anonymous_auth')
-        self.set_activatable(not anonym)
+
+class PopoverSetting(GenericSetting):
+    def __init__(self, *args, entries, **kwargs):
+        GenericSetting.__init__(self, *args)
+
+        self._entries = self._convert_to_dict(entries)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                      spacing=12)
+        box.set_halign(Gtk.Align.END)
+        box.set_hexpand(True)
+
+        self._default_text = kwargs.get('default-text')
+
+        self._current_label = Gtk.Label()
+        self._current_label.set_valign(Gtk.Align.CENTER)
+        image = Gtk.Image.new_from_icon_name('pan-down-symbolic',
+                                             Gtk.IconSize.MENU)
+        image.set_valign(Gtk.Align.CENTER)
+
+        box.add(self._current_label)
+        box.add(image)
+
+        self._menu_listbox = Gtk.ListBox()
+        self._menu_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._add_menu_entries()
+        self._menu_listbox.connect('row-activated',
+                                   self._on_menu_row_activated)
+
+        scrolled_window = Gtk.ScrolledWindow()
+        scrolled_window.set_propagate_natural_height(True)
+        scrolled_window.set_propagate_natural_width(True)
+        scrolled_window.set_max_content_height(400)
+        scrolled_window.set_policy(Gtk.PolicyType.NEVER,
+                                   Gtk.PolicyType.AUTOMATIC)
+        scrolled_window.add(self._menu_listbox)
+        scrolled_window.show_all()
+
+        self._popover = Gtk.Popover()
+        self._popover.get_style_context().add_class('combo')
+        self._popover.set_relative_to(image)
+        self._popover.set_position(Gtk.PositionType.BOTTOM)
+        self._popover.add(scrolled_window)
+
+        self.setting_box.add(box)
+
+        self._add_action_button(kwargs)
+
+        text = self._entries.get(self.setting_value, self._default_text or '')
+        self._current_label.set_text(text)
+
+        app.settings.connect_signal(self.value,
+                                    self._on_setting_changed,
+                                    account=self.account,
+                                    jid=self.jid)
+
+        self.connect('destroy', self._on_destroy)
+
+        self.show_all()
+
+    @staticmethod
+    def _convert_to_dict(entries):
+        if isinstance(entries, list):
+            entries = {key: key for key in entries}
+        return entries
+
+    def _on_setting_changed(self, value, *args):
+        text = self._entries.get(value)
+        if text is None:
+            text = self._default_text or ''
+
+        self._current_label.set_text(text)
+
+    def _add_menu_entries(self):
+        if self._default_text is not None:
+            self._menu_listbox.add(PopoverRow(self._default_text, ''))
+
+        for value, label in self._entries.items():
+            self._menu_listbox.add(PopoverRow(label, value))
+
+        self._menu_listbox.show_all()
+
+    def _on_menu_row_activated(self, listbox, row):
+        listbox.unselect_all()
+        self._popover.popdown()
+
+        self.set_value(row.value)
+
+    def on_row_activated(self):
+        self._popover.popup()
+
+    def update_entries(self, entries):
+        self._entries = self._convert_to_dict(entries)
+        self._menu_listbox.foreach(self._menu_listbox.remove)
+        self._add_menu_entries()
+
+    def _on_destroy(self, *args):
+        app.settings.disconnect_signals(self)
+
+
+class PopoverRow(Gtk.ListBoxRow):
+    def __init__(self, label, value):
+        Gtk.ListBoxRow.__init__(self)
+        self.label = label
+        self.value = value
+
+        label = Gtk.Label(label=label)
+        label.set_xalign(0)
+        self.add(label)
 
 
 class ComboSetting(GenericSetting):
-
-    __gproperties__ = {
-        "setting-value": (str, 'Proxy', '', '',
-                          GObject.ParamFlags.READWRITE),}
-
     def __init__(self, *args, combo_items):
         GenericSetting.__init__(self, *args)
 
@@ -574,72 +734,17 @@ class ComboSetting(GenericSetting):
         pass
 
 
-class ProxyComboSetting(GenericSetting):
-
-    __gproperties__ = {
-        "setting-value": (str, 'Proxy', '', '',
-                          GObject.ParamFlags.READWRITE),}
-
-    def __init__(self, *args):
-        GenericSetting.__init__(self, *args)
-
-        self.combo = MaxWidthComboBoxText()
-        self.combo.set_valign(Gtk.Align.CENTER)
-
-        self._signal_id = None
-        self.update_values()
-
-        button = get_image_button(
-            'preferences-system-symbolic', _('Manage Proxies'))
-        button.set_action_name('app.manage-proxies')
-        button.set_valign(Gtk.Align.CENTER)
-
-        self.setting_box.pack_start(self.combo, True, True, 0)
-        self.setting_box.pack_start(button, False, True, 0)
-        self.show_all()
-
-    def _block_signal(self, state):
-        if state:
-            if self._signal_id is None:
-                return
-            self.combo.disconnect(self._signal_id)
-        else:
-            self._signal_id = self.combo.connect('changed',
-                                                 self.on_value_change)
-            self.combo.emit('changed')
-
-    def update_values(self):
-        self._block_signal(True)
-        proxies = app.config.get_per('proxies')
-        proxies.insert(0, _('No Proxy'))
-        self.combo.remove_all()
-        for index, value in enumerate(proxies):
-            self.combo.insert_text(-1, value)
-            if value == self.setting_value or index == 0:
-                self.combo.set_active(index)
-        self._block_signal(False)
-
-    def on_value_change(self, combo):
-        if combo.get_active() == 0:
-            self.set_value('')
-        else:
-            self.set_value(combo.get_active_text())
-
-    def on_row_activated(self):
-        pass
-
-
 class PrioritySetting(DialogSetting):
     def __init__(self, *args, **kwargs):
         DialogSetting.__init__(self, *args, **kwargs)
 
     def get_setting_value(self):
-        adjust = app.config.get_per(
-            'accounts', self.account, 'adjust_priority_with_status')
+        adjust = app.settings.get_account_setting(
+            self.account, 'adjust_priority_with_status')
         if adjust:
             return _('Adjust to Status')
 
-        priority = app.config.get_per('accounts', self.account, 'priority')
+        priority = app.settings.get_account_setting(self.account, 'priority')
         return str(priority)
 
 
@@ -648,8 +753,9 @@ class CutstomHostnameSetting(DialogSetting):
         DialogSetting.__init__(self, *args, **kwargs)
 
     def get_setting_value(self):
-        custom = app.config.get_per('accounts', self.account, 'use_custom_host')
-        return _('On') if custom else _('Off')
+        custom = app.settings.get_account_setting(self.account,
+                                                  'use_custom_host')
+        return Q_('?switch:On') if custom else Q_('?switch:Off')
 
 
 class ChangePasswordSetting(DialogSetting):
@@ -660,10 +766,46 @@ class ChangePasswordSetting(DialogSetting):
         parent.destroy()
         open_window('ChangePassword', account=self.account)
 
-    def update_activatable(self, name, value):
+    def update_activatable(self):
         activatable = False
         if self.account in app.connections:
             con = app.connections[self.account]
             activatable = (con.state.is_available and
                            con.get_module('Register').supported)
         self.set_activatable(activatable)
+
+
+class CutstomAutoAwaySetting(DialogSetting):
+    def __init__(self, *args, **kwargs):
+        DialogSetting.__init__(self, *args, **kwargs)
+
+    def get_setting_value(self):
+        value = app.settings.get('autoaway')
+        return Q_('?switch:On') if value else Q_('?switch:Off')
+
+
+class CutstomAutoExtendedAwaySetting(DialogSetting):
+    def __init__(self, *args, **kwargs):
+        DialogSetting.__init__(self, *args, **kwargs)
+
+    def get_setting_value(self):
+        value = app.settings.get('autoxa')
+        return Q_('?switch:On') if value else Q_('?switch:Off')
+
+
+class CustomStunServerSetting(DialogSetting):
+    def __init__(self, *args, **kwargs):
+        DialogSetting.__init__(self, *args, **kwargs)
+
+    def get_setting_value(self):
+        value = app.settings.get('use_stun_server')
+        return Q_('?switch:On') if value else Q_('?switch:Off')
+
+
+class NotificationsSetting(DialogSetting):
+    def __init__(self, *args, **kwargs):
+        DialogSetting.__init__(self, *args, **kwargs)
+
+    def get_setting_value(self):
+        value = app.settings.get('show_notifications')
+        return Q_('?switch:On') if value else Q_('?switch:Off')

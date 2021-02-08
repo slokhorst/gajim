@@ -25,9 +25,11 @@
 
 from typing import ClassVar  # pylint: disable=unused-import
 from typing import Type  # pylint: disable=unused-import
+from typing import Optional  # pylint: disable=unused-import
 
 import os
 import time
+import logging
 
 from gi.repository import Gtk
 from gi.repository import Gio
@@ -52,38 +54,39 @@ from gajim.common.const import AvatarSize
 from gajim.common.const import KindConstant
 from gajim.common.const import Chatstate
 from gajim.common.const import PEPEventType
+from gajim.common.const import JingleState
 
 from gajim import gtkgui_helpers
 from gajim import gui_menu_builder
 from gajim import dialogs
 
-from gajim.gtk.dialogs import DialogButton
-from gajim.gtk.dialogs import NewConfirmationDialog
-from gajim.gtk.add_contact import AddNewContactWindow
-from gajim.gtk.util import get_cursor
-from gajim.gtk.util import format_mood
-from gajim.gtk.util import format_activity
-from gajim.gtk.util import format_tune
-from gajim.gtk.util import format_location
-from gajim.gtk.util import get_activity_icon_name
-from gajim.gtk.util import make_href_markup
-from gajim.gtk.const import ControlType
+from gajim.gui.gstreamer import create_gtk_widget
+from gajim.gui.dialogs import DialogButton
+from gajim.gui.dialogs import ConfirmationDialog
+from gajim.gui.add_contact import AddNewContactWindow
+from gajim.gui.util import get_cursor
+from gajim.gui.util import format_mood
+from gajim.gui.util import format_activity
+from gajim.gui.util import format_tune
+from gajim.gui.util import format_location
+from gajim.gui.util import get_activity_icon_name
+from gajim.gui.util import make_href_markup
+from gajim.gui.const import ControlType
 
 from gajim.command_system.implementation.hosts import ChatCommands
 from gajim.command_system.framework import CommandHost  # pylint: disable=unused-import
 from gajim.chat_control_base import ChatControlBase
 
+log = logging.getLogger('gajim.chat_control')
 
-class JingleState:
-    __slots__ = ('sid', 'state', 'available', 'banner_image', 'action', 'set_state', 'update')
 
-    def __init__(self, state, banner_image, set_state, update):
+class JingleObject:
+    __slots__ = ('sid', 'state', 'available', 'update')
+
+    def __init__(self, state, update):
         self.sid = None
         self.state = state
         self.available = False
-        self.banner_image = banner_image
-        self.action = None
-        self.set_state = set_state
         self.update = update
 
 
@@ -92,14 +95,6 @@ class ChatControl(ChatControlBase):
     """
     A control for standard 1-1 chat
     """
-    (
-        JINGLE_STATE_NULL,
-        JINGLE_STATE_CONNECTING,
-        JINGLE_STATE_CONNECTION_RECEIVED,
-        JINGLE_STATE_CONNECTED,
-        JINGLE_STATE_ERROR
-    ) = range(5)
-
     _type = ControlType.CHAT
     old_msg_kind = None # last kind of the printed message
 
@@ -121,7 +116,7 @@ class ChatControl(ChatControlBase):
 
         self.toggle_emoticons()
 
-        if not app.config.get('hide_chat_banner'):
+        if not app.settings.get('hide_chat_banner'):
             self.xml.banner_eventbox.set_no_show_all(False)
 
         self.xml.sendfile_button.set_action_name(
@@ -129,19 +124,25 @@ class ChatControl(ChatControlBase):
 
         # Menu for the HeaderBar
         self.control_menu = gui_menu_builder.get_singlechat_menu(
-            self.control_id, self.account, self.contact.jid)
+            self.control_id, self.account, self.contact.jid, self._type)
 
         # Settings menu
         self.xml.settings_menu.set_menu_model(self.control_menu)
 
         self.jingle = {
-            'audio': JingleState(self.JINGLE_STATE_NULL, self.xml.audio_banner_image, self.set_audio_state, self.update_audio),
-            'video': JingleState(self.JINGLE_STATE_NULL, self.xml.video_banner_image, self.set_video_state, self.update_video),
+            'audio': JingleObject(
+                JingleState.NULL,
+                self.update_audio),
+            'video': JingleObject(
+                JingleState.NULL,
+                self.update_video),
         }
+        self._video_widget_other = None
+        self._video_widget_self = None
 
         self.update_toolbar()
         self.update_all_pep_types()
-        self.show_avatar()
+        self._update_avatar()
 
         # Hook up signals
         widget = self.xml.location_eventbox
@@ -228,6 +229,7 @@ class ChatControl(ChatControlBase):
             ('mam-decrypted-message-received', ged.GUI1, self._on_mam_decrypted_message_received),
             ('decrypted-message-received', ged.GUI1, self._on_decrypted_message_received),
             ('receipt-received', ged.GUI1, self._receipt_received),
+            ('displayed-received', ged.GUI1, self._displayed_received),
             ('message-error', ged.GUI1, self._on_message_error),
             ('zeroconf-error', ged.GUI1, self._on_zeroconf_error),
         ])
@@ -253,37 +255,31 @@ class ChatControl(ChatControlBase):
             ('add-to-roster-', self._on_add_to_roster),
             ('block-contact-', self._on_block_contact),
             ('information-', self._on_information),
+            ('start-call-', self._on_start_call),
         ]
 
         for action in actions:
             action_name, func = action
             act = Gio.SimpleAction.new(action_name + self.control_id, None)
-            act.connect("activate", func)
+            act.connect('activate', func)
             self.parent_win.window.add_action(act)
 
-        audio = self.jingle['audio']
-        audio.action = Gio.SimpleAction.new_stateful(
-            'toggle-audio-' + self.control_id, None,
-            GLib.Variant.new_boolean(False))
-        audio.action.connect('change-state', self._on_audio)
-        self.parent_win.window.add_action(audio.action)
-
-        video = self.jingle['video']
-        video.action = Gio.SimpleAction.new_stateful(
-            'toggle-video-' + self.control_id,
-            None, GLib.Variant.new_boolean(False))
-        video.action.connect('change-state', self._on_video)
-        self.parent_win.window.add_action(video.action)
-
-        default_chatstate = app.config.get('send_chatstate_default')
-        chatstate = app.config.get_per(
-            'contacts', self.contact.jid, 'send_chatstate', default_chatstate)
+        chatstate = self.contact.settings.get('send_chatstate')
 
         act = Gio.SimpleAction.new_stateful(
             'send-chatstate-' + self.control_id,
             GLib.VariantType.new("s"),
             GLib.Variant("s", chatstate))
         act.connect('change-state', self._on_send_chatstate)
+        self.parent_win.window.add_action(act)
+
+        marker = self.contact.settings.get('send_marker')
+
+        act = Gio.SimpleAction.new_stateful(
+            f'send-marker-{self.control_id}',
+            None,
+            GLib.Variant.new_boolean(marker))
+        act.connect('change-state', self._on_send_marker)
         self.parent_win.window.add_action(act)
 
     def update_actions(self):
@@ -306,13 +302,28 @@ class ChatControl(ChatControlBase):
             'block-contact-' + self.control_id).set_enabled(
                 online and con.get_module('Blocking').supported)
 
-        # Audio
-        win.lookup_action('toggle-audio-' + self.control_id).set_enabled(
-            online and self.jingle['audio'].available)
+        # Jingle AV detection
+        if (self.contact.supports(Namespace.JINGLE_ICE_UDP) and
+                app.is_installed('FARSTREAM') and self.contact.resource):
+            self.jingle['audio'].available = self.contact.supports(
+                Namespace.JINGLE_RTP_AUDIO)
+            self.jingle['video'].available = self.contact.supports(
+                Namespace.JINGLE_RTP_VIDEO)
+        else:
+            if (self.jingle['audio'].available or
+                    self.jingle['video'].available):
+                self.stop_jingle()
+            self.jingle['audio'].available = False
+            self.jingle['video'].available = False
 
-        # Video
-        win.lookup_action('toggle-video-' + self.control_id).set_enabled(
-            online and self.jingle['video'].available)
+        win.lookup_action(f'start-call-{self.control_id}').set_enabled(
+            online and (self.jingle['audio'].available or
+                        self.jingle['video'].available))
+
+        # Send message
+        has_text = self.msg_textview.has_text()
+        win.lookup_action(
+            f'send-message-{self.control_id}').set_enabled(online and has_text)
 
         # Send file (HTTP File Upload)
         httpupload = win.lookup_action(
@@ -338,8 +349,14 @@ class ChatControl(ChatControlBase):
             tooltip_text = _('No File Transfer available')
         self.xml.sendfile_button.set_tooltip_text(tooltip_text)
 
+        # Chat markers
+        state = GLib.Variant.new_boolean(
+            self.contact.settings.get('send_marker'))
+        win.lookup_action(
+            f'send-marker-{self.control_id}').change_state(state)
+
         # Convert to GC
-        if app.config.get_per('accounts', self.account, 'is_zeroconf'):
+        if app.settings.get_account_setting(self.account, 'is_zeroconf'):
             win.lookup_action(
                 'invite-contacts-' + self.control_id).set_enabled(False)
         else:
@@ -353,6 +370,20 @@ class ChatControl(ChatControlBase):
         # Information
         win.lookup_action(
             'information-' + self.control_id).set_enabled(online)
+
+    def remove_actions(self):
+        super().remove_actions()
+        actions = [
+            'invite-contacts-',
+            'add-to-roster-',
+            'block-contact-',
+            'information-',
+            'start-call-',
+            'send-chatstate-',
+            'send-marker-',
+        ]
+        for action in actions:
+            self.parent_win.window.remove_action(f'{action}{self.control_id}')
 
     def focus(self):
         self.msg_textview.grab_focus()
@@ -394,7 +425,7 @@ class ChatControl(ChatControlBase):
                 return
             app.interface.roster.draw_contact(self.contact.jid, self.account)
 
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('Block Contact'),
             _('Really block this contact?'),
             _('You will appear offline for this contact and you will '
@@ -418,20 +449,13 @@ class ChatControl(ChatControlBase):
         """
         dialogs.TransformChatToMUC(self.account, [self.contact.jid])
 
-    def _on_audio(self, action, param):
-        action.set_state(param)
-        state = param.get_boolean()
-        self.on_jingle_button_toggled(state, 'audio')
-
-    def _on_video(self, action, param):
-        action.set_state(param)
-        state = param.get_boolean()
-        self.on_jingle_button_toggled(state, 'video')
-
     def _on_send_chatstate(self, action, param):
         action.set_state(param)
-        app.config.set_per('contacts', self.contact.jid,
-                           'send_chatstate', param.get_string())
+        self.contact.settings.set('send_chatstate', param.get_string())
+
+    def _on_send_marker(self, action, param):
+        action.set_state(param)
+        self.contact.settings.set('send_marker', param.get_boolean())
 
     def subscribe_events(self):
         """
@@ -458,21 +482,6 @@ class ChatControl(ChatControlBase):
             self.xml.formattings_button.set_sensitive(False)
             self.xml.formattings_button.set_tooltip_text(
                 _('This contact does not support HTML'))
-
-        # Jingle detection
-        jingle_audio = self.jingle['audio']
-        jingle_video = self.jingle['video']
-        if self.contact.supports(Namespace.JINGLE_ICE_UDP) and \
-        app.is_installed('FARSTREAM') and self.contact.resource:
-            jingle_audio.available = self.contact.supports(
-                Namespace.JINGLE_RTP_AUDIO)
-            jingle_video.available = self.contact.supports(
-                Namespace.JINGLE_RTP_VIDEO)
-        else:
-            if jingle_video.available or jingle_audio.available:
-                self.stop_jingle()
-            jingle_video.available = False
-            jingle_audio.available = False
 
     def update_all_pep_types(self):
         self._update_pep(PEPEventType.LOCATION)
@@ -581,7 +590,7 @@ class ChatControl(ChatControlBase):
             if not event.properties.jid == self.contact.get_full_jid():
                 return
         else:
-            if not event.properties.jid.bareMatch(self.contact.jid):
+            if not event.properties.jid.bare_match(self.contact.jid):
                 return
 
         kind = '' # incoming
@@ -621,7 +630,7 @@ class ChatControl(ChatControlBase):
             end = self.conv_textview.autoscroll
             if not pw or (pw.get_active_control() and self \
             == pw.get_active_control() and pw.is_active() and end):
-                app.logger.set_read_messages([event.msg_log_id])
+                app.storage.archive.set_read_messages([event.msg_log_id])
 
     @event_filter(['account', 'jid'])
     def _on_message_error(self, event):
@@ -636,7 +645,7 @@ class ChatControl(ChatControlBase):
         message_id = event.message_id
 
         if event.label:
-            displaymarking = event.label.getTag('displaymarking')
+            displaymarking = event.label.displaymarking
         else:
             displaymarking = None
         if self.correcting:
@@ -657,13 +666,18 @@ class ChatControl(ChatControlBase):
         self.conv_textview.show_receipt(event.receipt_id)
 
     @event_filter(['account', 'jid'])
+    def _displayed_received(self, event):
+        self.conv_textview.show_displayed(event.marker_id)
+
+    @event_filter(['account', 'jid'])
     def _on_zeroconf_error(self, event):
         self.add_status_message(event.message)
 
     @event_filter(['account', 'jid'])
     def _on_update_roster_avatar(self, obj):
-        self.show_avatar()
+        self._update_avatar()
 
+    @event_filter(['account'])
     def _nec_ping(self, event):
         if self.contact != event.contact:
             return
@@ -673,50 +687,7 @@ class ChatControl(ChatControlBase):
             self.add_info_message(
                 _('Pong! (%s seconds)') % event.seconds)
         elif event.name == 'ping-error':
-            self.add_info_message(_('Error.'))
-
-    def _update_jingle(self, jingle_type: str) -> None:
-        jingle = self.jingle[jingle_type]
-        banner_image = jingle.banner_image
-        state = jingle.state
-        if state == self.JINGLE_STATE_NULL:
-            banner_image.hide()
-        else:
-            banner_image.show()
-        if state == self.JINGLE_STATE_CONNECTING:
-            banner_image.set_from_icon_name('network-transmit-symbolic',
-                                            Gtk.IconSize.MENU)
-        elif state == self.JINGLE_STATE_CONNECTION_RECEIVED:
-            banner_image.set_from_icon_name('network-receive-symbolic',
-                                            Gtk.IconSize.MENU)
-        elif state == self.JINGLE_STATE_CONNECTED:
-            banner_image.set_from_icon_name('network-transmit-receive-symbolic',
-                                            Gtk.IconSize.MENU)
-        elif state == self.JINGLE_STATE_ERROR:
-            banner_image.set_from_icon_name('network-error-symbolic',
-                                            Gtk.IconSize.MENU)
-        self.update_toolbar()
-
-    def update_audio(self):
-        self._update_jingle('audio')
-        hbox = self.xml.audio_buttons_hbox
-        if self.jingle['audio'].state == self.JINGLE_STATE_CONNECTED:
-            # Set volume from config
-            input_vol = app.config.get('audio_input_volume')
-            output_vol = app.config.get('audio_output_volume')
-            input_vol = max(min(input_vol, 100), 0)
-            output_vol = max(min(output_vol, 100), 0)
-            self.xml.mic_hscale.set_value(input_vol)
-            self.xml.sound_hscale.set_value(output_vol)
-            # Show vbox
-            hbox.set_no_show_all(False)
-            hbox.show_all()
-        elif not self.jingle['audio'].sid:
-            hbox.set_no_show_all(True)
-            hbox.hide()
-
-    def update_video(self):
-        self._update_jingle('video')
+            self.add_info_message(event.error)
 
     def change_resource(self, resource):
         old_full_jid = self.get_full_jid()
@@ -731,6 +702,205 @@ class ChatControl(ChatControlBase):
         # update MessageWindow._controls
         self.parent_win.change_jid(self.account, old_full_jid, new_full_jid)
 
+    # Jingle AV
+    def _on_start_call(self, *args):
+        audio_state = self.jingle['audio'].state
+        video_state = self.jingle['video'].state
+        if audio_state == JingleState.NULL and video_state == JingleState.NULL:
+            self.xml.av_box.set_no_show_all(False)
+            self.xml.av_box.show_all()
+            self.xml.jingle_audio_state.hide()
+            self.xml.av_start_box.show()
+            self.xml.av_start_mic_cam_button.set_sensitive(
+                self.jingle['video'].available)
+            self.xml.av_cam_button.set_sensitive(False)
+
+    def _on_call_with_mic(self, _button):
+        self._on_jingle_button_toggled(['audio'])
+        self.xml.av_start_box.hide()
+
+    def _on_call_with_mic_and_cam(self, _button):
+        self._on_jingle_button_toggled(['audio', 'video'])
+        self.xml.av_start_box.hide()
+
+    def _on_video(self, *args):
+        self._on_jingle_button_toggled(['video'])
+
+    def update_audio(self):
+        self.update_actions()
+
+        audio_state = self.jingle['audio'].state
+        video_state = self.jingle['video'].state
+        if self.jingle['video'].available:
+            self.xml.av_cam_button.set_sensitive(
+                video_state not in (
+                    JingleState.CONNECTING,
+                    JingleState.CONNECTED))
+
+        if audio_state == JingleState.NULL:
+            self.xml.audio_buttons_box.set_sensitive(False)
+            self.xml.jingle_audio_state.set_no_show_all(True)
+            self.xml.jingle_audio_state.hide()
+            self.xml.jingle_connection_state.set_text('')
+            self.xml.jingle_connection_spinner.stop()
+            self.xml.jingle_connection_spinner.hide()
+
+            if video_state == JingleState.NULL:
+                self.xml.av_box.set_no_show_all(True)
+                self.xml.av_box.hide()
+        else:
+            self.xml.jingle_connection_spinner.show()
+            self.xml.jingle_connection_spinner.start()
+
+        if audio_state == JingleState.CONNECTING:
+            self.xml.av_box.set_no_show_all(False)
+            self.xml.av_box.show_all()
+            self.xml.jingle_connection_state.set_text(
+                _('Calling…'))
+            self.xml.av_cam_button.set_sensitive(False)
+
+        elif audio_state == JingleState.CONNECTION_RECEIVED:
+            self.xml.jingle_connection_state.set_text(
+                _('Incoming Call'))
+
+        elif audio_state == JingleState.CONNECTED:
+            self.xml.jingle_audio_state.set_no_show_all(False)
+            self.xml.jingle_audio_state.show()
+            self.xml.jingle_connection_state.set_text('')
+            self.xml.jingle_connection_spinner.stop()
+            self.xml.jingle_connection_spinner.hide()
+            if self.jingle['video'].available:
+                self.xml.av_cam_button.set_sensitive(True)
+
+            input_vol = app.settings.get('audio_input_volume')
+            output_vol = app.settings.get('audio_output_volume')
+            self.xml.mic_hscale.set_value(max(min(input_vol, 100), 0))
+            self.xml.sound_hscale.set_value(max(min(output_vol, 100), 0))
+            self.xml.audio_buttons_box.set_sensitive(True)
+
+        elif audio_state == JingleState.ERROR:
+            self.xml.jingle_audio_state.hide()
+            self.xml.jingle_connection_state.set_text(
+                _('Connection Error'))
+            self.xml.jingle_connection_spinner.stop()
+            self.xml.jingle_connection_spinner.hide()
+
+        if not self.jingle['audio'].sid:
+            self.xml.audio_buttons_box.set_sensitive(False)
+
+    def update_video(self):
+        self.update_actions()
+
+        audio_state = self.jingle['audio'].state
+        video_state = self.jingle['video'].state
+
+        if video_state == JingleState.NULL:
+            self.xml.video_box.set_no_show_all(True)
+            self.xml.video_box.hide()
+            self.xml.outgoing_viewport.set_no_show_all(True)
+            self.xml.outgoing_viewport.hide()
+            if self._video_widget_other:
+                self._video_widget_other.destroy()
+            if self._video_widget_self:
+                self._video_widget_self.destroy()
+
+            if audio_state != JingleState.CONNECTED:
+                self.xml.jingle_connection_state.set_text('')
+            self.xml.jingle_connection_spinner.stop()
+            self.xml.jingle_connection_spinner.hide()
+            self.xml.av_cam_button.set_sensitive(True)
+            self.xml.av_cam_button.set_tooltip_text(_('Turn Camera on'))
+            self.xml.av_cam_image.set_from_icon_name(
+                'feather-camera-symbolic', Gtk.IconSize.BUTTON)
+            if audio_state == JingleState.NULL:
+                self.xml.av_box.set_no_show_all(True)
+                self.xml.av_box.hide()
+        else:
+            self.xml.jingle_connection_spinner.show()
+            self.xml.jingle_connection_spinner.start()
+
+        if video_state == JingleState.CONNECTING:
+            self.xml.jingle_connection_state.set_text(_('Calling (Video)…'))
+            self.xml.av_box.set_no_show_all(False)
+            self.xml.av_box.show_all()
+            self.xml.av_cam_button.set_sensitive(False)
+            self.xml.av_cam_button.set_tooltip_text(_('Turn Camera off'))
+            self.xml.av_cam_image.set_from_icon_name(
+                'feather-camera-off-symbolic', Gtk.IconSize.BUTTON)
+
+        elif video_state == JingleState.CONNECTION_RECEIVED:
+            self.xml.jingle_connection_state.set_text(
+                _('Incoming Call (Video)'))
+            self.xml.av_cam_button.set_sensitive(False)
+            self.xml.av_cam_button.set_tooltip_text(_('Turn Camera off'))
+            self.xml.av_cam_image.set_from_icon_name(
+                'feather-camera-off-symbolic', Gtk.IconSize.BUTTON)
+
+        elif video_state == JingleState.CONNECTED:
+            self.xml.video_box.set_no_show_all(False)
+            self.xml.video_box.show_all()
+            if app.settings.get('video_see_self'):
+                self.xml.outgoing_viewport.set_no_show_all(False)
+                self.xml.outgoing_viewport.show()
+            else:
+                self.xml.outgoing_viewport.set_no_show_all(True)
+                self.xml.outgoing_viewport.hide()
+
+            sink_other, self._video_widget_other, _name = create_gtk_widget()
+            sink_self, self._video_widget_self, _name = create_gtk_widget()
+            self.xml.incoming_viewport.add(self._video_widget_other)
+            self.xml.outgoing_viewport.add(self._video_widget_self)
+
+            con = app.connections[self.account]
+            session = con.get_module('Jingle').get_jingle_session(
+                self.contact.get_full_jid(), self.jingle['video'].sid)
+            content = session.get_content('video')
+            content.do_setup(sink_self, sink_other)
+
+            self.xml.jingle_connection_state.set_text('')
+            self.xml.jingle_connection_spinner.stop()
+            self.xml.jingle_connection_spinner.hide()
+
+            self.xml.av_cam_button.set_sensitive(True)
+            self.xml.av_cam_button.set_tooltip_text(_('Turn Camera off'))
+            self.xml.av_cam_image.set_from_icon_name(
+                'feather-camera-off-symbolic', Gtk.IconSize.BUTTON)
+
+        elif video_state == JingleState.ERROR:
+            self.xml.jingle_connection_state.set_text(
+                _('Connection Error'))
+            self.xml.jingle_connection_spinner.stop()
+            self.xml.jingle_connection_spinner.hide()
+
+    def set_jingle_state(self, jingle_type: str, state: str, sid: str = None,
+                         reason: str = None) -> None:
+        jingle = self.jingle[jingle_type]
+        if state in (
+                JingleState.CONNECTING,
+                JingleState.CONNECTED,
+                JingleState.NULL,
+                JingleState.ERROR) and reason:
+            log.info('%s state: %s, reason: %s', jingle_type, state, reason)
+
+        if state in (jingle.state, JingleState.ERROR):
+            return
+
+        if (state == JingleState.NULL and jingle.sid not in (None, sid)):
+            return
+
+        new_sid = None
+        if state == JingleState.NULL:
+            new_sid = None
+        if state in (
+                JingleState.CONNECTION_RECEIVED,
+                JingleState.CONNECTING,
+                JingleState.CONNECTED):
+            new_sid = sid
+
+        jingle.state = state
+        jingle.sid = new_sid
+        jingle.update()
+
     def stop_jingle(self, sid=None, reason=None):
         audio_sid = self.jingle['audio'].sid
         video_sid = self.jingle['video'].sid
@@ -739,48 +909,59 @@ class ChatControl(ChatControlBase):
         if video_sid and sid in (video_sid, None):
             self.close_jingle_content('video')
 
-    def _set_jingle_state(self, jingle_type: str, state: str, sid: str = None,
-                          reason: str = None) -> None:
+    def close_jingle_content(self, jingle_type: str,
+                             shutdown: Optional[bool] = False) -> None:
         jingle = self.jingle[jingle_type]
-        if state in ('connecting', 'connected', 'stop', 'error') and reason:
-            info = _('%(type)s state : %(state)s, reason: %(reason)s') % {
-                'type': jingle_type.capitalize(),
-                'state': state,
-                'reason': reason}
-            self.add_info_message(info)
-
-        states = {'connecting': self.JINGLE_STATE_CONNECTING,
-                  'connection_received': self.JINGLE_STATE_CONNECTION_RECEIVED,
-                  'connected': self.JINGLE_STATE_CONNECTED,
-                  'stop': self.JINGLE_STATE_NULL,
-                  'error': self.JINGLE_STATE_ERROR}
-
-        jingle_state = states[state]
-        if jingle.state == jingle_state or state == 'error':
+        if not jingle.sid:
             return
 
-        if (state == 'stop' and jingle.sid not in (None, sid)):
+        con = app.connections[self.account]
+        session = con.get_module('Jingle').get_jingle_session(
+            self.contact.get_full_jid(), jingle.sid)
+        if session:
+            content = session.get_content(jingle_type)
+            if content:
+                session.remove_content(content.creator, content.name)
+
+        if not shutdown:
+            jingle.sid = None
+            jingle.state = JingleState.NULL
+            jingle.update()
+
+    def _on_end_call_clicked(self, _widget):
+        self.close_jingle_content('audio')
+        self.close_jingle_content('video')
+        self.xml.jingle_audio_state.set_no_show_all(True)
+        self.xml.jingle_audio_state.hide()
+        self.xml.av_box.set_no_show_all(True)
+        self.xml.av_box.hide()
+
+    def _on_jingle_button_toggled(self, jingle_types):
+        con = app.connections[self.account]
+
+        if all(item in jingle_types for item in ['audio', 'video']):
+            # Both 'audio' and 'video' in jingle_types
+            sid = con.get_module('Jingle').start_audio_video(
+                self.contact.get_full_jid())
+            self.set_jingle_state('audio', JingleState.CONNECTING, sid)
+            self.set_jingle_state('video', JingleState.CONNECTING, sid)
             return
 
-        new_sid = None
-        if jingle_state == self.JINGLE_STATE_NULL:
-            new_sid = None
-        if state in ('connection_received', 'connecting', 'connected'):
-            new_sid = sid
+        if 'audio' in jingle_types:
+            if self.jingle['audio'].state != JingleState.NULL:
+                self.close_jingle_content('audio')
+            else:
+                sid = con.get_module('Jingle').start_audio(
+                    self.contact.get_full_jid())
+                self.set_jingle_state('audio', JingleState.CONNECTING, sid)
 
-        jingle.state = jingle_state
-        jingle.sid = new_sid
-
-        var = GLib.Variant.new_boolean(jingle_state != self.JINGLE_STATE_NULL)
-        jingle.action.change_state(var)
-
-        jingle.update()
-
-    def set_audio_state(self, state, sid=None, reason=None):
-        self._set_jingle_state('audio', state, sid=sid, reason=reason)
-
-    def set_video_state(self, state, sid=None, reason=None):
-        self._set_jingle_state('video', state, sid=sid, reason=reason)
+        if 'video' in jingle_types:
+            if self.jingle['video'].state != JingleState.NULL:
+                self.close_jingle_content('video')
+            else:
+                sid = con.get_module('Jingle').start_video(
+                    self.contact.get_full_jid())
+                self.set_jingle_state('video', JingleState.CONNECTING, sid)
 
     def _get_audio_content(self):
         con = app.connections[self.account]
@@ -789,20 +970,18 @@ class ChatControl(ChatControlBase):
         return session.get_content('audio')
 
     def on_num_button_pressed(self, _widget, num):
-        self._get_audio_content()._start_dtmf(num)
+        self._get_audio_content().start_dtmf(num)
 
     def on_num_button_released(self, _released):
-        self._get_audio_content()._stop_dtmf()
+        self._get_audio_content().stop_dtmf()
 
     def on_mic_hscale_value_changed(self, _widget, value):
         self._get_audio_content().set_mic_volume(value / 100)
-        # Save volume to config
-        app.config.set('audio_input_volume', value)
+        app.settings.set('audio_input_volume', int(value))
 
     def on_sound_hscale_value_changed(self, _widget, value):
         self._get_audio_content().set_out_volume(value / 100)
-        # Save volume to config
-        app.config.set('audio_output_volume', value)
+        app.settings.set('audio_output_volume', int(value))
 
     def on_location_eventbox_button_release_event(self, _widget, _event):
         if 'geoloc' in self.contact.pep:
@@ -827,7 +1006,8 @@ class ChatControl(ChatControlBase):
         # The name banner is drawn here
         ChatControlBase.update_ui(self)
         self.update_toolbar()
-        self.show_avatar()
+        self._update_avatar()
+        self.update_actions()
 
     def draw_banner_text(self):
         """
@@ -857,7 +1037,7 @@ class ChatControl(ChatControlBase):
             cs = app.contacts.get_combined_chatstate(
                 self.account, self.contact.jid)
 
-        if app.config.get('show_chatstate_in_banner'):
+        if app.settings.get('show_chatstate_in_banner'):
             chatstate = helpers.get_uf_chatstate(cs)
 
             label_text = '<span>%s</span><span size="x-small" weight="light"> %s</span>' % \
@@ -882,56 +1062,6 @@ class ChatControl(ChatControlBase):
         # setup the label that holds name and jid
         self.xml.banner_name_label.set_markup(label_text)
         self.xml.banner_name_label.set_tooltip_text(label_tooltip)
-
-    def close_jingle_content(self, jingle_type: str) -> None:
-        jingle = self.jingle[jingle_type]
-        if not jingle.sid:
-            return
-
-        con = app.connections[self.account]
-        session = con.get_module('Jingle').get_jingle_session(
-            self.contact.get_full_jid(), jingle.sid)
-        if session:
-            content = session.get_content(jingle_type)
-            if content:
-                session.remove_content(content.creator, content.name)
-
-        jingle.sid = None
-        jingle.state = self.JINGLE_STATE_NULL
-
-        var = GLib.Variant.new_boolean(False)
-
-        jingle.action.change_state(var)
-        jingle.update()
-
-    def on_jingle_button_toggled(self, state, jingle_type):
-        con = app.connections[self.account]
-        if state:
-            if self.jingle[jingle_type].state == self.JINGLE_STATE_NULL:
-                con = app.connections[self.account]
-                if jingle_type == 'video':
-                    video_hbox = self.xml.video_hbox
-                    video_hbox.set_no_show_all(False)
-                    if app.config.get('video_see_self'):
-                        fixed = self.xml.outgoing_fixed
-                        fixed.set_no_show_all(False)
-                        video_hbox.show_all()
-                    video_hbox.show_all()
-                    sid = con.get_module('Jingle').start_video(
-                        self.contact.get_full_jid())
-
-                else:
-                    sid = con.get_module('Jingle').start_audio(
-                        self.contact.get_full_jid())
-
-                self.jingle[jingle_type].set_state('connecting', sid)
-        else:
-            video_hbox = self.xml.video_hbox
-            video_hbox.set_no_show_all(True)
-            video_hbox.hide()
-            fixed = self.xml.outgoing_fixed
-            fixed.set_no_show_all(True)
-            self.close_jingle_content(jingle_type)
 
     def send_message(self,
                      message,
@@ -1079,12 +1209,15 @@ class ChatControl(ChatControlBase):
 
         self.unsubscribe_events()
 
+        self.remove_actions()
+
         # Send 'gone' chatstate
         con = app.connections[self.account]
         con.get_module('Chatstate').set_chatstate(self.contact, Chatstate.GONE)
 
         for jingle_type in ('audio', 'video'):
-            self.close_jingle_content(jingle_type)
+            self.close_jingle_content(jingle_type, shutdown=True)
+        self.jingle.clear()
 
         # disconnect self from session
         if self.session:
@@ -1107,16 +1240,7 @@ class ChatControl(ChatControlBase):
                                   self.account,
                                   force=True,
                                   backend=backend)
-        # remove all register handlers on widgets, created by self.xml
-        # to prevent circular references among objects
-        for i in list(self.handlers.keys()):
-            if self.handlers[i].handler_is_connected(i):
-                self.handlers[i].disconnect(i)
-            del self.handlers[i]
-        self.conv_textview.del_handlers()
-        self.msg_textview.destroy()
-        # PluginSystem: calling shutdown of super class (ChatControlBase) to let
-        # it remove it's GUI extension points
+
         super(ChatControl, self).shutdown()
 
     def minimizable(self):
@@ -1129,8 +1253,8 @@ class ChatControl(ChatControlBase):
         time_ = app.last_message_time[self.account][self.get_full_jid()]
         # 2 seconds
         if time.time() - time_ < 2:
-            no_log_for = app.config.get_per(
-                'accounts', self.account, 'no_log_for').split()
+            no_log_for = app.settings.get_account_setting(
+                self.account, 'no_log_for').split()
             more = ''
             if self.contact.jid in no_log_for:
                 more = _('Note: Chat history is disabled for this contact.')
@@ -1141,7 +1265,7 @@ class ChatControl(ChatControlBase):
             if more:
                 text += '\n' + more
 
-            NewConfirmationDialog(
+            ConfirmationDialog(
                 _('Close'),
                 _('New Message'),
                 text,
@@ -1154,10 +1278,7 @@ class ChatControl(ChatControlBase):
             return
         on_yes(self)
 
-    def show_avatar(self):
-        if not app.config.get('show_avatar_in_chat'):
-            return
-
+    def _update_avatar(self):
         scale = self.parent_win.window.get_scale_factor()
         surface = app.contacts.get_avatar(self.account,
                                           self.contact.jid,
@@ -1180,7 +1301,10 @@ class ChatControl(ChatControlBase):
             treeview = app.interface.roster.tree
             model = treeview.get_model()
             data = selection.get_data().decode()
-            path = treeview.get_selection().get_selected_rows()[1][0]
+            tree_selection = treeview.get_selection()
+            if tree_selection.count_selected_rows() == 0:
+                return
+            path = tree_selection.get_selected_rows()[1][0]
             iter_ = model.get_iter(path)
             type_ = model[iter_][2]
             if type_ != 'contact':  # Source is not a contact
@@ -1210,7 +1334,7 @@ class ChatControl(ChatControlBase):
                                                  self.contact.get_full_jid(),
                                                  ['chat', 'pm']))
 
-        rows = app.logger.get_last_conversation_lines(
+        rows = app.storage.archive.get_last_conversation_lines(
             self.account, jid, pending)
 
         local_old_kind = None
@@ -1288,7 +1412,15 @@ class ChatControl(ChatControlBase):
             if event.session and not self.session:
                 self.set_session(event.session)
         if message_ids:
-            app.logger.set_read_messages(message_ids)
+            app.storage.archive.set_read_messages(message_ids)
+
+        # XEP-0333 Send <displayed> marker
+        con = app.connections[self.account]
+        con.get_module('ChatMarkers').send_displayed_marker(
+            self.contact,
+            self.last_msg_id,
+            self._type)
+        self.last_msg_id = None
         app.events.remove_events(self.account,
                                  jid_with_resource,
                                  types=[str(self._type)])
@@ -1307,8 +1439,8 @@ class ChatControl(ChatControlBase):
 
         self.redraw_after_event_removed(jid)
         if self.contact.show in ('offline', 'error'):
-            show_offline = app.config.get('showoffline')
-            show_transports = app.config.get('show_transports_group')
+            show_offline = app.settings.get('showoffline')
+            show_transports = app.settings.get('show_transports_group')
             if (not show_transports and app.jid_is_transport(jid)) or \
             (not show_offline and typ == 'chat' and \
             len(app.contacts.get_contacts(self.account, jid)) < 2):
@@ -1343,7 +1475,7 @@ class ChatControl(ChatControlBase):
         self.update_ui()
         self.parent_win.redraw_tab(self)
 
-        if not app.config.get('print_status_in_chats'):
+        if not app.settings.get('print_status_in_chats'):
             return
 
         if status:
@@ -1404,7 +1536,7 @@ class ChatControl(ChatControlBase):
         """
         Show an InfoBar on top of control
         """
-        if app.config.get('use_kib_mib'):
+        if app.settings.get('use_kib_mib'):
             units = GLib.FormatSizeFlags.IEC_UNITS
         else:
             units = GLib.FormatSizeFlags.DEFAULT
@@ -1415,13 +1547,15 @@ class ChatControl(ChatControlBase):
         markup += '\n%s: %s' % (
             _('Size'),
             GLib.format_size_full(file_props.size, units))
-        b1 = Gtk.Button.new_with_mnemonic(_('_Accept'))
-        b1.connect('clicked', self._on_accept_file_request, file_props)
-        b2 = Gtk.Button.new_with_mnemonic(_('_Decline'))
-        b2.connect('clicked', self._on_cancel_file_request, file_props)
+        button_decline = Gtk.Button.new_with_mnemonic(_('_Decline'))
+        button_decline.connect(
+            'clicked', self._on_cancel_file_request, file_props)
+        button_accept = Gtk.Button.new_with_mnemonic(_('_Accept'))
+        button_accept.connect(
+            'clicked', self._on_accept_file_request, file_props)
         self._add_info_bar_message(
             markup,
-            [b1, b2],
+            [button_decline, button_accept],
             file_props,
             Gtk.MessageType.QUESTION)
 
@@ -1475,14 +1609,71 @@ class ChatControl(ChatControlBase):
         markup = '<b>%s</b>\n%s' % (_('Group Chat Invitation'), event.muc)
         if event.reason:
             markup += '\n(%s)' % event.reason
-        b1 = Gtk.Button.new_with_mnemonic(_('_Accept'))
-        b1.connect('clicked', self._on_accept_gc_invitation, event)
-        b2 = Gtk.Button.new_with_mnemonic(_('_Decline'))
-        b2.connect('clicked', self._on_cancel_gc_invitation, event)
+        button_decline = Gtk.Button.new_with_mnemonic(_('_Decline'))
+        button_decline.connect('clicked', self._on_cancel_gc_invitation, event)
+        button_accept = Gtk.Button.new_with_mnemonic(_('_Accept'))
+        button_accept.connect('clicked', self._on_accept_gc_invitation, event)
         self._add_info_bar_message(
             markup,
-            [b1, b2],
+            [button_decline, button_accept],
             (event.muc, event.reason),
+            Gtk.MessageType.QUESTION)
+
+    def _on_reject_call(self, _button, event):
+        app.events.remove_events(
+            self.account, self.contact.jid, types='jingle-incoming')
+
+        con = app.connections[self.account]
+        session = con.get_module('Jingle').get_jingle_session(
+            event.peerjid, event.sid)
+        if not session:
+            return
+
+        if not session.accepted:
+            session.decline_session()
+        else:
+            for content in event.content_types:
+                session.reject_content(content)
+
+    def _on_accept_call(self, _button, event):
+        app.events.remove_events(
+            self.account, self.contact.jid, types='jingle-incoming')
+
+        con = app.connections[self.account]
+        session = con.get_module('Jingle').get_jingle_session(
+            event.peerjid, event.sid)
+        if not session:
+            return
+
+        audio = session.get_content('audio')
+        video = session.get_content('video')
+
+        if audio and not audio.negotiated:
+            self.set_jingle_state('audio', JingleState.CONNECTING, event.sid)
+        if video and not video.negotiated:
+            self.set_jingle_state('video', JingleState.CONNECTING, event.sid)
+
+        if not session.accepted:
+            session.approve_session()
+
+        for content in event.content_types:
+            session.approve_content(content)
+
+    def add_call_received_message(self, event):
+        markup = '<b>%s</b>' % (_('Incoming Call'))
+        if 'video' in event.content_types:
+            markup += _('\nVideo Call')
+        else:
+            markup += _('\nVoice Call')
+
+        button_reject = Gtk.Button.new_with_mnemonic(_('_Reject'))
+        button_reject.connect('clicked', self._on_reject_call, event)
+        button_accept = Gtk.Button.new_with_mnemonic(_('_Accept'))
+        button_accept.connect('clicked', self._on_accept_call, event)
+        self._add_info_bar_message(
+            markup,
+            [button_reject, button_accept],
+            event,
             Gtk.MessageType.QUESTION)
 
     def on_event_added(self, event):
@@ -1526,7 +1717,8 @@ class ChatControl(ChatControlBase):
                                 'file-stopped',
                                 'file-request-error',
                                 'file-send-error',
-                                'gc-invitation'):
+                                'gc-invitation',
+                                'jingle-incoming'):
                 continue
             i = 0
             removed = False
@@ -1535,6 +1727,10 @@ class ChatControl(ChatControlBase):
                     if ev.muc == ib_msg[2][0]:
                         self.info_bar_queue.remove(ib_msg)
                         removed = True
+                elif ev.type_ == 'jingle-incoming':
+                    # TODO: Need to be more specific here?
+                    self.info_bar_queue.remove(ib_msg)
+                    removed = True
                 else: # file-*
                     if ib_msg[2] == ev.file_props:
                         self.info_bar_queue.remove(ib_msg)

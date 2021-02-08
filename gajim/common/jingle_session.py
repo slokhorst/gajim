@@ -287,7 +287,7 @@ class JingleSession:
         """
         Return True when all codecs and candidates are ready (for all contents)
         """
-        return (any((content.is_ready() for content in self.contents.values()))
+        return (all((content.is_ready() for content in self.contents.values()))
                 and self.accepted)
 
     def accept_session(self):
@@ -569,7 +569,7 @@ class JingleSession:
 
         self.state = JingleStates.PENDING
         # Send event about starting a session
-        self._raise_event('jingle-request-received', contents=contents[0])
+        self._raise_event('jingle-request-received', contents=contents)
 
     def __broadcast(self, stanza, jingle, error, action):
         """
@@ -605,6 +605,14 @@ class JingleSession:
         else:
             # TODO
             text = reason
+        if reason == 'decline':
+            self._raise_event('jingle-disconnected-received',
+                              media=None,
+                              reason=text)
+        if reason == 'success':
+            self._raise_event('jingle-disconnected-received',
+                              media=None,
+                              reason=text)
         if reason == 'cancel' and self.session_type_ft:
             self._raise_event('jingle-ft-cancelled-received',
                               media=None,
@@ -679,7 +687,7 @@ class JingleSession:
         return (reason, text)
 
     def __make_jingle(self, action, reason=None):
-        stanza = nbxmpp.Iq(typ='set', to=nbxmpp.JID(self.peerjid),
+        stanza = nbxmpp.Iq(typ='set', to=nbxmpp.JID.from_string(self.peerjid),
                            frm=self.ourjid)
         attrs = {
             'action': action,

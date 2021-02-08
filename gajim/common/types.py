@@ -22,6 +22,7 @@ from typing import Tuple
 from typing import Union
 from typing import TYPE_CHECKING
 
+from pathlib import Path
 import nbxmpp
 
 from gajim.common.const import PathType, PathLocation
@@ -35,14 +36,13 @@ if TYPE_CHECKING:
     from gajim.common.contacts import LegacyContactsAPI
     from gajim.common.nec import NetworkEvent
     from gajim.common.nec import NetworkEventsController
-    from gajim.common.logger import Logger
 
     from gajim.gui_interface import Interface
+    from gajim.common.settings import Settings
 
 
 NetworkEventsControllerT = Union['NetworkEventsController']
 InterfaceT = Union['Interface']
-LoggerT = Union['Logger']
 
 ConnectionT = Union['Client', 'ConnectionZeroconf']
 ContactsT = Union['Contact', 'GC_Contact']
@@ -54,10 +54,12 @@ PEPNotifyCallback = Callable[[nbxmpp.JID, nbxmpp.Node], None]
 PEPHandlersDict = Dict[str, List[PEPNotifyCallback]]
 
 # Configpaths
-PathTuple = Tuple[Optional[PathLocation], str, Optional[PathType]]
+PathTuple = Tuple[Optional[PathLocation], Path, Optional[PathType]]
 
 # Plugins
 PluginExtensionPoints = Dict[str, Tuple[Optional[Callable[..., None]],
                                         Optional[Callable[..., None]]]]
 EventHandlersDict = Dict[str, Tuple[int, Callable[['NetworkEvent'], Optional[bool]]]]
 PluginEvents = List['NetworkEvent']
+
+SettingsT = Union['Settings']

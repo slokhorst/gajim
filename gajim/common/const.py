@@ -19,6 +19,7 @@ class AvatarSize(IntEnum):
     ROSTER = 32
     CHAT = 48
     NOTIFICATION = 48
+    GROUP_INFO = 100
     TOOLTIP = 125
     VCARD = 200
     PUBLISH = 200
@@ -128,13 +129,6 @@ class IdleState(Enum):
 
 
 @unique
-class RequestAvatar(IntEnum):
-    SELF = 0
-    ROOM = 1
-    USER = 2
-
-
-@unique
 class PEPEventType(IntEnum):
     ABSTRACT = 0
     ACTIVITY = 1
@@ -160,6 +154,7 @@ class Chatstate(IntEnum):
 
 
 class SyncThreshold(IntEnum):
+    NO_SYNC = -1
     NO_THRESHOLD = 0
 
     def __str__(self):
@@ -199,6 +194,7 @@ class URIType(Enum):
     WEB = 'web'
     FILE = 'file'
     AT = 'at'
+    TEL = 'tel'
 
 
 class URIAction(Enum):
@@ -274,6 +270,17 @@ class ClientState(IntEnum):
     @property
     def is_available(self):
         return self == ClientState.AVAILABLE
+
+
+class JingleState(Enum):
+    NULL = 'stop'
+    CONNECTING = 'connecting'
+    CONNECTION_RECEIVED = 'connection_received'
+    CONNECTED = 'connected'
+    ERROR = 'error'
+
+    def __str__(self):
+        return self.value
 
 
 MUC_CREATION_EXAMPLES = [
@@ -902,6 +909,7 @@ class FTState(Enum):
     IN_PROGRESS = 'progress'
     FINISHED = 'finished'
     ERROR = 'error'
+    CANCELLED = 'cancelled'
 
     @property
     def is_preparing(self):
@@ -930,6 +938,16 @@ class FTState(Enum):
     @property
     def is_error(self):
         return self == FTState.ERROR
+
+    @property
+    def is_cancelled(self):
+        return self == FTState.CANCELLED
+
+    @property
+    def is_active(self):
+        return not (self.is_error or
+                    self.is_cancelled or
+                    self.is_finished)
 
 
 SASL_ERRORS = {
@@ -964,6 +982,7 @@ COMMON_FEATURES = [
     Namespace.SECLABEL,
     Namespace.CONFERENCE,
     Namespace.CORRECT,
+    Namespace.CHATMARKERS,
     Namespace.EME,
     Namespace.XHTML_IM,
     Namespace.HASHES_2,
@@ -994,3 +1013,103 @@ SHOW_LIST = [
     'dnd',
     'error'
 ]
+
+
+URI_SCHEMES = {
+    'aaa://',
+    'aaas://',
+    'acap://',
+    'cap://',
+    'cid:',
+    'crid://',
+    'data:',
+    'dav:',
+    'dict://',
+    'dns:',
+    'fax:',
+    'file:/',
+    'ftp://',
+    'geo:',
+    'go:',
+    'gopher://',
+    'h323:',
+    'http://',
+    'https://',
+    'iax:',
+    'icap://',
+    'im:',
+    'imap://',
+    'info:',
+    'ipp://',
+    'iris:',
+    'iris.beep:',
+    'iris.xpc:',
+    'iris.xpcs:',
+    'iris.lwz:',
+    'ldap://',
+    'mid:',
+    'modem:',
+    'msrp://',
+    'msrps://',
+    'mtqp://',
+    'mupdate://',
+    'news:',
+    'nfs://',
+    'nntp://',
+    'opaquelocktoken:',
+    'pop://',
+    'pres:',
+    'prospero://',
+    'rtsp://',
+    'service:',
+    'sip:',
+    'sips:',
+    'sms:',
+    'snmp://',
+    'soap.beep://',
+    'soap.beeps://',
+    'tag:',
+    'tel:',
+    'telnet://',
+    'tftp://',
+    'thismessage:/',
+    'tip://',
+    'tv:',
+    'urn://',
+    'vemmi://',
+    'xmlrpc.beep://',
+    'xmlrpc.beeps://',
+    'z39.50r://',
+    'z39.50s://',
+    'about:',
+    'apt:',
+    'cvs://',
+    'daap://',
+    'ed2k://',
+    'feed:',
+    'fish://',
+    'git://',
+    'iax2:',
+    'irc://',
+    'ircs://',
+    'ldaps://',
+    'magnet:',
+    'mms://',
+    'rsync://',
+    'ssh://',
+    'svn://',
+    'sftp://',
+    'smb://',
+    'webcal://',
+    'aesgcm://',
+}
+
+
+THRESHOLD_OPTIONS = {
+    -1: _('No Sync'),
+    1: _('1 Day'),
+    2: _('2 Days'),
+    7: _('1 Week'),
+    30: _('1 Month'),
+    0: _('No Threshold'),
+}

@@ -20,13 +20,14 @@ from typing import List
 from typing import Tuple
 from typing import Optional
 
-import os
 import sys
+import weakref
 import logging
+import math
 import textwrap
+import functools
 from importlib import import_module
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from functools import wraps
 from functools import lru_cache
 
@@ -38,6 +39,7 @@ except Exception:
 from gi.repository import Gdk
 from gi.repository import Gtk
 from gi.repository import GLib
+from gi.repository import Gio
 from gi.repository import Pango
 from gi.repository import GdkPixbuf
 import nbxmpp
@@ -55,14 +57,14 @@ from gajim.common.const import Display
 from gajim.common.const import StyleAttr
 from gajim.common.nec import EventHelper as CommonEventHelper
 
-from gajim.gtk.const import GajimIconSet
-from gajim.gtk.const import WINDOW_MODULES
+from .const import GajimIconSet
+from .const import WINDOW_MODULES
 
 _icon_theme = Gtk.IconTheme.get_default()
 if _icon_theme is not None:
-    _icon_theme.append_search_path(configpaths.get('ICONS'))
+    _icon_theme.append_search_path(str(configpaths.get('ICONS')))
 
-log = logging.getLogger('gajim.gtk.util')
+log = logging.getLogger('gajim.gui.util')
 
 
 class NickCompletionGenerator:
@@ -164,7 +166,17 @@ class Builder:
         if gettext_ is None:
             gettext_ = _
 
-        file_path = os.path.join(configpaths.get('GUI'), filename)
+        xml_text = self._load_string_from_filename(filename, gettext_)
+
+        if widgets is not None:
+            self._builder.add_objects_from_string(xml_text, widgets)
+        else:
+            self._builder.add_from_string(xml_text)
+
+    @staticmethod
+    @functools.lru_cache(maxsize=None)
+    def _load_string_from_filename(filename, gettext_):
+        file_path = str(configpaths.get('GUI') / filename)
 
         if sys.platform == "win32":
             # This is a workaround for non working translation on Windows
@@ -173,22 +185,14 @@ class Builder:
                 if 'translatable' in node.attrib and node.text is not None:
                     node.text = gettext_(node.text)
 
-            xml_text = ET.tostring(tree.getroot(),
-                                   encoding='unicode',
-                                   method='xml')
+            return ET.tostring(tree.getroot(),
+                               encoding='unicode',
+                               method='xml')
 
-            if widgets is not None:
-                self._builder.add_objects_from_string(xml_text, widgets)
-            else:
-                # Workaround
-                # https://gitlab.gnome.org/GNOME/pygobject/issues/255
-                Gtk.Builder.__mro__[1].add_from_string(
-                    self._builder, xml_text, len(xml_text.encode("utf-8")))
-        else:
-            if widgets is not None:
-                self._builder.add_objects_from_file(file_path, widgets)
-            else:
-                self._builder.add_from_file(file_path)
+
+        file = Gio.File.new_for_path(file_path)
+        content = file.load_contents(None)
+        return content[1].decode()
 
     def __getattr__(self, name):
         try:
@@ -202,7 +206,7 @@ def get_builder(file_name: str, widgets: List[str] = None) -> Builder:
 
 
 def set_urgency_hint(window: Any, setting: bool) -> None:
-    if app.config.get('use_urgency_hint'):
+    if app.settings.get('use_urgency_hint'):
         window.set_urgency_hint(setting)
 
 
@@ -254,14 +258,14 @@ def get_icon_name(name: str,
     if transport is not None:
         return '%s-%s' % (transport, name)
 
-    iconset = app.config.get('iconset')
+    iconset = app.settings.get('iconset')
     if not iconset:
         iconset = 'dcraven'
     return '%s-%s' % (iconset, name)
 
 
 def load_user_iconsets():
-    iconsets_path = Path(configpaths.get('MY_ICONSETS'))
+    iconsets_path = configpaths.get('MY_ICONSETS')
     if not iconsets_path.exists():
         return
 
@@ -277,7 +281,7 @@ def get_available_iconsets():
     for iconset in GajimIconSet:
         iconsets.append(iconset.value)
 
-    iconsets_path = Path(configpaths.get('MY_ICONSETS'))
+    iconsets_path = configpaths.get('MY_ICONSETS')
     if not iconsets_path.exists():
         return iconsets
 
@@ -334,13 +338,13 @@ def move_window(window: Gtk.Window, pos_x: int, pos_y: int) -> None:
 
 
 def restore_roster_position(window):
-    if not app.config.get('save-roster-position'):
+    if not app.settings.get('save-roster-position'):
         return
     if app.is_display(Display.WAYLAND):
         return
     move_window(window,
-                app.config.get('roster_x-position'),
-                app.config.get('roster_y-position'))
+                app.settings.get('roster_x-position'),
+                app.settings.get('roster_y-position'))
 
 
 def get_completion_liststore(entry: Gtk.Entry) -> Gtk.ListStore:
@@ -489,8 +493,6 @@ def get_show_in_roster(event, session=None):
     if event == 'gc_message_received':
         return True
     if event == 'message_received':
-        if app.config.get('autopopup_chat_opened'):
-            return True
         if session and session.control:
             return False
     return True
@@ -506,7 +508,7 @@ def get_show_in_systray(type_, account, jid):
             return contact.can_notify()
         # it's not an highlighted message, don't show in systray
         return False
-    return app.config.get('trayicon_notification_on_events')
+    return app.settings.get('trayicon_notification_on_events')
 
 
 def get_primary_accel_mod():
@@ -545,10 +547,13 @@ def format_mood(mood, text):
     return markuptext
 
 
-def format_activity(activity, subactivity, text):
-    if activity is None:
-        return None
+def get_account_mood_icon_name(account):
+    client = app.get_client(account)
+    mood = client.get_module('UserMood').get_current_mood()
+    return f'mood-{mood.mood}' if mood is not None else mood
 
+
+def format_activity(activity, subactivity, text):
     if subactivity in ACTIVITIES[activity]:
         subactivity = ACTIVITIES[activity][subactivity]
     activity = ACTIVITIES[activity]['category']
@@ -569,9 +574,15 @@ def get_activity_icon_name(activity, subactivity=None):
     return icon_name
 
 
-def format_tune(artist, _length, _rating, source, title, _track, _uri):
-    if artist is None and title is None and source is None:
+def get_account_activity_icon_name(account):
+    client = app.get_client(account)
+    activity = client.get_module('UserActivity').get_current_activity()
+    if activity is None:
         return None
+    return get_activity_icon_name(activity.activity, activity.subactivity)
+
+
+def format_tune(artist, _length, _rating, source, title, _track, _uri):
     artist = GLib.markup_escape_text(artist or _('Unknown Artist'))
     title = GLib.markup_escape_text(title or _('Unknown Title'))
     source = GLib.markup_escape_text(source or _('Unknown Source'))
@@ -581,6 +592,12 @@ def format_tune(artist, _length, _rating, source, title, _track, _uri):
                                                  'artist': artist,
                                                  'source': source}
     return tune_string
+
+
+def get_account_tune_icon_name(account):
+    client = app.get_client(account)
+    tune = client.get_module('UserTune').get_current_tune()
+    return None if tune is None else 'audio-x-generic'
 
 
 def format_location(location):
@@ -598,6 +615,12 @@ def format_location(location):
             'tag': tag.capitalize(), 'text': text}
 
     return location_string.strip()
+
+
+def get_account_location_icon_name(account):
+    client = app.get_client(account)
+    location = client.get_module('UserLocation').get_current_location()
+    return None if location is None else 'applications-internet'
 
 
 def format_fingerprint(fingerprint):
@@ -701,8 +724,9 @@ def scale_with_ratio(size, width, height):
 def load_pixbuf(path, size=None):
     try:
         if size is None:
-            return GdkPixbuf.Pixbuf.new_from_file(path)
-        return GdkPixbuf.Pixbuf.new_from_file_at_scale(path, size, size, True)
+            return GdkPixbuf.Pixbuf.new_from_file(str(path))
+        return GdkPixbuf.Pixbuf.new_from_file_at_scale(
+            str(path), size, size, True)
 
     except GLib.GError:
         try:
@@ -725,6 +749,29 @@ def load_pixbuf(path, size=None):
                                        height,
                                        GdkPixbuf.InterpType.BILINEAR)
         return pixbuf
+
+    except RuntimeError as error:
+        log.warning('Loading pixbuf failed: %s', error)
+        return None
+
+
+def get_thumbnail_size(pixbuf, size):
+    # Calculates the new thumbnail size while preserving the aspect ratio
+    image_width = pixbuf.get_width()
+    image_height = pixbuf.get_height()
+
+    if image_width > image_height:
+        if image_width > size:
+            image_height = math.ceil(
+                (size / float(image_width) * image_height))
+            image_width = int(size)
+    else:
+        if image_height > size:
+            image_width = math.ceil(
+                (size / float(image_height) * image_width))
+            image_height = int(size)
+
+    return image_width, image_height
 
 
 def make_href_markup(string):
@@ -786,3 +833,13 @@ class EventHelper(CommonEventHelper):
 
     def __on_destroy(self, *args):
         self.unregister_events()
+
+
+def check_destroy(widget):
+    def _destroy(*args):
+        print('DESTROYED', args)
+    widget.connect('destroy', _destroy)
+
+
+def check_finalize(obj, name):
+    weakref.finalize(obj, print, f'{name} has been finalized')

@@ -42,16 +42,16 @@ from gajim.common.i18n import Q_
 from gajim.common.i18n import _
 from gajim.gtkgui_helpers import add_css_class
 
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import get_icon_name
-from gajim.gtk.util import format_mood
-from gajim.gtk.util import format_activity
-from gajim.gtk.util import format_tune
-from gajim.gtk.util import format_location
-from gajim.gtk.util import get_css_show_class
+from .util import get_builder
+from .util import get_icon_name
+from .util import format_mood
+from .util import format_activity
+from .util import format_tune
+from .util import format_location
+from .util import get_css_show_class
 
 
-log = logging.getLogger('gajim.gtk.tooltips')
+log = logging.getLogger('gajim.gui.tooltips')
 
 
 class StatusTable:
@@ -301,7 +301,7 @@ class RosterTooltip(StatusTable):
                 name=account_name,
                 show=get_connection_status(account),
                 status=connection.status_message,
-                resource=connection.get_own_jid().getResource(),
+                resource=connection.get_own_jid().resource,
                 priority=connection.priority)
 
             contacts.append(contact)
@@ -317,7 +317,7 @@ class RosterTooltip(StatusTable):
         self.contact_jid = self.prim_contact.jid
         name = GLib.markup_escape_text(self.prim_contact.get_shown_name())
 
-        if app.config.get('mergeaccounts'):
+        if app.settings.get('mergeaccounts'):
             name = GLib.markup_escape_text(
                 self.prim_contact.account.name)
 
@@ -357,7 +357,7 @@ class RosterTooltip(StatusTable):
 
         else:  # only one resource
             if contact.is_groupchat:
-                disco_info = app.logger.get_last_disco_info(contact.jid)
+                disco_info = app.storage.cache.get_last_disco_info(contact.jid)
                 if disco_info is not None:
                     description = disco_info.muc_description
                     if description:
@@ -498,7 +498,7 @@ class FileTransfersTooltip():
     def __init__(self):
         self.sid = None
         self.widget = None
-        if app.config.get('use_kib_mib'):
+        if app.settings.get('use_kib_mib'):
             self.units = GLib.FormatSizeFlags.IEC_UNITS
         else:
             self.units = GLib.FormatSizeFlags.DEFAULT

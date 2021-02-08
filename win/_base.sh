@@ -57,8 +57,11 @@ function build_compileall {
 
 function install_pre_deps {
     pacman -S --needed --noconfirm p7zip \
-        mingw-w64-"${ARCH}"-nsis wget intltool mingw-w64-"${ARCH}"-toolchain \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"
+        wget \
+        intltool \
+        mingw-w64-"${ARCH}"-nsis \
+        mingw-w64-"${ARCH}"-toolchain \
+        mingw-w64-"${ARCH}"-python
 }
 
 function create_root {
@@ -72,16 +75,10 @@ function create_root {
     build_pacman --noconfirm -S base
 }
 
-function download_install_dep () {
-    curl -o "${BUILD_ROOT}"/mingw-w64-"${ARCH}"-"$1"-any.pkg.tar.xz \
-    http://repo.msys2.org/mingw/"${ARCH}"/mingw-w64-"${ARCH}"-"$1"-any.pkg.tar.xz
-    build_pacman --noconfirm -U "${BUILD_ROOT}"/mingw-w64-"${ARCH}"-"$1"-any.pkg.tar.xz
-}
-
 function install_deps {
-    build_pacman --noconfirm -S mingw-w64-"${ARCH}"-"${PYTHON_ID}" \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"-gobject \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"-pip \
+    build_pacman --noconfirm -S mingw-w64-"${ARCH}"-python \
+        mingw-w64-"${ARCH}"-python-gobject \
+        mingw-w64-"${ARCH}"-python-pip \
         mingw-w64-"${ARCH}"-adwaita-icon-theme \
         mingw-w64-"${ARCH}"-libwebp \
         mingw-w64-"${ARCH}"-sqlite3 \
@@ -89,20 +86,19 @@ function install_deps {
         mingw-w64-"${ARCH}"-gspell \
         mingw-w64-"${ARCH}"-hunspell \
         mingw-w64-"${ARCH}"-libsoup \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"-setuptools \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"-pillow \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"-setuptools-scm \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"-pyopenssl \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"-certifi \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"-six \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"-pygments
+        mingw-w64-"${ARCH}"-python-setuptools \
+        mingw-w64-"${ARCH}"-python-pillow \
+        mingw-w64-"${ARCH}"-python-setuptools-scm \
+        mingw-w64-"${ARCH}"-python-pyopenssl \
+        mingw-w64-"${ARCH}"-python-certifi \
+        mingw-w64-"${ARCH}"-python-six \
+        mingw-w64-"${ARCH}"-python-pygments
 
         build_pip install precis-i18n
 
     PIP_REQUIREMENTS="\
 git+https://dev.gajim.org/gajim/python-nbxmpp.git
 git+https://dev.gajim.org/lovetox/pybonjour-python3.git
-git+https://github.com/enthought/pywin32-ctypes.git
 keyring
 python-gnupg
 python-axolotl
@@ -179,7 +175,7 @@ function install_gajim {
 function cleanup_install {
 
     build_pacman --noconfirm -Rdd mingw-w64-"${ARCH}"-shared-mime-info \
-        mingw-w64-"${ARCH}"-"${PYTHON_ID}"-pip mingw-w64-"${ARCH}"-ncurses || true
+        mingw-w64-"${ARCH}"-python-pip mingw-w64-"${ARCH}"-ncurses || true
     build_pacman --noconfirm -Rdd mingw-w64-"${ARCH}"-tk || true
     build_pacman --noconfirm -Rdd mingw-w64-"${ARCH}"-tcl || true
 
@@ -190,7 +186,7 @@ function cleanup_install {
         fi
     done
 
-    KEEP="gajim|gajim-debug|python3|gajim-history-manager|gdbus|gspawn-win32-helper"
+    KEEP="gajim|gajim-debug|python3|gajim-history-manager|gdbus|gspawn-win32-helper|gspawn-win64-helper"
 
     echo "deleting .exe files"
     find "${MINGW_ROOT}" -regextype "posix-extended" -name "*.exe" -and ! \

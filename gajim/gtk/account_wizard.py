@@ -12,7 +12,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-import os
 import logging
 
 from gi.repository import Gdk
@@ -27,7 +26,9 @@ from nbxmpp.const import Mode
 from nbxmpp.const import StreamError
 from nbxmpp.const import ConnectionProtocol
 from nbxmpp.const import ConnectionType
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import StanzaError
+from nbxmpp.errors import MalformedStanzaError
+from nbxmpp.errors import RegisterStanzaError
 
 from gajim.common import app
 from gajim.common import configpaths
@@ -40,16 +41,15 @@ from gajim.common.i18n import _
 from gajim.common.const import SASL_ERRORS
 from gajim.common.const import GIO_TLS_ERRORS
 
-from gajim.gtk.assistant import Assistant
-from gajim.gtk.assistant import Page
-from gajim.gtk.assistant import SuccessPage
-from gajim.gtk.dataform import DataFormWidget
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import open_window
-from gajim.gtk.util import ensure_not_destroyed
+from .assistant import Assistant
+from .assistant import Page
+from .assistant import SuccessPage
+from .dataform import DataFormWidget
+from .util import get_builder
+from .util import open_window
 
 
-log = logging.getLogger('gajim.gtk.account_wizard')
+log = logging.getLogger('gajim.gui.account_wizard')
 
 
 class AccountWizard(Assistant):
@@ -276,12 +276,12 @@ class AccountWizard(Assistant):
         self._show_progress_page(_('Connecting...'),
                                  _('Connecting to server...'))
         address, password = self.get_page('login').get_credentials()
-        jid = JID(address)
+        jid = JID.from_string(address)
         advanced = self.get_page('login').is_advanced()
 
         self._client = self._get_base_client(
-            jid.getDomain(),
-            jid.getNode(),
+            jid.domain,
+            jid.localpart,
             Mode.LOGIN_TEST,
             advanced,
             ignore_all_errors)
@@ -420,17 +420,18 @@ class AccountWizard(Assistant):
     @staticmethod
     def _generate_account_name(domain):
         i = 1
-        while domain in app.config.get_per('accounts'):
+        while domain in app.settings.get_accounts():
             domain = domain + str(i)
             i += 1
         return domain
 
-    @ensure_not_destroyed
-    def _on_register_form(self, result):
-        if is_error_result(result):
+    def _on_register_form(self, task):
+        try:
+            result = task.finish()
+        except (StanzaError, MalformedStanzaError) as error:
             self._show_error_page(_('Error'),
                                   _('Error'),
-                                  result.get_text())
+                                  error.get_text())
             self._disconnect()
             return
 
@@ -460,14 +461,36 @@ class AccountWizard(Assistant):
 
         form = self.get_page('form').get_submit_form()
         self._client.get_module('Register').submit_register_form(
-            None,
             form,
             callback=self._on_register_result)
 
-    @ensure_not_destroyed
-    def _on_register_result(self, result):
-        if is_error_result(result):
-            self._on_register_error(result)
+    def _on_register_result(self, task):
+        try:
+            task.finish()
+        except RegisterStanzaError as error:
+            self._set_error_text(error)
+            if error.type != 'modify':
+                self.get_page('form').remove_form()
+                self._disconnect()
+                return
+
+            register_data = error.get_data()
+            form = register_data.form
+            if register_data.form is None:
+                form = register_data.fields_form
+
+            if form is not None:
+                self.get_page('form').add_form(form)
+
+            else:
+                self.get_page('form').remove_form()
+                self._disconnect()
+            return
+
+        except (StanzaError, MalformedStanzaError) as error:
+            self._set_error_text(error)
+            self.get_page('form').remove_form()
+            self._disconnect()
             return
 
         username, password = self.get_page('form').get_credentials()
@@ -489,30 +512,12 @@ class AccountWizard(Assistant):
         self.get_page('form').remove_form()
         self._disconnect()
 
-    def _on_register_error(self, result):
-        error_text = result.get_text()
+    def _set_error_text(self, error):
+        error_text = error.get_text()
         if not error_text:
             error_text = _('The server rejected the registration '
                            'without an error message')
         self._show_error_page(_('Error'), _('Error'), error_text)
-
-        register_data = result.get_data()
-        if register_data is None:
-            # IQ error did not have the payload included
-            self.get_page('form').remove_form()
-            self._disconnect()
-            return
-
-        form = register_data.form
-        if register_data.form is None:
-            form = register_data.fields_form
-
-        if form is not None:
-            self.get_page('form').add_form(form)
-
-        else:
-            self.get_page('form').remove_form()
-            self._disconnect()
 
     def _on_destroy(self, *args):
         self._disconnect()
@@ -553,9 +558,8 @@ class Login(Page):
 
     def _create_server_completion(self):
         # Parse servers.json
-        server_file_path = os.path.join(
-            configpaths.get('DATA'), 'other', 'servers.json')
-        self._servers = helpers.load_json(server_file_path, 'servers', [])
+        file_path = configpaths.get('DATA') / 'other' / 'servers.json'
+        self._servers = helpers.load_json(file_path, 'servers', [])
 
         # Create a separate model for the address entry, because it will
         # be updated with our localpart@
@@ -600,7 +604,7 @@ class Login(Page):
 
         try:
             jid = validate_jid(address, type_='bare')
-            if jid.getResource():
+            if jid.resource:
                 raise ValueError
         except ValueError:
             self._show_icon(True)
@@ -631,11 +635,6 @@ class Signup(Page):
         self.complete = False
         self.title = _('Create New Account')
 
-        # Parse servers.json
-        server_file_path = os.path.join(
-            configpaths.get('DATA'), 'other', 'servers.json')
-        self._servers = helpers.load_json(server_file_path, 'servers', [])
-
         self._ui = get_builder('account_wizard.ui')
         self._ui.server_comboboxtext_sign_up_entry.set_activates_default(True)
         self._create_server_completion()
@@ -658,13 +657,12 @@ class Signup(Page):
 
     def _create_server_completion(self):
         # Parse servers.json
-        server_file_path = os.path.join(
-            configpaths.get('DATA'), 'other', 'servers.json')
-        self._servers = helpers.load_json(server_file_path, 'servers', [])
+        file_path = configpaths.get('DATA') / 'other' / 'servers.json'
+        servers = helpers.load_json(file_path, 'servers', [])
 
         # Create servers_model for comboboxes and entries
         servers_model = Gtk.ListStore(str)
-        for server in self._servers:
+        for server in servers:
             servers_model.append((server,))
 
         # Sign up combobox and entry
@@ -730,7 +728,7 @@ class AdvancedSettings(Page):
     def update_proxy_list(self):
         model = Gtk.ListStore(str)
         self._ui.proxies_combobox.set_model(model)
-        proxies = app.config.get_per('proxies')
+        proxies = app.settings.get_proxies()
         proxies.insert(0, _('No Proxy'))
         for proxy in proxies:
             model.append([proxy])

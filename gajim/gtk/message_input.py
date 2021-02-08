@@ -18,6 +18,7 @@
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
 from gi.repository import Gtk
+from gi.repository import Gdk
 from gi.repository import GLib
 from gi.repository import GObject
 from gi.repository import Pango
@@ -28,7 +29,7 @@ from gajim.common import app
 from gajim.common.i18n import _
 from gajim.common.const import StyleAttr
 
-from gajim.gtk.util import scroll_to_end
+from .util import scroll_to_end
 
 if app.is_installed('GSPELL'):
     from gi.repository import Gspell  # pylint: disable=ungrouped-imports
@@ -60,6 +61,8 @@ class MessageInputTextView(Gtk.TextView):
         self.set_pixels_above_lines(2)
         self.set_pixels_below_lines(2)
         self.get_style_context().add_class('gajim-conversation-font')
+
+        self.drag_dest_unset()
 
         # set undo list
         self.undo_list = []
@@ -106,6 +109,18 @@ class MessageInputTextView(Gtk.TextView):
         self.connect('focus-in-event', self._on_grab_focus)
         self.connect('grab-focus', self._on_grab_focus)
         self.connect('focus-out-event', self._on_focus_out)
+        self.connect('destroy', self._on_destroy)
+
+    def _on_destroy(self, *args):
+        # We restore the TextView’s drag destination to avoid a GTK warning
+        # when closing the control. ChatControlBase.shutdown() calls destroy()
+        # on the control’s main box, causing GTK to recursively destroy the
+        # child widgets. GTK then tries to set a target list on the TextView,
+        # resulting in a warning because the Widget has no drag destination.
+        self.drag_dest_set(
+            Gtk.DestDefaults.ALL,
+            None,
+            Gdk.DragAction.DEFAULT)
 
     def _on_buffer_changed(self, *args):
         text = self.get_text()
@@ -119,6 +134,14 @@ class MessageInputTextView(Gtk.TextView):
 
     def insert_text(self, text):
         self.get_buffer().insert_at_cursor(text)
+
+    def insert_newline(self):
+        buffer_ = self.get_buffer()
+        buffer_.insert_at_cursor('\n')
+        mark = buffer_.get_insert()
+        iter_ = buffer_.get_iter_at_mark(mark)
+        if buffer_.get_end_iter().equal(iter_):
+            GLib.idle_add(scroll_to_end, self.get_parent())
 
     def has_text(self):
         buf = self.get_buffer()
@@ -159,7 +182,7 @@ class MessageInputTextView(Gtk.TextView):
             self.toggle_speller(False)
 
     def toggle_speller(self, activate):
-        if app.is_installed('GSPELL') and app.config.get('use_speller'):
+        if app.is_installed('GSPELL') and app.settings.get('use_speller'):
             spell_view = Gspell.TextView.get_from_gtk_text_view(self)
             spell_view.set_inline_spell_checking(activate)
 
@@ -378,7 +401,7 @@ class MessageInputTextView(Gtk.TextView):
         return None
 
     def replace_emojis(self):
-        theme = app.config.get('emoticons_theme')
+        theme = app.settings.get('emoticons_theme')
         if not theme or theme == 'font':
             return
 

@@ -105,12 +105,12 @@ class Chatstate(BaseModule):
             return
 
         full_jid = stanza.getFrom()
-        if full_jid is None or self._con.get_own_jid().bareMatch(full_jid):
+        if full_jid is None or self._con.get_own_jid().bare_match(full_jid):
             # Presence from ourself
             return
 
         contact = app.contacts.get_gc_contact(
-            self._account, full_jid.getStripped(), full_jid.getResource())
+            self._account, full_jid.bare, full_jid.resource)
         if contact is None:
             contact = app.contacts.get_contact_from_full_jid(
                 self._account, str(full_jid))
@@ -150,8 +150,8 @@ class Chatstate(BaseModule):
         if properties.is_muc_pm:
             contact = app.contacts.get_gc_contact(
                 self._account,
-                properties.jid.getBare(),
-                properties.jid.getResource())
+                properties.jid.bare,
+                properties.jid.resource)
         else:
             contact = app.contacts.get_contact_from_full_jid(
                 self._account, str(properties.jid))
@@ -212,19 +212,19 @@ class Chatstate(BaseModule):
 
     @ensure_enabled
     def set_active(self, contact: ContactT) -> None:
-        if self._get_chatstate_setting(contact) == 'disabled':
+        if contact.settings.get('send_chatstate') == 'disabled':
             return
         self._last_mouse_activity[contact.jid] = time.time()
         self._chatstates[contact.jid] = State.ACTIVE
 
     def get_active_chatstate(self, contact: ContactT) -> Optional[str]:
         # determines if we add 'active' on outgoing messages
-        if self._get_chatstate_setting(contact) == 'disabled':
+        if contact.settings.get('send_chatstate') == 'disabled':
             return None
 
         if not contact.is_groupchat:
             # Don’t send chatstates to ourself
-            if self._con.get_own_jid().bareMatch(contact.jid):
+            if self._con.get_own_jid().bare_match(contact.jid):
                 return None
 
             if not contact.supports(Namespace.CHATSTATES):
@@ -256,7 +256,7 @@ class Chatstate(BaseModule):
     @ensure_enabled
     def set_chatstate(self, contact: ContactT, state: State) -> None:
         # Don’t send chatstates to ourself
-        if self._con.get_own_jid().bareMatch(contact.jid):
+        if self._con.get_own_jid().bare_match(contact.jid):
             return
 
         if contact.jid in self._blocked:
@@ -264,7 +264,7 @@ class Chatstate(BaseModule):
 
         self.remove_delay_timeout(contact)
         current_state = self._chatstates.get(contact.jid)
-        setting = self._get_chatstate_setting(contact)
+        setting = contact.settings.get('send_chatstate')
         if setting == 'disabled':
             # Send a last 'active' state after user disabled chatstates
             if current_state is not None:
@@ -317,13 +317,14 @@ class Chatstate(BaseModule):
                                   contact=contact,
                                   message=None,
                                   type_=type_,
-                                  chatstate=chatstate)
+                                  chatstate=chatstate,
+                                  play_sound=False)
 
         self._con.send_message(message)
 
     @ensure_enabled
     def set_mouse_activity(self, contact: ContactT, was_paused: bool) -> None:
-        if self._get_chatstate_setting(contact) == 'disabled':
+        if contact.settings.get('send_chatstate') == 'disabled':
             return
         self._last_mouse_activity[contact.jid] = time.time()
         if self._chatstates.get(contact.jid) == State.INACTIVE:
@@ -335,16 +336,6 @@ class Chatstate(BaseModule):
     @ensure_enabled
     def set_keyboard_activity(self, contact: ContactT) -> None:
         self._last_keyboard_activity[contact.jid] = time.time()
-
-    @staticmethod
-    def _get_chatstate_setting(contact):
-        if contact.is_groupchat:
-            default = app.config.get('send_chatstate_muc_default')
-            return app.config.get_per(
-                'rooms', contact.jid, 'send_chatstate', default)
-        default = app.config.get('send_chatstate_default')
-        return app.config.get_per(
-            'contacts', contact.jid, 'send_chatstate', default)
 
     def remove_delay_timeout(self, contact):
         timeout = self._delay_timeout_ids.get(contact.jid)

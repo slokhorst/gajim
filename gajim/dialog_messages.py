@@ -21,8 +21,8 @@ from gi.repository import GLib
 
 from gajim.common.app import app
 from gajim.common.i18n import _
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.dialogs import InformationDialog
+from gajim.gui.dialogs import ErrorDialog
+from gajim.gui.dialogs import InformationDialog
 
 Message = namedtuple('Message', ['title', 'text', 'dialog'])
 
@@ -97,46 +97,11 @@ messages = {
         _('%s\nLink-local messaging might not work properly.'),
         ErrorDialog),
 
-    'request-upload-slot-error': Message(
-        _('Could not request upload slot for HTTP File Upload'),
-        '%s',
-        ErrorDialog),
-
-    'open-file-error': Message(
-        _('Could not Open File'),
-        _('Exception raised while trying to open file (see log).'),
-        ErrorDialog),
-
     'open-file-error2': Message(
         _('Could not Open File'),
         '%s',
         ErrorDialog),
 
-    'unsecure-error': Message(
-        _('Not Secure'),
-        _('The server returned an insecure transport (HTTP).'),
-        ErrorDialog),
-
-    'httpupload-response-error': Message(
-        _('Could not Upload File'),
-        _('HTTP response code from server: %s'),
-        ErrorDialog),
-
-    'httpupload-error': Message(
-        _('Upload Error'),
-        '%s',
-        ErrorDialog),
-
-    'httpupload-encryption-not-available': Message(
-        _('Encryption Error'),
-        _('There is no encryption method available '
-          'for the chosen encryption.'),
-        ErrorDialog),
-
-    'avatar-upload-error': Message(
-        _('Avatar Upload Failed'),
-        '%s',
-        ErrorDialog),
     }
 
 

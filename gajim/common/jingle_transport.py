@@ -185,12 +185,12 @@ class JingleTransportSocks5(JingleTransport):
                 self.candidates.append(cand)
 
     def _add_local_ips_as_candidates(self):
-        if not app.config.get_per('accounts', self.connection.name,
-        'ft_send_local_ips'):
+        if not app.settings.get_account_setting(self.connection.name,
+                                                'ft_send_local_ips'):
             return
         if not self.connection:
             return
-        port = int(app.config.get('file_transfers_port'))
+        port = int(app.settings.get('file_transfers_port'))
         #type preference of connection type. XEP-0260 section 2.2
         type_preference = 126
         priority = (2**16) * type_preference
@@ -285,8 +285,8 @@ class JingleTransportSocks5(JingleTransport):
         type_preference = 126
         priority = (2**16) * type_preference
         additional_ip_cand = []
-        port = int(app.config.get('file_transfers_port'))
-        ft_add_hosts = app.config.get('ft_add_hosts_to_send')
+        port = int(app.settings.get('file_transfers_port'))
+        ft_add_hosts = app.settings.get('ft_add_hosts_to_send')
 
         if ft_add_hosts:
             hosts = [e.strip() for e in ft_add_hosts.split(',')]

@@ -4,9 +4,12 @@ from gi.repository import Gtk
 
 import OpenSSL
 
+from gajim import gui
+gui.init('gtk')
+
 from test.gtk import util
 from gajim.common.const import CSSPriority
-from gajim.gtk.ssl_error_dialog import SSLErrorDialog
+from gajim.gui.ssl_error_dialog import SSLErrorDialog
 
 util.load_style('gajim.css', CSSPriority.APPLICATION)
 

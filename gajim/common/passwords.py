@@ -93,21 +93,21 @@ class ConfigPasswordStorage:
 
     @staticmethod
     def get_password(account_name):
-        return app.config.get_per('accounts', account_name, 'password')
+        return app.settings.get_account_setting(account_name, 'password')
 
     @staticmethod
     def save_password(account_name, password):
-        app.config.set_per('accounts', account_name, 'password', password)
+        app.settings.set_account_setting(account_name, 'password', password)
         return True
 
     @staticmethod
     def delete_password(account_name):
-        app.config.set_per('accounts', account_name, 'password', '')
+        app.settings.set_account_setting(account_name, 'password', '')
         return True
 
 
 def get_password(account_name):
-    if app.config.get('use_keyring'):
+    if app.settings.get('use_keyring'):
         return SecretPasswordStorage.get_password(account_name)
     return ConfigPasswordStorage.get_password(account_name)
 
@@ -116,10 +116,10 @@ def save_password(account_name, password):
     if account_name in app.connections:
         app.connections[account_name].password = password
 
-    if not app.config.get_per('accounts', account_name, 'savepass'):
+    if not app.settings.get_account_setting(account_name, 'savepass'):
         return True
 
-    if app.config.get('use_keyring'):
+    if app.settings.get('use_keyring'):
         return SecretPasswordStorage.save_password(account_name, password)
     return ConfigPasswordStorage.save_password(account_name, password)
 
@@ -128,6 +128,6 @@ def delete_password(account_name):
     if account_name in app.connections:
         app.connections[account_name].password = None
 
-    if app.config.get('use_keyring'):
+    if app.settings.get('use_keyring'):
         return SecretPasswordStorage.delete_password(account_name)
     return ConfigPasswordStorage.delete_password(account_name)

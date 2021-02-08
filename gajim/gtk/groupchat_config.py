@@ -15,7 +15,7 @@
 import logging
 
 from nbxmpp.namespaces import Namespace
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import StanzaError
 from gi.repository import Gdk
 from gi.repository import Gtk
 
@@ -23,12 +23,11 @@ from gajim.common import app
 from gajim.common.i18n import _
 from gajim.common.const import MUCUser
 
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.dataform import DataFormWidget
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import ensure_not_destroyed
+from .dialogs import ErrorDialog
+from .dataform import DataFormWidget
+from .util import get_builder
 
-log = logging.getLogger('gajim.gtk.groupchat_config')
+log = logging.getLogger('gajim.gui.groupchat_config')
 
 
 class GroupchatConfig(Gtk.ApplicationWindow):
@@ -52,7 +51,7 @@ class GroupchatConfig(Gtk.ApplicationWindow):
             self._ui.add_button.set_sensitive(True)
             self._ui.add_button.set_tooltip_text('')
 
-        disco_info = app.logger.get_last_disco_info(self.jid)
+        disco_info = app.storage.cache.get_last_disco_info(self.jid)
         visible = disco_info.supports(Namespace.REGISTER)
         self._ui.reserved_name_column.set_visible(visible)
         self._ui.info_button.set_sensitive(False)
@@ -353,11 +352,13 @@ class GroupchatConfig(Gtk.ApplicationWindow):
         con = app.connections[self.account]
         con.get_module('MUC').set_affiliation(self.jid, diff_dict)
 
-    @ensure_not_destroyed
-    def _on_affiliations_received(self, result, affiliation):
-        if is_error_result(result):
+    def _on_affiliations_received(self, task):
+        affiliation = task.get_user_data()
+        try:
+            result = task.finish()
+        except StanzaError as error:
             log.info('Error while requesting %s affiliations: %s',
-                     affiliation, result.condition)
+                     affiliation, error.condition)
             return
 
         if affiliation == 'outcast':

@@ -34,8 +34,8 @@ from gajim.common.helpers import event_filter
 from gajim.chat_control import ChatControl
 from gajim.command_system.implementation.hosts import PrivateChatCommands
 
-from gajim.gtk.dialogs import ErrorDialog
-from gajim.gtk.const import ControlType
+from gajim.gui.dialogs import ErrorDialog
+from gajim.gui.const import ControlType
 
 
 class PrivateChatControl(ChatControl):
@@ -127,20 +127,22 @@ class PrivateChatControl(ChatControl):
         status = '' if status is None else ' - %s' % status
         show = helpers.get_uf_show(event.properties.show.value)
 
-        status_default = app.config.get('print_status_muc_default')
+        if not app.settings.get_group_chat_setting(self.account,
+                                                   self.gc_contact.room_jid,
+                                                   'print_status'):
+            self.parent_win.redraw_tab(self)
+            self.update_ui()
+            return
 
         if event.properties.is_muc_self_presence:
             message = _('You are now {show}{status}').format(show=show,
                                                              status=status)
-            self.add_status_message(message)
 
-        elif app.config.get_per('rooms', self.gc_contact.room_jid,
-                                'print_status', status_default):
+        else:
             message = _('{nick} is now {show}{status}').format(nick=nick,
                                                                show=show,
                                                                status=status)
-            self.add_status_message(message)
-
+        self.add_status_message(message)
         self.parent_win.redraw_tab(self)
         self.update_ui()
 
@@ -179,7 +181,7 @@ class PrivateChatControl(ChatControl):
     def _on_update_gc_avatar(self, event):
         if event.contact != self.gc_contact:
             return
-        self.show_avatar()
+        self._update_avatar()
 
     def send_message(self, message, xhtml=None, process_commands=True,
                      attention=False):
@@ -213,10 +215,7 @@ class PrivateChatControl(ChatControl):
         else:
             self.got_connected()
 
-    def show_avatar(self):
-        if not app.config.get('show_avatar_in_chat'):
-            return
-
+    def _update_avatar(self):
         scale = self.parent_win.window.get_scale_factor()
         surface = self.gc_contact.get_avatar(AvatarSize.CHAT,
                                              scale,

@@ -23,7 +23,7 @@ from nbxmpp.const import InviteType
 from nbxmpp.const import PresenceType
 from nbxmpp.const import StatusCode
 from nbxmpp.structs import StanzaHandler
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import StanzaError
 
 from gi.repository import GLib
 
@@ -62,6 +62,7 @@ class MUC(BaseModule):
         'request_voice',
         'approve_voice_request',
         'destroy',
+        'request_disco_info'
     ]
 
     def __init__(self, con):
@@ -141,7 +142,8 @@ class MUC(BaseModule):
 
         self._manager.add(muc_data)
 
-        disco_info = app.logger.get_last_disco_info(muc_data.jid, max_age=60)
+        disco_info = app.storage.cache.get_last_disco_info(muc_data.jid,
+                                                           max_age=60)
         if disco_info is None:
             self._con.get_module('Discovery').disco_muc(
                 muc_data.jid,
@@ -156,17 +158,19 @@ class MUC(BaseModule):
         self._manager.add(muc_data)
         self._create(muc_data)
 
-    def _on_disco_result(self, result):
-        if is_error_result(result):
-            self._log.info('Disco %s failed: %s', result.jid, result.get_text())
+    def _on_disco_result(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            self._log.info('Disco %s failed: %s', error.jid, error.get_text())
             app.nec.push_incoming_event(
                 NetworkEvent('muc-join-failed',
                              account=self._account,
-                             room_jid=result.jid.getBare(),
-                             error=result))
+                             room_jid=error.jid.bare,
+                             error=error))
             return
 
-        muc_data = self._manager.get(result.jid)
+        muc_data = self._manager.get(result.info.jid)
         if muc_data is None:
             self._log.warning('MUC Data not found, join aborted')
             return
@@ -225,14 +229,16 @@ class MUC(BaseModule):
         self._nbxmpp('MUC').request_config(room_jid,
                                            callback=self._on_room_config)
 
-    def _on_room_config(self, result):
-        if is_error_result(result):
-            self._log.info(result)
+    def _on_room_config(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            self._log.info(error)
             app.nec.push_incoming_event(NetworkEvent(
                 'muc-configuration-failed',
                 account=self._account,
-                room_jid=result.jid,
-                error=result))
+                room_jid=error.jid,
+                error=error))
             return
 
         self._log.info('Configure room: %s', result.jid)
@@ -256,14 +262,16 @@ class MUC(BaseModule):
             else:
                 field.value = value
 
-    def _on_config_result(self, result):
-        if is_error_result(result):
-            self._log.info(result)
+    def _on_config_result(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            self._log.info(error)
             app.nec.push_incoming_event(NetworkEvent(
                 'muc-configuration-failed',
                 account=self._account,
-                room_jid=result.jid,
-                error=result))
+                room_jid=error.jid,
+                error=error))
             return
 
         self._con.get_module('Discovery').disco_muc(
@@ -283,19 +291,22 @@ class MUC(BaseModule):
         for jid in invites:
             self.invite(result.jid, jid)
 
-    def _on_disco_result_after_config(self, result):
-        if is_error_result(result):
-            self._log.info('Disco %s failed: %s', result.jid, result.get_text())
+    def _on_disco_result_after_config(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            self._log.info('Disco %s failed: %s', error.jid, error.get_text())
             return
 
-        muc_data = self._manager.get(result.jid)
+        jid = result.info.jid
+        muc_data = self._manager.get(jid)
         self._room_join_complete(muc_data)
 
-        self._log.info('Configuration finished: %s', result.jid)
+        self._log.info('Configuration finished: %s', jid)
         app.nec.push_incoming_event(NetworkEvent(
             'muc-configuration-finished',
             account=self._account,
-            room_jid=result.jid))
+            room_jid=jid))
 
     def update_presence(self):
         mucs = self._manager.get_mucs_with_state([MUCJoinedState.JOINED,
@@ -317,7 +328,7 @@ class MUC(BaseModule):
             status=message)
 
     def _on_error_presence(self, _con, _stanza, properties):
-        room_jid = properties.jid.getBare()
+        room_jid = properties.jid.bare
         muc_data = self._manager.get(room_jid)
         if muc_data is None:
             return
@@ -529,7 +540,7 @@ class MUC(BaseModule):
         app.nec.push_incoming_event(
             NetworkEvent(event_name,
                          account=self._account,
-                         room_jid=properties.jid.getBare(),
+                         room_jid=properties.jid.bare,
                          properties=properties))
         self._log_muc_event(event_name, properties)
 
@@ -539,7 +550,7 @@ class MUC(BaseModule):
                               'muc-user-status-show-changed']:
             return
 
-        if (not app.config.get('log_contact_status_changes') or
+        if (not app.settings.get('log_contact_status_changes') or
                 not helpers.should_log(self._account, properties.jid)):
             return
 
@@ -554,11 +565,11 @@ class MUC(BaseModule):
             show = 'offline'
         else:
             show = properties.show.value
-        show = app.logger.convert_show_values_to_db_api_values(show)
+        show = app.storage.archive.convert_show_values_to_db_api_values(show)
 
-        app.logger.insert_into_logs(
+        app.storage.archive.insert_into_logs(
             self._account,
-            properties.jid.getBare(),
+            properties.jid.bare,
             properties.timestamp,
             KindConstant.GCSTATUS,
             contact_name=properties.muc_nickname,
@@ -571,7 +582,7 @@ class MUC(BaseModule):
         if properties.muc_user.jid is not None:
             real_jid = str(properties.muc_user.jid)
         contact = app.contacts.create_gc_contact(
-            room_jid=properties.jid.getBare(),
+            room_jid=properties.jid.bare,
             account=self._account,
             name=properties.muc_nickname,
             show=properties.show,
@@ -686,7 +697,7 @@ class MUC(BaseModule):
         app.nec.push_incoming_event(
             NetworkEvent('muc-captcha-challenge',
                          account=self._account,
-                         room_jid=properties.jid.getBare(),
+                         room_jid=properties.jid.bare,
                          form=properties.captcha.form))
         raise nbxmpp.NodeProcessed
 
@@ -708,19 +719,19 @@ class MUC(BaseModule):
                                          form_node,
                                          callback=self._on_captcha_result)
 
-    def _on_captcha_result(self, result):
-        if not is_error_result(result):
-            return
-
-        muc_data = self._manager.get(result.jid)
-        if muc_data is None:
-            return
-        self._manager.set_state(result.jid, MUCJoinedState.CAPTCHA_FAILED)
-        app.nec.push_incoming_event(
-            NetworkEvent('muc-captcha-error',
-                         account=self._account,
-                         room_jid=str(result.jid),
-                         error_text=to_user_string(result)))
+    def _on_captcha_result(self, task):
+        try:
+            task.finish()
+        except StanzaError as error:
+            muc_data = self._manager.get(error.jid)
+            if muc_data is None:
+                return
+            self._manager.set_state(error.jid, MUCJoinedState.CAPTCHA_FAILED)
+            app.nec.push_incoming_event(
+                NetworkEvent('muc-captcha-error',
+                             account=self._account,
+                             room_jid=str(error.jid),
+                             error_text=to_user_string(error)))
 
     def _on_config_change(self, _con, _stanza, properties):
         if not properties.is_muc_config_change:
@@ -763,11 +774,27 @@ class MUC(BaseModule):
                 self._log.info('We are already in this room')
                 raise nbxmpp.NodeProcessed
 
-            app.nec.push_incoming_event(
-                NetworkEvent('muc-invitation',
-                             account=self._account,
-                             **data._asdict()))
+            self._con.get_module('Discovery').disco_muc(
+                data.muc,
+                request_vcard=True,
+                callback=self._on_disco_result_after_invite,
+                user_data=data)
+
             raise nbxmpp.NodeProcessed
+
+    def _on_disco_result_after_invite(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            self._log.warning(error)
+            return
+
+        invite_data = task.get_user_data()
+        app.nec.push_incoming_event(
+            NetworkEvent('muc-invitation',
+                         account=self._account,
+                         info=result.info,
+                         **invite_data._asdict()))
 
     def invite(self, room, to, reason=None, continue_=False):
         type_ = InviteType.MEDIATED
@@ -817,6 +844,10 @@ class MUCManager:
 
     def get_mucs_with_state(self, states):
         return [muc for muc in self._mucs.values() if muc.state in states]
+
+    def reset_state(self):
+        for muc in self._mucs.values():
+            self.set_state(muc.jid, MUCJoinedState.NOT_JOINED)
 
     def __contains__(self, room_jid):
         return room_jid in self._mucs

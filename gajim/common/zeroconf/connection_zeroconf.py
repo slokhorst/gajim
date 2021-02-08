@@ -41,7 +41,6 @@ from gajim.common.nec import NetworkEvent
 from gajim.common.i18n import _
 from gajim.common.const import ClientState
 from gajim.common.connection import CommonConnection
-from gajim.common.helpers import get_encryption_method
 from gajim.common.zeroconf import client_zeroconf
 from gajim.common.zeroconf import zeroconf
 from gajim.common.zeroconf.connection_handlers_zeroconf import ConnectionHandlersZeroconf
@@ -77,33 +76,35 @@ class ConnectionZeroconf(CommonConnection, ConnectionHandlersZeroconf):
         values
         """
         self.host = socket.gethostname()
-        app.config.set_per('accounts', app.ZEROCONF_ACC_NAME, 'hostname',
-                self.host)
-        self.port = app.config.get_per('accounts', app.ZEROCONF_ACC_NAME,
-                'custom_port')
-        self.autoconnect = app.config.get_per('accounts',
-                app.ZEROCONF_ACC_NAME, 'autoconnect')
-        self.sync_with_global_status = app.config.get_per('accounts',
-                app.ZEROCONF_ACC_NAME, 'sync_with_global_status')
-        self.first = app.config.get_per('accounts', app.ZEROCONF_ACC_NAME,
-                'zeroconf_first_name')
-        self.last = app.config.get_per('accounts', app.ZEROCONF_ACC_NAME,
-                'zeroconf_last_name')
-        self.jabber_id = app.config.get_per('accounts', app.ZEROCONF_ACC_NAME,
-                'zeroconf_jabber_id')
-        self.email = app.config.get_per('accounts', app.ZEROCONF_ACC_NAME,
-                'zeroconf_email')
+        app.settings.set_account_setting(app.ZEROCONF_ACC_NAME,
+                                         'hostname',
+                                         self.host)
+        self.port = app.settings.get_account_setting(app.ZEROCONF_ACC_NAME,
+                                                     'custom_port')
+        self.autoconnect = app.settings.get_account_setting(
+            app.ZEROCONF_ACC_NAME, 'autoconnect')
+        self.sync_with_global_status = app.settings.get_account_setting(
+            app.ZEROCONF_ACC_NAME, 'sync_with_global_status')
+        self.first = app.settings.get_account_setting(app.ZEROCONF_ACC_NAME,
+                                                      'zeroconf_first_name')
+        self.last = app.settings.get_account_setting(app.ZEROCONF_ACC_NAME,
+                                                     'zeroconf_last_name')
+        self.jabber_id = app.settings.get_account_setting(app.ZEROCONF_ACC_NAME,
+                                                          'zeroconf_jabber_id')
+        self.email = app.settings.get_account_setting(app.ZEROCONF_ACC_NAME,
+                                                      'zeroconf_email')
 
         if not self.username:
             self.username = getpass.getuser()
-            app.config.set_per('accounts', app.ZEROCONF_ACC_NAME, 'name',
-                self.username)
+            app.settings.set_account_setting(app.ZEROCONF_ACC_NAME,
+                                             'name',
+                                             self.username)
         else:
-            self.username = app.config.get_per('accounts',
+            self.username = app.settings.get_account_setting(
                 app.ZEROCONF_ACC_NAME, 'name')
 
     def get_own_jid(self, *args, **kwargs):
-        return nbxmpp.JID(self.username + '@' + self.host)
+        return nbxmpp.JID.from_string(self.username + '@' + self.host)
 
     def reconnect(self):
         # Do not try to reco while we are already trying
@@ -260,7 +261,7 @@ class ConnectionZeroconf(CommonConnection, ConnectionHandlersZeroconf):
                 if result is False:
                     app.nec.push_incoming_event(ConnectionLostEvent(None,
                         conn=self, title=_('Could not start local service'),
-                        msg=_('Unable to bind to port %d.' % self.port)))
+                        msg=_('Unable to bind to port %d.') % self.port))
                 else: # result is None
                     app.nec.push_incoming_event(ConnectionLostEvent(None,
                         conn=self, title=_('Could not start local service'),
@@ -313,20 +314,20 @@ class ConnectionZeroconf(CommonConnection, ConnectionHandlersZeroconf):
     def reannounce(self):
         if self._state.is_connected:
             txt = {}
-            txt['1st'] = app.config.get_per('accounts', app.ZEROCONF_ACC_NAME,
-                    'zeroconf_first_name')
-            txt['last'] = app.config.get_per('accounts', app.ZEROCONF_ACC_NAME,
-                    'zeroconf_last_name')
-            txt['jid'] = app.config.get_per('accounts', app.ZEROCONF_ACC_NAME,
-                    'zeroconf_jabber_id')
-            txt['email'] = app.config.get_per('accounts',
-                    app.ZEROCONF_ACC_NAME, 'zeroconf_email')
+            txt['1st'] = app.settings.get_account_setting(
+                app.ZEROCONF_ACC_NAME, 'zeroconf_first_name')
+            txt['last'] = app.settings.get_account_setting(
+                app.ZEROCONF_ACC_NAME, 'zeroconf_last_name')
+            txt['jid'] = app.settings.get_account_setting(
+                app.ZEROCONF_ACC_NAME, 'zeroconf_jabber_id')
+            txt['email'] = app.settings.get_account_setting(
+                app.ZEROCONF_ACC_NAME, 'zeroconf_email')
             self.connection.reannounce(txt)
 
     def update_details(self):
         if self.connection:
-            port = app.config.get_per('accounts', app.ZEROCONF_ACC_NAME,
-                    'custom_port')
+            port = app.settings.get_account_setting(app.ZEROCONF_ACC_NAME,
+                                                    'custom_port')
             if port != self.port:
                 self.port = port
                 last_msg = self.connection.last_msg
@@ -378,15 +379,20 @@ class ConnectionZeroconf(CommonConnection, ConnectionHandlersZeroconf):
         stanza = self.get_module('Message').build_message_stanza(message)
         message.stanza = stanza
 
-        method = get_encryption_method(message.account, message.jid)
-        if method is not None:
-            app.plugin_manager.extension_point('encrypt%s' % method,
-                                               self,
-                                               message,
-                                               self._send_message)
+        if message.contact is None:
+            # Only Single Message should have no contact
+            self._send_message(message)
             return
 
-        self._send_message(message)
+        method = message.contact.settings.get('encryption')
+        if not method:
+            self._send_message(message)
+            return
+
+        app.plugin_manager.extension_point('encrypt%s' % method,
+                                           self,
+                                           message,
+                                           self._send_message)
 
     def _send_message(self, message):
         def on_send_ok(stanza_id):

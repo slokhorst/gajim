@@ -26,17 +26,17 @@ from gajim.common import app
 from gajim.common import passwords
 from gajim.common.i18n import _
 
-from gajim.gtk.dialogs import DialogButton
-from gajim.gtk.dialogs import NewConfirmationDialog
-from gajim.gtk.const import Setting
-from gajim.gtk.const import SettingKind
-from gajim.gtk.const import SettingType
-from gajim.gtk.settings import SettingsDialog
-from gajim.gtk.settings import SettingsBox
-from gajim.gtk.util import open_window
+from .dialogs import DialogButton
+from .dialogs import ConfirmationDialog
+from .const import Setting
+from .const import SettingKind
+from .const import SettingType
+from .settings import SettingsDialog
+from .settings import SettingsBox
+from .util import open_window
 
 
-log = logging.getLogger('gajim.gtk.accounts')
+log = logging.getLogger('gajim.gui.accounts')
 
 
 class AccountsWindow(Gtk.ApplicationWindow):
@@ -68,7 +68,7 @@ class AccountsWindow(Gtk.ApplicationWindow):
 
         self._menu.connect('menu-activated', self._on_menu_activated)
         self.connect('destroy', self._on_destroy)
-        self.connect('key-press-event', self._on_key_press)
+        self.connect_after('key-press-event', self._on_key_press)
 
         self.show_all()
 
@@ -98,7 +98,7 @@ class AccountsWindow(Gtk.ApplicationWindow):
     def _check_relogin(self):
         for account in self._need_relogin:
             settings = self._get_relogin_settings(account)
-            active = app.config.get_per('accounts', account, 'active')
+            active = app.settings.get_account_setting(account, 'active')
             if settings != self._need_relogin[account]:
                 self._need_relogin[account] = settings
                 if active:
@@ -118,7 +118,7 @@ class AccountsWindow(Gtk.ApplicationWindow):
                                                 reconnect=True,
                                                 destroy_client=True)
 
-        NewConfirmationDialog(
+        ConfirmationDialog(
             _('Re-Login'),
             _('Re-Login now?'),
             _('To apply all changes instantly, you have to re-login.'),
@@ -140,7 +140,7 @@ class AccountsWindow(Gtk.ApplicationWindow):
 
         values = []
         for setting in settings:
-            values.append(app.config.get_per('accounts', account, setting))
+            values.append(app.settings.get_account_setting(account, setting))
         return values
 
     @staticmethod
@@ -149,7 +149,7 @@ class AccountsWindow(Gtk.ApplicationWindow):
             app.interface.raise_dialog('unread-events-on-remove-account')
             return
 
-        if app.config.get_per('accounts', account, 'is_zeroconf'):
+        if app.settings.get_account_setting(account, 'is_zeroconf'):
             # Should never happen as button is insensitive
             return
 
@@ -212,7 +212,7 @@ class Settings(Gtk.ScrolledWindow):
         for page in self._pages[account]:
             if page.name != 'connection':
                 continue
-            page.listbox.get_setting('proxy').update_values()
+            page.update_proxy_entries()
 
 
 class AccountMenu(Gtk.Box):
@@ -309,6 +309,7 @@ class AccountSubMenu(Gtk.ListBox):
         if account != 'Local':
             self.add(PageMenuItem('privacy', _('Privacy')))
             self.add(PageMenuItem('connection', _('Connection')))
+            self.add(PageMenuItem('advanced', _('Advanced')))
             self.add(RemoveMenuItem())
 
     @property
@@ -400,6 +401,8 @@ class PageMenuItem(MenuItem):
             icon = 'preferences-system-privacy-symbolic'
         elif name == 'connection':
             icon = 'preferences-system-network-symbolic'
+        elif name == 'advanced':
+            icon = 'preferences-other-symbolic'
         else:
             icon = 'dialog-error-symbolic'
 
@@ -422,6 +425,7 @@ class Account:
             self._settings.add_page(GeneralPage(account))
             self._settings.add_page(ConnectionPage(account))
             self._settings.add_page(PrivacyPage(account))
+            self._settings.add_page(AdvancedPage(account))
 
         self._account_row = AccountRow(account)
         self._menu.add_account(self._account_row)
@@ -480,7 +484,7 @@ class AccountRow(Gtk.ListBoxRow):
 
         self._switch = Gtk.Switch()
         self._switch.set_active(
-            app.config.get_per('accounts', self._account, 'active'))
+            app.settings.get_account_setting(self._account, 'active'))
         self._switch.set_vexpand(False)
 
         if (self._account == app.ZEROCONF_ACC_NAME and
@@ -522,14 +526,14 @@ class AccountRow(Gtk.ListBoxRow):
             app.interface.disable_account(account)
             switch.set_state(state)
 
-        old_state = app.config.get_per('accounts', account, 'active')
+        old_state = app.settings.get_account_setting(account, 'active')
         if old_state == state:
             return Gdk.EVENT_PROPAGATE
 
         if (account in app.connections and
                 not app.connections[account].state.is_disconnected):
             # Connecting or connected
-            NewConfirmationDialog(
+            ConfirmationDialog(
                 _('Disable Account'),
                 _('Account %s is still connected') % account,
                 _('All chat and group chat windows will be closed.'),
@@ -551,14 +555,24 @@ class AccountRow(Gtk.ListBoxRow):
 
 class AddNewAccountPage(Gtk.Box):
     def __init__(self):
-        Gtk.Box.__init__(self, orientation=Gtk.Orientation.VERTICAL)
+        Gtk.Box.__init__(self,
+                         orientation=Gtk.Orientation.VERTICAL,
+                         spacing=18)
         self.set_vexpand(True)
         self.set_hexpand(True)
+        self.set_margin_top(24)
+        pixbuf = Gtk.IconTheme.load_icon_for_scale(
+            Gtk.IconTheme.get_default(),
+            'org.gajim.Gajim-symbolic',
+            100,
+            self.get_scale_factor(),
+            0)
+        self.add(Gtk.Image.new_from_pixbuf(pixbuf))
+
         button = Gtk.Button(label=_('Add Account'))
         button.get_style_context().add_class('suggested-action')
         button.set_action_name('app.add-account')
         button.set_halign(Gtk.Align.CENTER)
-        button.set_valign(Gtk.Align.CENTER)
         self.add(button)
 
 
@@ -581,8 +595,6 @@ class GenericSettingPage(Gtk.Box):
 
         self.pack_end(self.listbox, True, True, 0)
 
-        self.listbox.connect('row-activated', self.on_row_activated)
-
     def connect_signal(self, stack):
         return stack.connect('notify::visible-child',
                              self._on_visible_child_changed)
@@ -590,10 +602,6 @@ class GenericSettingPage(Gtk.Box):
     def _on_visible_child_changed(self, stack, _param):
         if self == stack.get_visible_child():
             self.listbox.update_states()
-
-    @staticmethod
-    def on_row_activated(_listbox, row):
-        row.on_row_activated()
 
 
 class GeneralPage(GenericSettingPage):
@@ -612,6 +620,8 @@ class GeneralPage(GenericSettingPage):
                     desc=_('Recognize your account by color')),
 
             Setting(SettingKind.LOGIN, _('Login'), SettingType.DIALOG,
+                    bind='account::anonymous_auth',
+                    inverted=True,
                     props={'dialog': LoginDialog}),
 
             Setting(SettingKind.ACTION, _('Import Contacts'),
@@ -635,6 +645,11 @@ class GeneralPage(GenericSettingPage):
                     SettingType.ACCOUNT_CONFIG, 'sync_with_global_status',
                     desc=_('Synchronise the status of all accounts')),
 
+            Setting(SettingKind.SWITCH, _('Remember Last Status'),
+                    SettingType.ACCOUNT_CONFIG, 'restore_last_status',
+                    desc=_('Restore status and status message of your '
+                           'last session')),
+
             Setting(SettingKind.SWITCH, _('Use file transfer proxies'),
                     SettingType.ACCOUNT_CONFIG, 'use_ft_proxies'),
         ]
@@ -649,6 +664,23 @@ class PrivacyPage(GenericSettingPage):
     name = 'privacy'
 
     def __init__(self, account):
+        self._account = account
+
+        history_max_age = {
+            -1: _('Forever'),
+            86400: _('1 Day'),
+            604800: _('1 Week'),
+            2629743: _('1 Month'),
+            7889229: _('3 Months'),
+            15778458: _('6 Months'),
+            31556926: _('1 Year'),
+        }
+
+        chatstate_entries = {
+            'all': _('Enabled'),
+            'composing_only': _('Composing Only'),
+            'disabled': _('Disabled'),
+        }
 
         settings = [
             Setting(SettingKind.SWITCH, _('Idle Time'),
@@ -670,8 +702,79 @@ class PrivacyPage(GenericSettingPage):
                     desc=_('Ignore everything from contacts not in your '
                            'Roster')),
 
-            ]
+            Setting(SettingKind.SWITCH, _('Send Message Receipts'),
+                    SettingType.ACCOUNT_CONFIG, 'answer_receipts',
+                    desc=_('Tell your contacts if you received a message')),
+
+            Setting(SettingKind.POPOVER,
+                    _('Send Chatstate'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'send_chatstate_default',
+                    desc=_('Default for chats'),
+                    props={'entries': chatstate_entries,
+                           'button-text': _('Reset'),
+                           'button-tooltip': _('Reset all chats to the '
+                                               'current default value'),
+                           'button-style': 'destructive-action',
+                           'button-callback': self._reset_send_chatstate}),
+
+            Setting(SettingKind.POPOVER,
+                    _('Send Chatstate in Group Chats'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'gc_send_chatstate_default',
+                    desc=_('Default for group chats'),
+                    props={'entries': chatstate_entries,
+                           'button-text': _('Reset'),
+                           'button-tooltip': _('Reset all group chats to the '
+                                               'current default value'),
+                           'button-style': 'destructive-action',
+                           'button-callback': self._reset_gc_send_chatstate}),
+
+            Setting(SettingKind.SWITCH,
+                    _('Send Read Markers'),
+                    SettingType.VALUE,
+                    app.settings.get_account_setting(
+                        account, 'send_marker_default'),
+                    callback=self._send_read_marker,
+                    desc=_('Default for chats and private group chats'),
+                    props={'button-text': _('Reset'),
+                           'button-tooltip': _('Reset all chats to the '
+                                               'current default value'),
+                           'button-style': 'destructive-action',
+                           'button-callback': self._reset_send_read_marker}),
+
+            Setting(SettingKind.POPOVER,
+                    _('Keep Chat History'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'chat_history_max_age',
+                    props={'entries': history_max_age},
+                    desc=_('How long Gajim should keep your chat history')),
+        ]
         GenericSettingPage.__init__(self, account, settings)
+
+    @staticmethod
+    def _reset_send_chatstate(button):
+        button.set_sensitive(False)
+        app.settings.set_contact_settings('send_chatstate', None)
+
+    @staticmethod
+    def _reset_gc_send_chatstate(button):
+        button.set_sensitive(False)
+        app.settings.set_group_chat_settings('send_chatstate', None)
+
+    def _send_read_marker(self, state, _data):
+        app.settings.set_account_setting(
+            self._account, 'send_marker_default', state)
+        app.settings.set_account_setting(
+            self._account, 'gc_send_marker_private_default', state)
+
+    def _reset_send_read_marker(self, button):
+        button.set_sensitive(False)
+        app.settings.set_contact_settings('send_marker', None)
+        app.settings.set_group_chat_settings(
+            'send_marker', None, context='private')
+        for ctrl in app.interface.msg_win_mgr.get_controls(acct=self._account):
+            ctrl.update_actions()
 
 
 class ConnectionPage(GenericSettingPage):
@@ -681,8 +784,12 @@ class ConnectionPage(GenericSettingPage):
     def __init__(self, account):
 
         settings = [
-            Setting(SettingKind.PROXY, _('Proxy'),
-                    SettingType.ACCOUNT_CONFIG, 'proxy', name='proxy'),
+            Setting(SettingKind.POPOVER, _('Proxy'),
+                    SettingType.ACCOUNT_CONFIG, 'proxy', name='proxy',
+                    props={'entries': self._get_proxies(),
+                           'default-text': _('System'),
+                           'button-icon-name': 'preferences-system-symbolic',
+                           'button-callback': self._on_proxy_edit}),
 
             Setting(SettingKind.HOSTNAME, _('Hostname'), SettingType.DIALOG,
                     desc=_('Manually set the hostname for the server'),
@@ -693,8 +800,54 @@ class ConnectionPage(GenericSettingPage):
 
             Setting(SettingKind.PRIORITY, _('Priority'),
                     SettingType.DIALOG, props={'dialog': PriorityDialog}),
-            ]
 
+            Setting(SettingKind.SWITCH, _('Use Unencrypted Connection'),
+                    SettingType.ACCOUNT_CONFIG, 'use_plain_connection',
+                    desc=_('Use an unencrypted connection to the server')),
+
+            Setting(SettingKind.SWITCH, _('Confirm Unencrypted Connection'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'confirm_unencrypted_connection',
+                    desc=_('Show a confirmation dialog before connecting '
+                           'unencrypted')),
+            ]
+        GenericSettingPage.__init__(self, account, settings)
+
+    @staticmethod
+    def _get_proxies():
+        return {proxy: proxy for proxy in app.settings.get_proxies()}
+
+    @staticmethod
+    def _on_proxy_edit(*args):
+        open_window('ManageProxies')
+
+    def update_proxy_entries(self):
+        self.listbox.get_setting('proxy').update_entries(self._get_proxies())
+
+
+class AdvancedPage(GenericSettingPage):
+
+    name = 'advanced'
+
+    def __init__(self, account):
+
+        settings = [
+            Setting(SettingKind.SWITCH, _('Contact Information'),
+                    SettingType.ACCOUNT_CONFIG, 'request_user_data',
+                    desc=_('Request contact information '
+                           '(Mood, Activity, Tune, Location)')),
+
+            Setting(SettingKind.SWITCH, _('Accept all Contact Requests'),
+                    SettingType.ACCOUNT_CONFIG, 'autoauth',
+                    desc=_('Automatically accept all contact requests')),
+
+            Setting(SettingKind.POPOVER, _('Filetransfer Preference'),
+                    SettingType.ACCOUNT_CONFIG, 'filetransfer_preference',
+                    props={'entries': {'httpupload': _('Upload Files'),
+                                       'jingle': _('Send Files Directly')}},
+                    desc=_('Preferred file transfer mechanism for '
+                           'file drag&drop on a chat window'))
+            ]
         GenericSettingPage.__init__(self, account, settings)
 
 
@@ -750,7 +903,7 @@ class ZeroconfProfileDialog(SettingsDialog):
 class PriorityDialog(SettingsDialog):
     def __init__(self, account, parent):
 
-        neg_priority = app.config.get('enable_negative_priority')
+        neg_priority = app.settings.get('enable_negative_priority')
         if neg_priority:
             range_ = (-128, 127)
         else:
@@ -758,12 +911,15 @@ class PriorityDialog(SettingsDialog):
 
         settings = [
             Setting(SettingKind.SWITCH, _('Adjust to status'),
-                    SettingType.ACCOUNT_CONFIG, 'adjust_priority_with_status',
-                    'adjust'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'adjust_priority_with_status'),
 
             Setting(SettingKind.SPIN, _('Priority'),
-                    SettingType.ACCOUNT_CONFIG, 'priority',
-                    enabledif=('adjust', False), props={'range_': range_}),
+                    SettingType.ACCOUNT_CONFIG,
+                    'priority',
+                    bind='account::adjust_priority_with_status',
+                    inverted=True,
+                    props={'range_': range_}),
             ]
 
         SettingsDialog.__init__(self, parent, _('Priority'),
@@ -788,19 +944,19 @@ class CutstomHostnameDialog(SettingsDialog):
         settings = [
             Setting(SettingKind.SWITCH, _('Enable'),
                     SettingType.ACCOUNT_CONFIG,
-                    'use_custom_host', name='custom'),
+                    'use_custom_host'),
 
             Setting(SettingKind.ENTRY, _('Hostname'),
                     SettingType.ACCOUNT_CONFIG, 'custom_host',
-                    enabledif=('custom', True)),
+                    bind='account::use_custom_host'),
 
             Setting(SettingKind.ENTRY, _('Port'),
                     SettingType.ACCOUNT_CONFIG, 'custom_port',
-                    enabledif=('custom', True)),
+                    bind='account::use_custom_host'),
 
             Setting(SettingKind.COMBO, _('Type'),
                     SettingType.ACCOUNT_CONFIG, 'custom_type',
-                    enabledif=('custom', True),
+                    bind='account::use_custom_host',
                     props={'combo_items': type_values}),
             ]
 
@@ -829,11 +985,11 @@ class LoginDialog(SettingsDialog):
 
         settings = [
             Setting(SettingKind.ENTRY, _('Password'),
-                    SettingType.ACCOUNT_CONFIG, 'password', name='password',
-                    enabledif=('savepass', True)),
+                    SettingType.ACCOUNT_CONFIG, 'password',
+                    bind='account::savepass'),
 
             Setting(SettingKind.SWITCH, _('Save Password'),
-                    SettingType.ACCOUNT_CONFIG, 'savepass', name='savepass'),
+                    SettingType.ACCOUNT_CONFIG, 'savepass'),
 
             Setting(SettingKind.CHANGEPASSWORD, _('Change Password'),
                     SettingType.DIALOG, callback=self.on_password_change,
@@ -849,6 +1005,6 @@ class LoginDialog(SettingsDialog):
         passwords.save_password(self.account, new_password)
 
     def on_destroy(self, *args):
-        savepass = app.config.get_per('accounts', self.account, 'savepass')
+        savepass = app.settings.get_account_setting(self.account, 'savepass')
         if not savepass:
             passwords.delete_password(self.account)

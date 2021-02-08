@@ -28,7 +28,6 @@ from gajim.common.helpers import should_log
 from gajim.common.const import KindConstant
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import get_eme_message
-from gajim.common.modules.security_labels import parse_securitylabel
 from gajim.common.modules.misc import parse_correction
 from gajim.common.modules.misc import parse_oob
 from gajim.common.modules.misc import parse_xhtml
@@ -62,16 +61,15 @@ class Message(BaseModule):
                 properties.is_mam_message):
             return
 
-        if self._con.get_own_jid().getDomain() == str(properties.jid):
+        if self._con.get_own_jid().domain == str(properties.jid):
             # Server message
             return
 
-        if not app.config.get_per('accounts',
-                                  self._account,
-                                  'ignore_unknown_contacts'):
+        if not app.settings.get_account_setting(self._account,
+                                                'ignore_unknown_contacts'):
             return
 
-        jid = properties.jid.getBare()
+        jid = properties.jid.bare
         if self._con.get_module('Roster').get_item(jid) is None:
             self._log.warning('Ignore message from unknown contact: %s', jid)
             self._log.warning(stanza)
@@ -104,8 +102,8 @@ class Message(BaseModule):
 
         from_ = stanza.getFrom()
         fjid = str(from_)
-        jid = from_.getBare()
-        resource = from_.getResource()
+        jid = from_.bare
+        resource = from_.resource
 
         type_ = properties.type
 
@@ -115,20 +113,22 @@ class Message(BaseModule):
             # Only for XEP-0045 MUC History
             # Don’t check for message text because the message could be
             # encrypted.
-            if app.logger.deduplicate_muc_message(self._account,
-                                                  properties.jid.getBare(),
-                                                  properties.jid.getResource(),
-                                                  properties.timestamp,
-                                                  properties.id):
+            if app.storage.archive.deduplicate_muc_message(
+                    self._account,
+                    properties.jid.bare,
+                    properties.jid.resource,
+                    properties.timestamp,
+                    properties.id):
                 raise nbxmpp.NodeProcessed
 
         if (properties.is_self_message or properties.is_muc_pm):
-            archive_jid = self._con.get_own_jid().getStripped()
-            if app.logger.find_stanza_id(self._account,
-                                         archive_jid,
-                                         stanza_id,
-                                         message_id,
-                                         properties.type.is_groupchat):
+            archive_jid = self._con.get_own_jid().bare
+            if app.storage.archive.find_stanza_id(
+                    self._account,
+                    archive_jid,
+                    stanza_id,
+                    message_id,
+                    properties.type.is_groupchat):
                 return
 
         msgtxt = properties.body
@@ -177,6 +177,10 @@ class Message(BaseModule):
             if properties.eme is not None:
                 msgtxt = get_eme_message(properties.eme)
 
+        displaymarking = None
+        if properties.has_security_label:
+            displaymarking = properties.security_label.displaymarking
+
         event_attr = {
             'conn': self._con,
             'stanza': stanza,
@@ -194,7 +198,7 @@ class Message(BaseModule):
             'gc_control': gc_control,
             'popup': False,
             'msg_log_id': None,
-            'displaymarking': parse_securitylabel(stanza),
+            'displaymarking': displaymarking,
             'properties': properties,
         }
 
@@ -215,16 +219,17 @@ class Message(BaseModule):
             NetworkEvent('decrypted-message-received', **event_attr))
 
     def _message_error_received(self, _con, _stanza, properties):
-        jid = properties.jid.copy()
+        jid = properties.jid
         if not properties.is_muc_pm:
-            jid.setBare()
+            jid = jid.new_as_bare()
 
         self._log.info(properties.error)
 
-        app.logger.set_message_error(app.get_jid_from_account(self._account),
-                                     jid,
-                                     properties.id,
-                                     properties.error)
+        app.storage.archive.set_message_error(
+            app.get_jid_from_account(self._account),
+            jid,
+            properties.id,
+            properties.error)
 
         app.nec.push_incoming_event(
             NetworkEvent('message-error',
@@ -242,7 +247,7 @@ class Message(BaseModule):
             # if not event.nick, it means message comes from room itself
             # usually it hold description and can be send at each connection
             # so don't store it in logs
-            app.logger.insert_into_logs(
+            app.storage.archive.insert_into_logs(
                 self._account,
                 event.jid,
                 event.properties.timestamp,
@@ -254,7 +259,7 @@ class Message(BaseModule):
                 message_id=event.properties.id)
 
     def _check_for_mam_compliance(self, room_jid, stanza_id):
-        disco_info = app.logger.get_last_disco_info(room_jid)
+        disco_info = app.storage.cache.get_last_disco_info(room_jid)
         if stanza_id is None and disco_info.mam_namespace == Namespace.MAM_2:
             self._log.warning('%s announces mam:2 without stanza-id', room_jid)
 
@@ -267,8 +272,8 @@ class Message(BaseModule):
             return None, None
 
         if properties.type.is_groupchat:
-            disco_info = app.logger.get_last_disco_info(
-                properties.jid.getBare())
+            disco_info = app.storage.cache.get_last_disco_info(
+                properties.jid.bare)
 
             if disco_info.mam_namespace != Namespace.MAM_2:
                 return None, None
@@ -280,7 +285,7 @@ class Message(BaseModule):
 
             archive = self._con.get_own_jid()
 
-        if archive.bareMatch(properties.stanza_id.by):
+        if archive.bare_match(properties.stanza_id.by):
             return properties.stanza_id.id, None
         # stanza-id not added by the archive, ignore it.
         return None, None
@@ -304,7 +309,7 @@ class Message(BaseModule):
         stanza.setOriginID(message.message_id)
 
         if message.label:
-            stanza.addChild(node=message.label)
+            stanza.addChild(node=message.label.to_node())
 
         # XEP-0172: user_nickname
         if message.user_nick:
@@ -330,7 +335,7 @@ class Message(BaseModule):
             oob.addChild('url').setData(message.oob_url)
 
         # XEP-0184
-        if not own_jid.bareMatch(message.jid):
+        if not own_jid.bare_match(message.jid):
             if message.message and not message.is_groupchat:
                 stanza.setReceiptRequest()
 
@@ -344,6 +349,13 @@ class Message(BaseModule):
             if not message.message:
                 stanza.setTag('no-store',
                               namespace=Namespace.MSG_HINTS)
+
+        # XEP-0333
+        if message.message:
+            stanza.setMarkable()
+        if message.marker:
+            marker, id_ = message.marker
+            stanza.setMarker(marker, id_)
 
         # Add other nodes
         if message.nodes is not None:
@@ -362,15 +374,16 @@ class Message(BaseModule):
         if message.message is None:
             return
 
-        app.logger.insert_into_logs(self._account,
-                                    message.jid,
-                                    message.timestamp,
-                                    message.kind,
-                                    message=message.message,
-                                    subject=message.subject,
-                                    additional_data=message.additional_data,
-                                    message_id=message.message_id,
-                                    stanza_id=message.message_id)
+        app.storage.archive.insert_into_logs(
+            self._account,
+            message.jid,
+            message.timestamp,
+            message.kind,
+            message=message.message,
+            subject=message.subject,
+            additional_data=message.additional_data,
+            message_id=message.message_id,
+            stanza_id=message.message_id)
 
 
 def get_instance(*args, **kwargs):

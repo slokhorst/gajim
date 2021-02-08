@@ -17,7 +17,7 @@ from collections import namedtuple
 from datetime import timedelta
 
 import nbxmpp
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import StanzaError
 from nbxmpp.namespaces import Namespace
 from gi.repository import Gtk
 from gi.repository import Gdk
@@ -28,12 +28,11 @@ from gajim.common import ged
 from gajim.common.helpers import open_uri
 from gajim.common.i18n import _
 
-from gajim.gtk.util import ensure_not_destroyed
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import EventHelper
-from gajim.gtk.util import open_window
+from .util import get_builder
+from .util import EventHelper
+from .util import open_window
 
-log = logging.getLogger('gajim.gtk.server_info')
+log = logging.getLogger('gajim.gui.server_info')
 
 
 class ServerInfo(Gtk.ApplicationWindow, EventHelper):
@@ -46,6 +45,7 @@ class ServerInfo(Gtk.ApplicationWindow, EventHelper):
         self.set_default_size(400, 600)
         self.set_show_menubar(False)
         self.set_title(_('Server Info'))
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
 
         self.account = account
         self._destroyed = False
@@ -91,24 +91,37 @@ class ServerInfo(Gtk.ApplicationWindow, EventHelper):
 
     def _add_connection_info(self):
         # Connection type
-        client = app.connections[self.account].connection
-        con_type = client.current_connection_type
-        self._ui.connection_type.set_text(con_type.value)
-        if con_type.is_plain:
-            self._ui.conection_type.get_style_context().add_class(
-                'error-color')
+        nbxmpp_client = app.connections[self.account].connection
+        address = nbxmpp_client.current_address
 
-        is_websocket = app.connections[self.account].connection.is_websocket
-        protocol = 'WebSocket' if is_websocket else 'TCP'
-        self._ui.connection_protocol.set_text(protocol)
+        self._ui.connection_type.set_text(address.type.value)
+        if address.type.is_plain:
+            self._ui.conection_type.get_style_context().add_class('error-color')
 
         # Connection proxy
-        proxy = client.proxy
+        proxy = address.proxy
         if proxy is not None:
             self._ui.proxy_type.set_text(proxy.type)
             self._ui.proxy_host.set_text(proxy.host)
 
         self._ui.cert_button.set_sensitive(self.cert)
+
+        self._ui.domain.set_text(address.domain)
+
+        visible = address.service is not None
+        self._ui.dns_label.set_visible(visible)
+        self._ui.dns.set_visible(visible)
+        self._ui.dns.set_text(address.service or '')
+
+        visible = nbxmpp_client.remote_address is not None
+        self._ui.ip_port_label.set_visible(visible)
+        self._ui.ip_port.set_visible(visible)
+        self._ui.ip_port.set_text(nbxmpp_client.remote_address or '')
+
+        visible = address.uri is not None
+        self._ui.websocket_label.set_visible(visible)
+        self._ui.websocket.set_visible(visible)
+        self._ui.websocket.set_text(address.uri or '')
 
     def _on_cert_button_clicked(self, _button):
         open_window('CertificateDialog',
@@ -219,12 +232,14 @@ class ServerInfo(Gtk.ApplicationWindow, EventHelper):
                 'days': delta.days, 'hours': hours}
             self._ui.server_uptime.set_text(uptime)
 
-    @ensure_not_destroyed
-    def _software_version_received(self, result):
-        if is_error_result(result):
+    def _software_version_received(self, task):
+        try:
+            result = task.finish()
+        except StanzaError:
             self.version = _('Unknown')
         else:
             self.version = '%s %s' % (result.name, result.version)
+
         self._ui.server_software.set_text(self.version)
 
     @staticmethod
@@ -285,9 +300,13 @@ class ServerInfo(Gtk.ApplicationWindow, EventHelper):
                     con.get_module('HTTPUpload').available,
                     http_upload_info),
             Feature('XEP-0398: Avatar Conversion',
-                    con.avatar_conversion),
+                    con.get_module('VCardAvatars').avatar_conversion_available),
             Feature('XEP-0411: Bookmarks Conversion',
-                    con.get_module('Bookmarks').conversion)
+                    con.get_module('Bookmarks').conversion),
+            Feature('XEP-0402: Bookmarks Compat',
+                    con.get_module('Bookmarks').compat),
+            Feature('XEP-0402: Bookmarks Compat PEP',
+                    con.get_module('Bookmarks').compat_pep)
         ]
 
     def _on_clipboard_button_clicked(self, _widget):

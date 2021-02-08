@@ -17,8 +17,8 @@ from gi.repository import Gtk
 from gi.repository import Gio
 from gi.repository import GObject
 
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import EventHelper
+from .util import get_builder
+from .util import EventHelper
 
 
 class Assistant(Gtk.ApplicationWindow, EventHelper):
@@ -49,6 +49,7 @@ class Assistant(Gtk.ApplicationWindow, EventHelper):
         self.set_default_size(width, height)
         self.set_resizable(True)
         self.set_transient_for(transient_for)
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
 
         self._pages = {}
         self._buttons = {}

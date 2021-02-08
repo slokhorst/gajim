@@ -14,30 +14,32 @@
 
 import locale
 from enum import IntEnum
-from functools import partial
 
 from gi.repository import Gdk
 from gi.repository import Gtk
 from gi.repository import GLib
 from gi.repository import Pango
 
-from nbxmpp.util import is_error_result
+from nbxmpp.errors import is_error
+from nbxmpp.errors import StanzaError
+from nbxmpp.errors import CancelledError
 
 from gajim.common import app
 from gajim.common.helpers import validate_jid
 from gajim.common.helpers import to_user_string
 from gajim.common.helpers import get_groupchat_name
-from gajim.common.helpers import get_alternative_venue
+from gajim.common.helpers import get_group_chat_nick
 from gajim.common.i18n import _
 from gajim.common.i18n import get_rfc5646_lang
 from gajim.common.const import AvatarSize
 from gajim.common.const import MUC_DISCO_ERRORS
+from gajim.common.modules.util import as_task
 
-from gajim.gtk.groupchat_info import GroupChatInfoScrolled
-from gajim.gtk.util import get_builder
-from gajim.gtk.util import ensure_not_destroyed
-from gajim.gtk.util import get_icon_name
-from gajim.gtk.util import generate_account_badge
+from .groupchat_info import GroupChatInfoScrolled
+from .groupchat_nick import NickChooser
+from .util import get_builder
+from .util import get_icon_name
+from .util import generate_account_badge
 
 
 class Search(IntEnum):
@@ -53,7 +55,8 @@ class StartChatDialog(Gtk.ApplicationWindow):
         self.set_position(Gtk.WindowPosition.CENTER)
         self.set_show_menubar(False)
         self.set_title(_('Start / Join Chat'))
-        self.set_default_size(-1, 400)
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        self.set_default_size(-1, 600)
         self.ready_to_destroy = False
         self._parameter_form = None
         self._keywords = []
@@ -64,6 +67,9 @@ class StartChatDialog(Gtk.ApplicationWindow):
 
         self._ui = get_builder('start_chat_dialog.ui')
         self.add(self._ui.stack)
+
+        self._nick_chooser = NickChooser()
+        self._ui.join_box.pack_start(self._nick_chooser, True, False, 0)
 
         self.new_contact_row_visible = False
         self.new_contact_rows = {}
@@ -96,7 +102,7 @@ class StartChatDialog(Gtk.ApplicationWindow):
         self._muc_info_box = GroupChatInfoScrolled()
         self._ui.info_box.add(self._muc_info_box)
 
-        self._ui.infobar.set_revealed(app.config.get('show_help_start_chat'))
+        self._ui.infobar.set_revealed(app.settings.get('show_help_start_chat'))
 
         self.connect('key-press-event', self._on_key_press)
         self.connect('destroy', self._destroy)
@@ -264,7 +270,7 @@ class StartChatDialog(Gtk.ApplicationWindow):
     def _on_infobar_response(self, _widget, response):
         if response == Gtk.ResponseType.CLOSE:
             self._ui.infobar.set_revealed(False)
-            app.config.set('show_help_start_chat', False)
+            app.settings.set('show_help_start_chat', False)
 
     def _start_new_chat(self, row):
         if row.new:
@@ -286,32 +292,36 @@ class StartChatDialog(Gtk.ApplicationWindow):
 
             self.ready_to_destroy = False
             self._redirected = False
-            self._disco_muc(row.account, row.jid)
+            self._disco_muc(row.account, row.jid, request_vcard=row.new)
 
         else:
             app.interface.new_chat_from_jid(row.account, row.jid)
             self.ready_to_destroy = True
 
-    def _disco_muc(self, account, jid):
+    def _disco_muc(self, account, jid, request_vcard):
         self._ui.stack.set_visible_child_name('progress')
         con = app.connections[account]
         con.get_module('Discovery').disco_muc(
-            jid, callback=partial(self._disco_info_received, account))
+            jid,
+            request_vcard=request_vcard,
+            allow_redirect=True,
+            callback=self._disco_info_received,
+            user_data=account)
 
-    @ensure_not_destroyed
-    def _disco_info_received(self, account, result):
-        if is_error_result(result):
-            jid = get_alternative_venue(result)
-            if jid is None or self._redirected:
-                self._set_error(result)
-                return
+    def _disco_info_received(self, task):
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            self._set_error(error)
+            return
 
-            self._redirected = True
-            self._disco_muc(account, jid)
+        account = task.get_user_data()
 
-        elif result.is_muc:
+        if result.info.is_muc:
             self._muc_info_box.set_account(account)
-            self._muc_info_box.set_from_disco_info(result)
+            self._muc_info_box.set_from_disco_info(result.info)
+            self._nick_chooser.set_text(get_group_chat_nick(
+                account, result.info.jid))
             self._ui.stack.set_visible_child_name('info')
 
         else:
@@ -335,7 +345,9 @@ class StartChatDialog(Gtk.ApplicationWindow):
     def _on_join_clicked(self, _button=None):
         account = self._muc_info_box.get_account()
         jid = self._muc_info_box.get_jid()
-        app.interface.show_or_join_groupchat(account, str(jid))
+        nickname = self._nick_chooser.get_text()
+        app.interface.show_or_join_groupchat(
+            account, str(jid), nick=nickname)
         self.ready_to_destroy = True
 
     def _on_back_clicked(self, _button=None):
@@ -360,7 +372,7 @@ class StartChatDialog(Gtk.ApplicationWindow):
             return
 
         self._redirected = False
-        self._disco_muc(account, selected_row.jid)
+        self._disco_muc(account, selected_row.jid, request_vcard=True)
 
     def _set_listbox(self, listbox):
         if self._current_listbox == listbox:
@@ -510,90 +522,84 @@ class StartChatDialog(Gtk.ApplicationWindow):
         text = self._ui.search_entry.get_text().strip()
         self._global_search_listbox.start_search()
 
-        if app.config.get('muclumbus_api_pref') == 'http':
+        if app.settings.get('muclumbus_api_pref') == 'http':
             self._start_http_search(con, text)
         else:
             self._start_iq_search(con, text)
 
+    @as_task
     def _start_iq_search(self, con, text):
+        _task = yield
+
         if self._parameter_form is None:
-            con.get_module('Muclumbus').request_parameters(
-                app.config.get('muclumbus_api_jid'),
-                callback=self._parameters_received,
-                user_data=(con, text))
-        else:
-            self._parameter_form.vars['q'].value = text
+            result = yield con.get_module('Muclumbus').request_parameters(
+                app.settings.get('muclumbus_api_jid'))
 
-            con.get_module('Muclumbus').set_search(
-                app.config.get('muclumbus_api_jid'),
+            self._process_search_result(result, parameters=True)
+
+            self._parameter_form = result
+            self._parameter_form.type_ = 'submit'
+
+        self._parameter_form.vars['q'].value = text
+
+        result = yield con.get_module('Muclumbus').set_search(
+            app.settings.get('muclumbus_api_jid'),
+            self._parameter_form)
+
+        self._process_search_result(result)
+
+        while not result.end:
+            result = yield con.get_module('Muclumbus').set_search(
+                app.settings.get('muclumbus_api_jid'),
                 self._parameter_form,
-                callback=self._on_search_result,
-                user_data=(con, False))
+                items_per_page=result.max,
+                after=result.last)
 
+            self._process_search_result(result)
+
+        self._global_search_listbox.end_search()
+
+    @as_task
     def _start_http_search(self, con, text):
+        _task = yield
+
         self._keywords = text.split(' ')
-        con.get_module('Muclumbus').set_http_search(
-            app.config.get('muclumbus_api_http_uri'),
-            self._keywords,
-            callback=self._on_search_result,
-            user_data=(con, True))
+        result = yield con.get_module('Muclumbus').set_http_search(
+            app.settings.get('muclumbus_api_http_uri'),
+            self._keywords)
 
-    @ensure_not_destroyed
-    def _parameters_received(self, result, user_data):
-        if is_error_result(result):
-            self._global_search_listbox.remove_progress()
-            self._show_error_page(to_user_string(result))
-            return
+        self._process_search_result(result)
 
-        con, text = user_data
-        self._parameter_form = result
-        self._parameter_form.type_ = 'submit'
-        self._start_iq_search(con, text)
+        while not result.end:
+            result = yield con.get_module('Muclumbus').set_http_search(
+                app.settings.get('muclumbus_api_http_uri'),
+                self._keywords,
+                after=result.last)
 
-    @ensure_not_destroyed
-    def _on_search_result(self, result, user_data):
+            self._process_search_result(result)
+
+        self._global_search_listbox.end_search()
+
+    def _process_search_result(self, result, parameters=False):
         if self._search_stopped:
-            return
+            raise CancelledError()
 
-        if is_error_result(result):
+        if is_error(result):
             self._global_search_listbox.remove_progress()
             self._show_error_page(to_user_string(result))
+            raise result
+
+        if parameters:
             return
 
         for item in result.items:
             self._global_search_listbox.add(ResultRow(item))
 
-        if result.end:
-            self._global_search_listbox.end_search()
-            return
-
-        con, http = user_data
-        if http:
-            self._continue_http_search(result, con)
-        else:
-            self._continue_iq_search(result, con)
-
-    def _continue_iq_search(self, result, con):
-        con.get_module('Muclumbus').set_search(
-            app.config.get('muclumbus_api_jid'),
-            self._parameter_form,
-            items_per_page=result.max,
-            after=result.last,
-            callback=self._on_search_result,
-            user_data=(con, False))
-
-    def _continue_http_search(self, result, con):
-        con.get_module('Muclumbus').set_http_search(
-            app.config.get('muclumbus_api_http_uri'),
-            self._keywords,
-            after=result.last,
-            callback=self._on_search_result,
-            user_data=(con, True))
-
     def _destroy(self, *args):
         if self._source_id is not None:
             GLib.source_remove(self._source_id)
         self._destroyed = True
+        app.cancel_tasks(self)
 
 
 class ContactRow(Gtk.ListBoxRow):
@@ -640,7 +646,7 @@ class ContactRow(Gtk.ListBoxRow):
         if show_account:
             account_badge = generate_account_badge(account)
             account_badge.set_tooltip_text(
-                _('Account: %s' % self.account_label))
+                _('Account: %s') % self.account_label)
             account_badge.set_halign(Gtk.Align.END)
             account_badge.set_valign(Gtk.Align.START)
             account_badge.set_hexpand(True)
