@@ -178,6 +178,16 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         self.conv_textview.tv.connect('key-press-event',
                                       self._on_conv_textview_key_press_event)
 
+        # This is a workaround: as soon as a line break occurs in Gtk.TextView
+        # with word-char wrapping enabled, a hyphen character is automatically
+        # inserted before the line break. This triggers the hscrollbar to show,
+        # see: https://gitlab.gnome.org/GNOME/gtk/-/issues/2384
+        # Using set_hscroll_policy(Gtk.Scrollable.Policy.NEVER) would cause bad
+        # performance during resize, and prevent the window from being shrunk
+        # horizontally under certain conditions (applies to GroupchatControl)
+        hscrollbar = self.xml.conversation_scrolledwindow.get_hscrollbar()
+        hscrollbar.hide()
+
         self.xml.conversation_scrolledwindow.add(self.conv_textview.tv)
         widget = self.xml.conversation_scrolledwindow.get_vadjustment()
         widget.connect('changed', self.on_conversation_vadjustment_changed)
@@ -193,8 +203,8 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                                   self._on_message_textview_key_press_event)
         self.msg_textview.connect('populate-popup',
                                   self.on_msg_textview_populate_popup)
-        self.msg_textview.connect('text-changed',
-                                  self._on_message_tv_buffer_changed)
+        self.msg_textview.get_buffer().connect(
+            'changed', self._on_message_tv_buffer_changed)
 
         # Send message button
         self.xml.send_message_button.set_action_name(
@@ -207,6 +217,10 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             'set_visible')
 
         self.msg_scrolledwindow = ScrolledWindow()
+        self.msg_scrolledwindow.set_margin_start(3)
+        self.msg_scrolledwindow.set_margin_end(3)
+        self.msg_scrolledwindow.get_style_context().add_class(
+            'message-input-border')
         self.msg_scrolledwindow.add(self.msg_textview)
 
         self.xml.hbox.pack_start(self.msg_scrolledwindow, True, True, 0)
@@ -732,7 +746,6 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
         menu.show_all()
 
     def insert_as_quote(self, text: str) -> None:
-        self.msg_textview.remove_placeholder()
         text = '> ' + text.replace('\n', '\n> ') + '\n'
         message_buffer = self.msg_textview.get_buffer()
         message_buffer.insert_at_cursor(text)
@@ -1050,7 +1063,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
             con.get_module('Chatstate').set_mouse_activity(
                 self.contact, self.msg_textview.has_text())
 
-    def _on_message_tv_buffer_changed(self, textview, textbuffer):
+    def _on_message_tv_buffer_changed(self, textbuffer):
         has_text = self.msg_textview.has_text()
         if self.parent_win is not None:
             self.parent_win.window.lookup_action(
@@ -1062,7 +1075,7 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
 
         con = app.connections[self.account]
         con.get_module('Chatstate').set_keyboard_activity(self.contact)
-        if not textview.has_text():
+        if not has_text:
             con.get_module('Chatstate').set_chatstate_delayed(self.contact,
                                                               Chatstate.ACTIVE)
             return
@@ -1275,7 +1288,6 @@ class ChatControlBase(ChatCommandProcessor, CommandTools, EventHelper):
                                           self._on_emoticon_button_clicked)
 
     def _on_emoticon_button_clicked(self, _widget):
-        self.msg_textview.remove_placeholder()
         # Present GTK emoji chooser (not cross platform compatible)
         self.msg_textview.emit('insert-emoji')
         self.xml.emoticons_button.set_property('active', False)

@@ -41,7 +41,6 @@ APP_SETTINGS = {
     'speller_language': '',
     'print_time': 'always',
     'emoticons_theme': 'noto-emoticons',
-    'ascii_emoticons': True,
     'ascii_formatting': True,
     'show_ascii_formatting_chars': True,
     'sounds_on': True,
@@ -258,6 +257,7 @@ ACCOUNT_SETTINGS = {
         'gc_send_marker_private_default': True,
         'gc_send_marker_public_default': False,
         'chat_history_max_age': -1,
+        'enable_gssapi': False,
     },
 
     'contact': {

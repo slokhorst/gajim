@@ -17,6 +17,7 @@ from gajim.common.i18n import Q_
 
 from gajim.gui.avatar import clip_circle
 from gajim.gui.avatar_selector import AvatarSelector
+from gajim.gui.dialogs import ErrorDialog
 from gajim.gui.filechoosers import AvatarChooserDialog
 from gajim.gui.util import get_builder
 from gajim.gui.vcard_grid import VCardGrid
@@ -25,12 +26,12 @@ from gajim.gui.util import scroll_to_end
 log = logging.getLogger('gajim.gui.profile')
 
 MENU_DICT = {
-    'fn': _('Full Name'),
+    'fn': Q_('?profile:Full Name'),
     'bday': _('Birthday'),
-    'gender': _('Gender'),
-    'adr': _('Address'),
+    'gender': Q_('?profile:Gender'),
+    'adr': Q_('?profile:Address'),
     'email': _('Email'),
-    'impp': 'IM Address',
+    'impp': Q_('?profile:IM Address'),
     'tel': _('Phone No.'),
     'org': Q_('?profile:Organisation'),
     'title': Q_('?profile:Title'),
@@ -235,8 +236,10 @@ class ProfileWindow(Gtk.ApplicationWindow):
 
         else:
             # Only update avatar if it changed
-            con.get_module('UserAvatar').set_avatar(self._new_avatar,
-                                                    public=public)
+            con.get_module('UserAvatar').set_avatar(
+                self._new_avatar,
+                public=public,
+                callback=self._on_set_avatar)
 
         nick = GLib.markup_escape_text(self._ui.nickname_entry.get_text())
         con.get_module('UserNickname').set_nickname(nick, public=public)
@@ -245,6 +248,28 @@ class ProfileWindow(Gtk.ApplicationWindow):
             nick = app.settings.get_account_setting(
                 self.account, 'name')
         app.nicks[self.account] = nick
+
+    def _on_set_avatar(self, task):
+        try:
+            task.finish()
+        except StanzaError as error:
+            if self._new_avatar is None:
+                # Trying to remove the avatar but the node does not exist
+                if error.condition == 'item-not-found':
+                    return
+
+            title = _('Error while uploading avatar')
+            text = error.get_text()
+
+            if (error.condition == 'not-acceptable' and
+                    error.app_condition == 'payload-too-big'):
+                text = _('Avatar file size too big')
+
+            ErrorDialog(title, text)
+
+            self._ui.avatar_image.set_from_surface(self._current_avatar)
+            self._new_avatar = False
+            return
 
     def _on_remove_avatar(self, _button):
         contact = app.contacts.create_contact(self._jid, self.account)
@@ -276,12 +301,16 @@ class ProfileWindow(Gtk.ApplicationWindow):
     def _on_update_avatar(self, _button):
         success, data, width, height = self._avatar_selector.get_avatar_bytes()
         if not success:
-            # TODO: Error handling
+            self._ui.profile_stack.set_visible_child_name('profile')
+            ErrorDialog(_('Error while processing image'),
+                        _('Failed to generate avatar.'))
             return
 
         sha = app.interface.avatar_storage.save_avatar(data)
         if sha is None:
-            # TODO: Error handling
+            self._ui.profile_stack.set_visible_child_name('profile')
+            ErrorDialog(_('Error while processing image'),
+                        _('Failed to generate avatar.'))
             return
 
         self._new_avatar = Avatar()

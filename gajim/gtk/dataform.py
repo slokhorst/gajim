@@ -27,6 +27,7 @@ from gajim.common.helpers import open_uri
 
 from .util import MultiLineLabel
 from .util import MaxWidthComboBoxText
+from .util import make_href_markup
 
 
 # Options
@@ -219,7 +220,8 @@ class Title:
 
 class Instructions:
     def __init__(self, instructions):
-        self._label = Gtk.Label(label=instructions)
+        self._label = Gtk.Label()
+        self._label.set_markup(make_href_markup(instructions))
         self._label.set_line_wrap(True)
         self._label.set_line_wrap_mode(Pango.WrapMode.WORD)
         self._label.set_justify(Gtk.Justification.CENTER)
@@ -329,7 +331,7 @@ class FixedField(Field):
     def __init__(self, field, form_grid, options):
         Field.__init__(self, field, form_grid, options)
 
-        self._label.set_text(field.value)
+        self._label.set_markup(make_href_markup(field.value))
 
         # If the value is more than 40 chars it proabably isn’t
         # meant as a section header

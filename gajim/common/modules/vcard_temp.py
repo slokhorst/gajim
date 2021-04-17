@@ -16,8 +16,6 @@
 
 from nbxmpp.namespaces import Namespace
 
-from gajim.common import app
-from gajim.common.nec import NetworkEvent
 from gajim.common.modules.base import BaseModule
 
 
@@ -41,10 +39,6 @@ class VCardTemp(BaseModule):
 
         self.supported = True
         self._log.info('Discovered vcard-temp: %s', info.jid)
-
-        app.nec.push_incoming_event(NetworkEvent('feature-discovered',
-                                                 account=self._account,
-                                                 feature=Namespace.VCARD))
 
 
 def get_instance(*args, **kwargs):

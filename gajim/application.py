@@ -34,9 +34,7 @@
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
 import os
-import time
 import sys
-from datetime import datetime
 from urllib.parse import unquote
 
 from nbxmpp.namespaces import Namespace
@@ -358,14 +356,7 @@ class GajimApplication(Gtk.Application):
         if options.contains('gdebug'):
             os.environ['G_MESSAGES_DEBUG'] = 'all'
 
-        if app.get_debug_mode():
-            # Redirect has to happen before logging init
-            self._cleanup_debug_logs()
-            self._redirect_output()
-            logging_helpers.init()
-            logging_helpers.set_verbose()
-        else:
-            logging_helpers.init()
+        logging_helpers.init()
 
         if options.contains('quiet'):
             logging_helpers.set_quiet()
@@ -392,24 +383,6 @@ class GajimApplication(Gtk.Application):
 
         warnings.showwarning = warn_with_traceback
         warnings.filterwarnings(action="always")
-
-    @staticmethod
-    def _redirect_output():
-        debug_folder = configpaths.get('DEBUG')
-        date = datetime.today().strftime('%d%m%Y-%H%M%S')
-        filename = '%s-debug.log' % date
-        fd = open(debug_folder / filename, 'a')
-        sys.stderr = sys.stdout = fd
-
-    @staticmethod
-    def _cleanup_debug_logs():
-        debug_folder = configpaths.get('DEBUG')
-        debug_files = list(debug_folder.glob('*-debug.log*'))
-        now = time.time()
-        for file in debug_files:
-            # Delete everything older than 3 days
-            if file.stat().st_ctime < now - 259200:
-                file.unlink()
 
     def add_actions(self):
         ''' Build Application Actions '''
@@ -485,7 +458,7 @@ class GajimApplication(Gtk.Application):
             ('-start-chat', a.start_chat, 'online', 'as'),
             ('-add-contact', a.on_add_contact, 'online', 'as'),
             ('-services', a.on_service_disco, 'online', 's'),
-            ('-profile', a.on_profile, 'feature', 's'),
+            ('-profile', a.on_profile, 'online', 's'),
             ('-server-info', a.on_server_info, 'online', 's'),
             ('-archive', a.on_mam_preferences, 'feature', 's'),
             ('-pep-config', a.on_pep_config, 'online', 's'),
@@ -581,10 +554,7 @@ class GajimApplication(Gtk.Application):
             self.set_accels_for_action(action, accels)
 
     def _on_feature_discovered(self, event):
-        if event.feature == Namespace.VCARD:
-            action = '%s-profile' % event.account
-            self.lookup_action(action).set_enabled(True)
-        elif event.feature == Namespace.MAM_2:
+        if event.feature == Namespace.MAM_2:
             action = '%s-archive' % event.account
             self.lookup_action(action).set_enabled(True)
         elif event.feature == Namespace.BLOCKING:
