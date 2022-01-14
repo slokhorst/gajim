@@ -12,7 +12,7 @@ jobs:
     - name: Install dependencies
       run: |
         brew install python
-        brew install gettext git gtk+3 libsoup librsvg pygobject3 adwaita-icon-theme gtksourceview
+        brew install gettext git gtk+3 libsoup librsvg pygobject3 adwaita-icon-theme gtksourceviewmm3
         pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
         pip3 install git+https://github.com/pyinstaller/pyinstaller.git@develop
         pip3 install git+https://dev.gajim.org/sebastiaanlokhorst/python-nbxmpp.git@libsoup3
