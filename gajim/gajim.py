@@ -28,7 +28,7 @@ import gajim.gui
 from gajim.common import i18n
 
 
-_MIN_NBXMPP_VER = '2.0.1'
+_MIN_NBXMPP_VER = '2.99.0'
 _MIN_GTK_VER = '3.22.27'
 _MIN_CAIRO_VER = '1.16.0'
 _MIN_PYGOBJECT_VER = '3.32.0'
@@ -58,6 +58,7 @@ def _check_required_deps():
         gi.require_versions({'GLib': '2.0',
                              'Gio': '2.0',
                              'Gtk': '3.0',
+                             'GtkSource': '4',
                              'GObject': '2.0',
                              'Pango': '1.0',
                              'Soup': '2.4'})
@@ -113,9 +114,9 @@ def _init_gtk():
 
 
 def _run_app():
-    from gajim.application import GajimApplication
+    from gajim.gui.application import GajimApplication
     application = GajimApplication()
-    _install_sginal_handlers(application)
+    _install_signal_handlers(application)
     application.run(sys.argv)
 
 
@@ -137,9 +138,9 @@ def _set_proc_title():
             libc.setproctitle('gajim')
 
 
-def _install_sginal_handlers(application):
+def _install_signal_handlers(application):
     def sigint_cb(num, stack):
-        print('SIGINT/SIGTERM received')
+        print(' SIGINT/SIGTERM received')
         application.quit()
     # ^C exits the application normally
     signal.signal(signal.SIGINT, sigint_cb)

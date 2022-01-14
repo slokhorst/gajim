@@ -35,7 +35,6 @@ from nbxmpp.namespaces import Namespace
 from nbxmpp.structs import StanzaHandler
 
 from gajim.common import helpers
-from gajim.common import app
 from gajim.common import jingle_xtls
 from gajim.common.modules.base import BaseModule
 
@@ -122,7 +121,7 @@ class Jingle(BaseModule):
             logger.warning('Invalid JID: %s, ignoring it', stanza.getFrom())
             return
         id_ = stanza.getID()
-        if (jid, id_) in self.__iq_responses.keys():
+        if (jid, id_) in self.__iq_responses:
             self.__iq_responses[(jid, id_)].on_stanza(stanza)
             del self.__iq_responses[(jid, id_)]
             raise nbxmpp.NodeProcessed
@@ -207,16 +206,7 @@ class Jingle(BaseModule):
 
     def start_file_transfer(self, jid, file_props, request=False):
         logger.info("start file transfer with file: %s", file_props)
-        contact = app.contacts.get_contact_with_highest_priority(
-            self._account, app.get_jid_without_resource(jid))
-        if app.contacts.is_gc_contact(self._account, jid):
-            gcc = jid.split('/')
-            if len(gcc) == 2:
-                contact = app.contacts.get_gc_contact(self._account,
-                                                      gcc[0],
-                                                      gcc[1])
-        if contact is None:
-            return None
+        contact = self._con.get_module('Contacts').get_contact(jid)
         use_security = contact.supports(Namespace.JINGLE_XTLS)
         jingle = JingleSession(self._con,
                                weinitiate=True,
@@ -226,10 +216,13 @@ class Jingle(BaseModule):
         jingle.session_type_ft = True
         self._sessions[jingle.sid] = jingle
         file_props.sid = jingle.sid
+
         if contact.supports(Namespace.JINGLE_BYTESTREAM):
             transport = JingleTransportSocks5()
         elif contact.supports(Namespace.JINGLE_IBB):
             transport = JingleTransportIBB()
+        else:
+            transport = None
 
         senders = 'initiator'
         if request:
@@ -302,7 +295,3 @@ class Jingle(BaseModule):
                 if session.peerjid == jid and session.get_content(media):
                     return session
         return None
-
-
-def get_instance(*args, **kwargs):
-    return Jingle(*args, **kwargs), 'Jingle'

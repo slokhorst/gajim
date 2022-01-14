@@ -36,10 +36,10 @@ from packaging.version import Version as V
 
 import gajim
 from gajim.common import app
-from gajim.common import nec
 from gajim.common import configpaths
 from gajim.common import modules
-from gajim.common.nec import NetworkEvent
+from gajim.common.events import PluginAdded
+from gajim.common.events import PluginRemoved
 from gajim.common.i18n import _
 from gajim.common.exceptions import PluginsystemError
 from gajim.common.helpers import Singleton
@@ -303,8 +303,7 @@ class PluginManager(metaclass=Singleton):
         if activate:
             self.activate_plugin(plugin_obj)
 
-        app.nec.push_incoming_event(
-            NetworkEvent('plugin-added', plugin=plugin_obj))
+        app.ged.raise_event(PluginAdded(plugin=plugin_obj))
 
         return plugin_obj
 
@@ -492,21 +491,6 @@ class PluginManager(metaclass=Singleton):
             app.ged.remove_event_handler(event_name, priority,
                 handler_function)
 
-    def _register_network_events_in_nec(self, plugin):
-        for event_class in plugin.events:
-            setattr(event_class, 'plugin', plugin)
-            if issubclass(event_class, nec.NetworkIncomingEvent):
-                app.nec.register_incoming_event(event_class)
-            elif issubclass(event_class, nec.NetworkOutgoingEvent):
-                app.nec.register_outgoing_event(event_class)
-
-    def _remove_network_events_from_nec(self, plugin):
-        for event_class in plugin.events:
-            if issubclass(event_class, nec.NetworkIncomingEvent):
-                app.nec.unregister_incoming_event(event_class)
-            elif issubclass(event_class, nec.NetworkOutgoingEvent):
-                app.nec.unregister_outgoing_event(event_class)
-
     def _remove_name_from_encryption_plugins(self, plugin):
         if plugin.encryption_name:
             del self.encryption_plugins[plugin.encryption_name]
@@ -546,7 +530,6 @@ class PluginManager(metaclass=Singleton):
             self._add_encryption_name_from_plugin(plugin)
             self._handle_all_gui_extension_points_with_plugin(plugin)
             self._register_events_handlers_in_ged(plugin)
-            self._register_network_events_in_nec(plugin)
             self._register_modules_with_handlers(plugin)
 
             self.active_plugins.append(plugin)
@@ -583,7 +566,6 @@ class PluginManager(metaclass=Singleton):
                                         handler, exc_info=True)
 
         self._remove_events_handler_from_ged(plugin)
-        self._remove_network_events_from_nec(plugin)
         self._remove_name_from_encryption_plugins(plugin)
         self._unregister_modules_with_handlers(plugin)
 
@@ -723,7 +705,7 @@ class PluginManager(metaclass=Singleton):
 
     def delete_plugin_files(self, plugin_path):
         def on_error(func, path, error):
-            if func == os.path.islink:
+            if func is os.path.islink:
             # if symlink
                 os.unlink(path)
                 return
@@ -748,8 +730,7 @@ class PluginManager(metaclass=Singleton):
 
         app.settings.remove_plugin(plugin.short_name)
 
-        app.nec.push_incoming_event(
-            NetworkEvent('plugin-removed', plugin=plugin))
+        app.ged.raise_event(PluginRemoved(plugin=plugin))
 
     def get_plugin_by_path(self, plugin_dir):
         for plugin in self.plugins:

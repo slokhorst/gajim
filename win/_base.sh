@@ -12,7 +12,7 @@ cd "${DIR}"
 
 # CONFIG START
 MAJOR_PY_VERSION="3"
-MINOR_PY_VERSION="8"
+MINOR_PY_VERSION="9"
 PYTHON_VERSION="${MAJOR_PY_VERSION}.${MINOR_PY_VERSION}"
 BUILD_VERSION="0"
 
@@ -78,6 +78,14 @@ function create_root {
 function install_deps {
     build_pacman --noconfirm -S mingw-w64-"${ARCH}"-python \
         mingw-w64-"${ARCH}"-python-gobject \
+        mingw-w64-"${ARCH}"-gtksourceview4 \
+        mingw-w64-"${ARCH}"-gstreamer \
+        mingw-w64-"${ARCH}"-gst-plugins-base \
+        mingw-w64-"${ARCH}"-gst-plugins-good \
+        mingw-w64-"${ARCH}"-gst-libav \
+        mingw-w64-"${ARCH}"-gst-python \
+        mingw-w64-"${ARCH}"-farstream \
+        mingw-w64-"${ARCH}"-libnice \
         mingw-w64-"${ARCH}"-python-pip \
         mingw-w64-"${ARCH}"-adwaita-icon-theme \
         mingw-w64-"${ARCH}"-libwebp \
@@ -92,7 +100,8 @@ function install_deps {
         mingw-w64-"${ARCH}"-python-pyopenssl \
         mingw-w64-"${ARCH}"-python-certifi \
         mingw-w64-"${ARCH}"-python-six \
-        mingw-w64-"${ARCH}"-python-pygments
+        mingw-w64-"${ARCH}"-python-pygments \
+        mingw-w64-"${ARCH}"-python-gssapi
 
         build_pip install precis-i18n
 
@@ -143,10 +152,6 @@ function install_gajim {
     curl -o "${BUILD_ROOT}"/plugin_installer.zip https://ftp.gajim.org/plugins_master_zip/plugin_installer.zip
     mkdir "${PACKAGE_DIR}"/gajim/data/plugins
     7z x -o"${PACKAGE_DIR}"/gajim/data/plugins "${BUILD_ROOT}"/plugin_installer.zip
-
-    # Install preview plugin
-    curl -o "${BUILD_ROOT}"/url_image_preview.zip https://ftp.gajim.org/plugins_master_zip/url_image_preview.zip
-    7z x -o"${PACKAGE_DIR}"/gajim/data/plugins "${BUILD_ROOT}"/url_image_preview.zip
 
     # Install omemo plugin
     curl -o "${BUILD_ROOT}"/omemo.zip https://ftp.gajim.org/plugins_master_zip/omemo.zip
@@ -219,13 +224,12 @@ function cleanup_install {
     rm -Rf "${MINGW_ROOT}"/share/gdb
     rm -Rf "${MINGW_ROOT}"/share/libcaca
     rm -Rf "${MINGW_ROOT}"/share/gettext
-    rm -Rf "${MINGW_ROOT}"/share/gst-plugins-base
     rm -Rf "${MINGW_ROOT}"/share/gtk-3.0
     rm -Rf "${MINGW_ROOT}"/share/nghttp2
     rm -Rf "${MINGW_ROOT}"/share/fontconfig
     rm -Rf "${MINGW_ROOT}"/share/gettext-*
-    rm -Rf "${MINGW_ROOT}"/share/gstreamer-1.0
     rm -Rf "${MINGW_ROOT}"/share/terminfo
+    rm -Rf "${MINGW_ROOT}"/share/OGRE
 
     find "${MINGW_ROOT}"/share/glib-2.0 -type f ! \
         -name "*.compiled" -exec rm -f {} \;
@@ -249,12 +253,8 @@ function cleanup_install {
     rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstdvdread.dll
     rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstopenal.dll
     rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstopenexr.dll
-    rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstopenh264.dll
     rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstresindvd.dll
     rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstassrender.dll
-    rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstx265.dll
-    rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstwebp.dll
-    rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstopengl.dll
     rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstmxf.dll
     rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstfaac.dll
     rm -f "${MINGW_ROOT}"/lib/gstreamer-1.0/libgstschro.dll

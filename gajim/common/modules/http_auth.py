@@ -19,7 +19,7 @@ from nbxmpp.structs import StanzaHandler
 from nbxmpp.namespaces import Namespace
 
 from gajim.common import app
-from gajim.common.nec import NetworkEvent
+from gajim.common.events import HttpAuthReceived
 from gajim.common.modules.base import BaseModule
 
 
@@ -50,14 +50,13 @@ class HTTPAuth(BaseModule):
             self.build_http_auth_answer(stanza, auto_answer)
             raise nbxmpp.NodeProcessed
 
-        app.nec.push_incoming_event(
-            NetworkEvent('http-auth-received',
-                         conn=self._con,
-                         iq_id=properties.http_auth.id,
-                         method=properties.http_auth.method,
-                         url=properties.http_auth.url,
-                         msg=properties.http_auth.body,
-                         stanza=stanza))
+        app.ged.raise_event(
+            HttpAuthReceived(conn=self._con,
+                             iq_id=properties.http_auth.id,
+                             method=properties.http_auth.method,
+                             url=properties.http_auth.url,
+                             msg=properties.http_auth.body,
+                             stanza=stanza))
         raise nbxmpp.NodeProcessed
 
     def build_http_auth_answer(self, stanza, answer):
@@ -72,7 +71,3 @@ class HTTPAuth(BaseModule):
             self._log.info('Auth request denied')
             err = nbxmpp.Error(stanza, nbxmpp.protocol.ERR_NOT_AUTHORIZED)
             self._con.connection.send(err)
-
-
-def get_instance(*args, **kwargs):
-    return HTTPAuth(*args, **kwargs), 'HTTPAuth'

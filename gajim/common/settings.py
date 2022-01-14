@@ -13,12 +13,19 @@
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
 from typing import Any
+from typing import Callable
+from typing import Literal
+from typing import NamedTuple
+from typing import Optional
 from typing import Dict
 from typing import List
 from typing import Union
+from typing import overload
+from typing import cast
 
 import sys
 import json
+import uuid
 import logging
 import sqlite3
 import inspect
@@ -28,24 +35,46 @@ from collections import namedtuple
 from collections import defaultdict
 
 from gi.repository import GLib
+from nbxmpp.protocol import JID
 
 from gajim import IS_PORTABLE
 from gajim.common import app
 from gajim.common import configpaths
 from gajim.common import optparser
 from gajim.common.helpers import get_muc_context
+from gajim.common.storage.base import Encoder
+from gajim.common.storage.base import json_decoder
 from gajim.common.setting_values import APP_SETTINGS
+from gajim.common.setting_values import AllGroupChatSettings
+from gajim.common.setting_values import AllGroupChatSettingsT
+from gajim.common.setting_values import BoolGroupChatSettings
+from gajim.common.setting_values import IntGroupChatSettings
+from gajim.common.setting_values import StringGroupChatSettings
+from gajim.common.setting_values import AllWorkspaceSettings
+from gajim.common.setting_values import AllWorkspaceSettingsT
+from gajim.common.setting_values import OpenChatSettingT
+from gajim.common.setting_values import StringWorkspaceSettings
 from gajim.common.setting_values import ACCOUNT_SETTINGS
 from gajim.common.setting_values import PROXY_SETTINGS
 from gajim.common.setting_values import PROXY_EXAMPLES
+from gajim.common.setting_values import INITAL_WORKSPACE
 from gajim.common.setting_values import PLUGIN_SETTINGS
+from gajim.common.setting_values import WORKSPACE_SETTINGS
 from gajim.common.setting_values import DEFAULT_SOUNDEVENT_SETTINGS
 from gajim.common.setting_values import STATUS_PRESET_SETTINGS
 from gajim.common.setting_values import STATUS_PRESET_EXAMPLES
 from gajim.common.setting_values import HAS_APP_DEFAULT
 from gajim.common.setting_values import HAS_ACCOUNT_DEFAULT
+from gajim.common.setting_values import AllSettingsT
+from gajim.common.setting_values import IntSettings
+from gajim.common.setting_values import IntAccountSettings
+from gajim.common.setting_values import StringSettings
+from gajim.common.setting_values import StringAccountSettings
+from gajim.common.setting_values import BoolSettings
+from gajim.common.setting_values import BoolAccountSettings
 
 SETTING_TYPE = Union[bool, int, str, object]
+
 
 log = logging.getLogger('gajim.c.settings')
 
@@ -65,33 +94,44 @@ CREATE_SQL = '''
     INSERT INTO settings(name, settings) VALUES ('status_presets', '%s');
     INSERT INTO settings(name, settings) VALUES ('proxies', '%s');
     INSERT INTO settings(name, settings) VALUES ('plugins', '{}');
+    INSERT INTO settings(name, settings) VALUES ('workspaces', '%s');
 
-    PRAGMA user_version=0;
+    PRAGMA user_version=1;
     ''' % (json.dumps(STATUS_PRESET_EXAMPLES),
-           json.dumps(PROXY_EXAMPLES))
+           json.dumps(PROXY_EXAMPLES),
+           json.dumps(INITAL_WORKSPACE))
+
+
+_SignalCallable = Callable[[Any, str, Optional[str], Optional[JID]], Any]
+_CallbackDict = dict[tuple[str, Optional[str], Optional[JID]],
+                     list[weakref.WeakMethod[_SignalCallable]]]
 
 
 class Settings:
     def __init__(self):
-        self._con = None
+        self._con = cast(sqlite3.Connection, None)
         self._commit_scheduled = None
 
         self._settings = {}
         self._account_settings = {}
 
-        self._callbacks = defaultdict(list)
+        self._callbacks: _CallbackDict = defaultdict(list)
 
-    def connect_signal(self, setting, func, account=None, jid=None):
+    def connect_signal(self,
+                       setting: str,
+                       func: _SignalCallable,
+                       account: Optional[str] = None,
+                       jid: Optional[JID] = None) -> None:
         if not inspect.ismethod(func):
             # static methods are not bound to an object so we can’t easily
             # remove the func once it should not be called anymore
             raise ValueError('Only bound methods can be connected')
 
 
-        func = weakref.WeakMethod(func)
-        self._callbacks[(setting, account, jid)].append(func)
+        weak_func = weakref.WeakMethod(func)
+        self._callbacks[(setting, account, jid)].append(weak_func)
 
-    def disconnect_signals(self, object_):
+    def disconnect_signals(self, object_: object) -> Any:
         for _, handlers in self._callbacks.items():
             for handler in list(handlers):
                 if isinstance(handler, tuple):
@@ -118,7 +158,12 @@ class Settings:
 
         widget.connect('destroy', _on_destroy)
 
-    def _notify(self, value, setting, account=None, jid=None):
+    def _notify(self,
+                value: Any,
+                setting: str,
+                account: Optional[str] = None,
+                jid: Optional[JID] = None) -> None:
+
         log.info('Signal: %s changed', setting)
 
         callbacks = self._callbacks[(setting, account, jid)]
@@ -156,6 +201,8 @@ class Settings:
         self._load_settings()
         self._load_account_settings()
         if not self._settings['app']:
+            # ['app'] is empty in a newly created database.
+            # If there is an old config, it gets migrated at this point.
             self._migrate_old_config()
             self._commit()
         self._migrate_database()
@@ -166,9 +213,10 @@ class Settings:
             APP_SETTINGS['use_keyring'] = False
 
     @staticmethod
-    def _namedtuple_factory(cursor: Any, row: Any) -> Any:
+    def _namedtuple_factory(cursor: sqlite3.Cursor,
+                            row: tuple[Any, ...]) -> NamedTuple:
         fields = [col[0] for col in cursor.description]
-        return namedtuple("Row", fields)(*row)
+        return namedtuple("Row", fields)(*row)  # type: ignore
 
     def _connect_database(self) -> None:
         path = configpaths.get('SETTINGS')
@@ -235,7 +283,13 @@ class Settings:
             sys.exit()
 
     def _migrate(self) -> None:
-        pass
+        version = self._get_user_version()
+        if version < 1:
+            sql = '''INSERT INTO settings(name, settings)
+                     VALUES ('workspaces', ?)'''
+            self._con.execute(sql, (json.dumps(INITAL_WORKSPACE),))
+            self._settings['workspaces'] = INITAL_WORKSPACE
+            self._set_user_version(1)
 
     def _migrate_old_config(self) -> None:
         config_file = configpaths.get('CONFIG_FILE')
@@ -283,13 +337,13 @@ class Settings:
         # Migrate deprecated settings
         value = app_settings.pop('send_chatstate_muc_default', None)
         if value is not None:
-            for account in self._account_settings:
-                self._account_settings[account]['account']['gc_send_chatstate_default'] = value
+            for account, settings in self._account_settings.items():
+                settings['account']['gc_send_chatstate_default'] = value
 
         value = app_settings.pop('send_chatstate_default', None)
         if value is not None:
-            for account in self._account_settings:
-                self._account_settings[account]['account']['send_chatstate_default'] = value
+            for account, settings in self._account_settings.items():
+                settings['account']['send_chatstate_default'] = value
 
         value = app_settings.pop('print_join_left_default', None)
         if value is not None:
@@ -344,7 +398,8 @@ class Settings:
                     jid]['encryption'] = encryption
             self._commit_account_settings(account)
 
-    def _split_encryption_config_key(self, key: str) -> Any:
+    def _split_encryption_config_key(self, key: str) -> tuple[Optional[str],
+                                                              Optional[str]]:
         for account in self._account_settings:
             if not key.startswith(account):
                 continue
@@ -418,20 +473,23 @@ class Settings:
         log.info('Close settings')
         self._con.commit()
         self._con.close()
-        self._con = None
+        self._con = cast(sqlite3.Connection, None)
 
     def _load_settings(self) -> None:
         settings = self._con.execute('SELECT * FROM settings').fetchall()
         for row in settings:
             log.info('Load %s settings', row.name)
-            self._settings[row.name] = json.loads(row.settings)
+            self._settings[row.name] = json.loads(row.settings,
+                                                  object_hook=json_decoder)
 
     def _load_account_settings(self) -> None:
         account_settings = self._con.execute(
             'SELECT * FROM account_settings').fetchall()
         for row in account_settings:
             log.info('Load account settings: %s', row.account)
-            self._account_settings[row.account] = json.loads(row.settings)
+            self._account_settings[row.account] = json.loads(
+                row.settings,
+                object_hook=json_decoder)
 
     def _commit_account_settings(self,
                                  account: str,
@@ -439,7 +497,7 @@ class Settings:
         log.info('Set account settings: %s', account)
         self._con.execute(
             'UPDATE account_settings SET settings = ? WHERE account = ?',
-            (json.dumps(self._account_settings[account]), account))
+            (json.dumps(self._account_settings[account], cls=Encoder), account))
 
         self._commit(schedule=schedule)
 
@@ -447,11 +505,17 @@ class Settings:
         log.info('Set settings: %s', name)
         self._con.execute(
             'UPDATE settings SET settings = ? WHERE name = ?',
-            (json.dumps(self._settings[name]), name))
+            (json.dumps(self._settings[name], cls=Encoder), name))
 
         self._commit(schedule=schedule)
 
-    def get_app_setting(self, setting: str) -> SETTING_TYPE:
+    @overload
+    def get_app_setting(self, setting: BoolSettings) -> bool: ...
+    @overload
+    def get_app_setting(self, setting: StringSettings) -> str: ...
+    @overload
+    def get_app_setting(self, setting: IntSettings) -> int: ...
+    def get_app_setting(self, setting: str) -> AllSettingsT:
         if setting not in APP_SETTINGS:
             raise ValueError(f'Invalid app setting: {setting}')
 
@@ -462,7 +526,13 @@ class Settings:
 
     get = get_app_setting
 
-    def set_app_setting(self, setting: str, value: SETTING_TYPE) -> None:
+    @overload
+    def set_app_setting(self, setting: BoolSettings, value: Optional[bool]) -> None: ...
+    @overload
+    def set_app_setting(self, setting: StringSettings, value: Optional[str]) -> None: ...
+    @overload
+    def set_app_setting(self, setting: IntSettings, value: Optional[int]) -> None: ...
+    def set_app_setting(self, setting: str, value: Optional[AllSettingsT]) -> None:
         if setting not in APP_SETTINGS:
             raise ValueError(f'Invalid app setting: {setting}')
 
@@ -552,9 +622,28 @@ class Settings:
     def get_accounts(self) -> List[str]:
         return list(self._account_settings.keys())
 
+    def get_active_accounts(self) -> List[str]:
+        active = []
+        for account in self._account_settings:
+            if self.get_account_setting(account, 'active'):
+                active.append(account)
+        return active
+
+    @overload
     def get_account_setting(self,
                             account: str,
-                            setting: str) -> SETTING_TYPE:
+                            setting: StringAccountSettings) -> str: ...
+    @overload
+    def get_account_setting(self,
+                            account: str,
+                            setting: IntAccountSettings) -> int: ...
+    @overload
+    def get_account_setting(self,
+                            account: str,
+                            setting: BoolAccountSettings) -> bool: ...
+    def get_account_setting(self,
+                            account: str,
+                            setting: str) -> AllSettingsT:
 
         if account not in self._account_settings:
             raise ValueError(f'Account missing: {account}')
@@ -567,10 +656,26 @@ class Settings:
         except KeyError:
             return ACCOUNT_SETTINGS['account'][setting]
 
+    @overload
+    def set_account_setting(self,
+                            account: str,
+                            setting: StringAccountSettings,
+                            value: Optional[str]) -> None: ...
+    @overload
+    def set_account_setting(self,
+                            account: str,
+                            setting: IntAccountSettings,
+                            value: Optional[int]) -> None: ...
+    @overload
+    def set_account_setting(self,
+                            account: str,
+                            setting: BoolAccountSettings,
+                            value: Optional[bool]) -> None: ...
+
     def set_account_setting(self,
                             account: str,
                             setting: str,
-                            value: SETTING_TYPE) -> None:
+                            value: Optional[AllSettingsT]) -> None:
 
         if account not in self._account_settings:
             raise ValueError(f'Account missing: {account}')
@@ -598,10 +703,32 @@ class Settings:
         self._commit_account_settings(account)
         self._notify(value, setting, account)
 
+    @overload
     def get_group_chat_setting(self,
                                account: str,
-                               jid: str,
-                               setting: str) -> SETTING_TYPE:
+                               jid: JID,
+                               setting: IntGroupChatSettings
+                               ) -> int: ...
+
+    @overload
+    def get_group_chat_setting(self,
+                               account: str,
+                               jid: JID,
+                               setting: BoolGroupChatSettings
+                               ) -> bool: ...
+
+    @overload
+    def get_group_chat_setting(self,
+                               account: str,
+                               jid: JID,
+                               setting: StringGroupChatSettings
+                               ) -> str: ...
+
+    def get_group_chat_setting(self,
+                               account: str,
+                               jid: JID,
+                               setting: AllGroupChatSettings
+                               ) -> AllGroupChatSettingsT:
 
         if account not in self._account_settings:
             raise ValueError(f'Account missing: {account}')
@@ -637,11 +764,32 @@ class Settings:
 
             return default
 
+    @overload
     def set_group_chat_setting(self,
                                account: str,
-                               jid: str,
-                               setting: str,
-                               value: SETTING_TYPE) -> None:
+                               jid: JID,
+                               setting: StringGroupChatSettings,
+                               value: str) -> None: ...
+
+    @overload
+    def set_group_chat_setting(self,
+                               account: str,
+                               jid: JID,
+                               setting: IntGroupChatSettings,
+                               value: int) -> None: ...
+
+    @overload
+    def set_group_chat_setting(self,
+                               account: str,
+                               jid: JID,
+                               setting: BoolGroupChatSettings,
+                               value: bool) -> None: ...
+
+    def set_group_chat_setting(self,
+                               account: str,
+                               jid: JID,
+                               setting: AllGroupChatSettings,
+                               value: AllGroupChatSettingsT) -> None:
 
         if account not in self._account_settings:
             raise ValueError(f'Account missing: {account}')
@@ -663,11 +811,9 @@ class Settings:
             if default is HAS_ACCOUNT_DEFAULT:
                 default_store = ACCOUNT_SETTINGS['account']
 
-            context_default_setting = f'gc_{setting}_{context}_default'
-            if context_default_setting in default_store:
-                default = default_store[context_default_setting]
-            else:
-                default = default_store[f'gc_{setting}_default']
+            default = default_store.get(f'gc_{setting}_{context}_default')
+            if default is None:
+                default = default_store.get(f'gc_{setting}_default')
 
         if not isinstance(value, type(default)) and value is not None:
             raise TypeError(f'Invalid type for {setting}: '
@@ -685,7 +831,7 @@ class Settings:
 
         group_chat_settings = self._account_settings[account]['group_chat']
         if jid not in group_chat_settings:
-            group_chat_settings[jid] = {setting: value}
+            group_chat_settings[str(jid)] = {setting: value}
         else:
             group_chat_settings[jid][setting] = value
 
@@ -697,8 +843,8 @@ class Settings:
                                 value: SETTING_TYPE,
                                 context: str = None) -> None:
 
-        for account in self._account_settings:
-            for jid in self._account_settings[account]['group_chat']:
+        for account, acc_settings in self._account_settings.items():
+            for jid in acc_settings['group_chat']:
                 if context is not None:
                     if get_muc_context(jid) != context:
                         continue
@@ -706,7 +852,7 @@ class Settings:
 
     def get_contact_setting(self,
                             account: str,
-                            jid: str,
+                            jid: JID,
                             setting: str) -> SETTING_TYPE:
 
         if account not in self._account_settings:
@@ -729,7 +875,7 @@ class Settings:
 
     def set_contact_setting(self,
                             account: str,
-                            jid: str,
+                            jid: JID,
                             setting: str,
                             value: SETTING_TYPE) -> None:
 
@@ -764,7 +910,7 @@ class Settings:
 
         contact_settings = self._account_settings[account]['contact']
         if jid not in contact_settings:
-            contact_settings[jid] = {setting: value}
+            contact_settings[str(jid)] = {setting: value}
         else:
             contact_settings[jid][setting] = value
 
@@ -775,8 +921,8 @@ class Settings:
                              setting: str,
                              value: SETTING_TYPE) -> None:
 
-        for account in self._account_settings:
-            for jid in self._account_settings[account]['contact']:
+        for account, acc_settings in self._account_settings.items():
+            for jid in acc_settings['contact']:
                 self.set_contact_setting(account, jid, setting, value)
 
     def set_soundevent_setting(self,
@@ -906,6 +1052,89 @@ class Settings:
         for account in self._account_settings:
             if self.get_account_setting(account, 'proxy') == proxy_name:
                 self.set_account_setting(account, 'proxy', None)
+
+    @overload
+    def set_workspace_setting(self,
+                              workspace_id: str,
+                              setting: StringWorkspaceSettings,
+                              value: str) -> None: ...
+    @overload
+    def set_workspace_setting(self,
+                              workspace_id: str,
+                              setting: Literal['open_chats'],
+                              value: list[tuple[str, JID, str, bool]]
+                              ) -> None: ...
+    def set_workspace_setting(self,
+                              workspace_id: str,
+                              setting: AllWorkspaceSettings,
+                              value: AllWorkspaceSettingsT) -> None:
+
+        if setting not in WORKSPACE_SETTINGS:
+            raise ValueError(f'Invalid workspace setting: {setting}')
+
+        if workspace_id not in self._settings['workspaces']:
+            raise ValueError(f'Workspace does not exists: {workspace_id}')
+
+        default = WORKSPACE_SETTINGS[setting]
+        if not isinstance(value, type(default)):
+            raise TypeError(f'Invalid type for {setting}: '
+                            f'{value} {type(value)}')
+
+        self._settings['workspaces'][workspace_id][setting] = value
+        self._commit_settings('workspaces')
+
+    @overload
+    def get_workspace_setting(self,
+                              workspace_id: str,
+                              setting: Literal['open_chats']
+                              ) -> OpenChatSettingT: ...
+    @overload
+    def get_workspace_setting(self,
+                              workspace_id: str,
+                              setting: StringWorkspaceSettings) -> str: ...
+    def get_workspace_setting(self,
+                              workspace_id: str,
+                              setting: AllWorkspaceSettings
+                              ) -> AllWorkspaceSettingsT:
+
+        if setting not in WORKSPACE_SETTINGS:
+            raise ValueError(f'Invalid workspace setting: {setting}')
+
+        if workspace_id not in self._settings['workspaces']:
+            raise ValueError(f'Workspace does not exists: {workspace_id}')
+
+        try:
+            return self._settings['workspaces'][workspace_id][setting]
+        except KeyError:
+            return WORKSPACE_SETTINGS[setting]
+
+    def get_workspaces(self) -> List[str]:
+        workspace_order = app.settings.get_app_setting('workspace_order')
+
+        def sort_workspaces(workspace_id):
+            try:
+                return workspace_order.index(workspace_id)
+            except ValueError:
+                # Handle the case that a workspace id is for some reason not
+                # in the workspace order list
+                return 10000
+
+        workspaces = list(self._settings['workspaces'].keys())
+        workspaces.sort(key=sort_workspaces)
+        return workspaces
+
+    def add_workspace(self, name: str) -> str:
+        id_ = str(uuid.uuid4())
+        self._settings['workspaces'][id_] = {
+            'name': name,
+        }
+        self._commit_settings('workspaces')
+        return id_
+
+    def remove_workspace(self, id_: str) -> None:
+        del self._settings['workspaces'][id_]
+        self._commit_settings('workspaces')
+
 
 
 class LegacyConfig:

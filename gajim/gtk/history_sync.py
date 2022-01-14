@@ -28,7 +28,7 @@ from gajim.common.i18n import _
 from gajim.common.const import ArchiveState
 from gajim.common.helpers import event_filter
 
-from .util import load_icon
+from .util import load_icon_surface
 from .util import EventHelper
 
 log = logging.getLogger('gajim.gui.history_sync')
@@ -41,7 +41,7 @@ class Pages(IntEnum):
 
 
 class HistorySyncAssistant(Gtk.Assistant, EventHelper):
-    def __init__(self, account, parent):
+    def __init__(self, account):
         Gtk.Assistant.__init__(self)
         EventHelper.__init__(self)
         self.set_application(app.app)
@@ -49,7 +49,7 @@ class HistorySyncAssistant(Gtk.Assistant, EventHelper):
         self.set_name('HistorySyncAssistant')
         self.set_default_size(300, -1)
         self.set_resizable(False)
-        self.set_transient_for(parent)
+        self.set_transient_for(app.window)
 
         self.account = account
         self.con = app.connections[self.account]
@@ -95,7 +95,7 @@ class HistorySyncAssistant(Gtk.Assistant, EventHelper):
         self.register_events([
             ('archiving-count-received', ged.GUI1, self._received_count),
             ('archiving-interval-finished', ged.GUI1, self._received_finished),
-            ('mam-message-received', ged.PRECORE, self._nec_mam_message_received),
+            ('raw-mam-message-received', ged.PRECORE, self._nec_mam_message_received),
         ])
         # pylint: enable=line-too-long
 
@@ -233,7 +233,7 @@ class DownloadHistoryPage(Gtk.Box):
         self.count = 0
         self.received = 0
 
-        surface = load_icon('folder-download-symbolic', self, size=64)
+        surface = load_icon_surface('folder-download-symbolic', size=64)
         image = Gtk.Image.new_from_surface(surface)
 
         self.progress = Gtk.ProgressBar()

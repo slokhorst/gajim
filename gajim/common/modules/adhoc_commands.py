@@ -27,8 +27,9 @@ from nbxmpp.util import generate_id
 
 from gajim.common import app
 from gajim.common import helpers
+from gajim.common.events import AdHocCommandError
+from gajim.common.events import AdHocCommandActionResponse
 from gajim.common.i18n import _
-from gajim.common.nec import NetworkIncomingEvent
 from gajim.common.modules.base import BaseModule
 
 
@@ -175,8 +176,8 @@ class ChangeStatusCommand(AdHocCommand):
                                         now=presencetype == 'offline')
 
         # send new status
-        app.interface.roster.send_status(
-            self.connection.name, presencetype, presencedesc)
+        app.get_client(self.connection.name).change_status(
+            presencetype, presencedesc)
 
         return False    # finish the session
 
@@ -303,7 +304,7 @@ class AdHocCommands(BaseModule):
         if sessionid is None:
             # we start a new command session
             # only if we are visible for the jid and command exist
-            if node not in self._commands.keys():
+            if node not in self._commands:
                 self._con.connection.send(
                     nbxmpp.Error(
                         stanza, Namespace.STANZAS + ' item-not-found'))
@@ -350,12 +351,12 @@ class AdHocCommands(BaseModule):
             else:
                 # action is wrong. stop the session, send error
                 raise AttributeError
-        except AttributeError:
+        except AttributeError as error:
             # the command probably doesn't handle invoked action...
             # stop the session, return error
             del self._sessions[magictuple]
             self._log.warning('Wrong action %s %s', node, jid)
-            raise nbxmpp.NodeProcessed
+            raise nbxmpp.NodeProcessed from error
 
         # delete the session if rc is False
         if not rc:
@@ -389,15 +390,14 @@ class AdHocCommands(BaseModule):
         if not nbxmpp.isResultNode(stanza):
             self._log.info('Error: %s', stanza.getError())
 
-            app.nec.push_incoming_event(
-                AdHocCommandError(None, conn=self._con,
+            app.ged.raise_event(
+                AdHocCommandError(conn=self._con,
                                   error=stanza.getError()))
             return
         self._log.info('Received action response')
         command = stanza.getTag('command')
-        app.nec.push_incoming_event(
-            AdHocCommandActionResponse(
-                None, conn=self._con, command=command))
+        app.ged.raise_event(
+            AdHocCommandActionResponse(conn=self._con, command=command))
 
     def send_cancel(self, jid, node, session_id):
         """
@@ -420,15 +420,3 @@ class AdHocCommands(BaseModule):
             self._log.warning('Error: %s', stanza.getError())
         else:
             self._log.info('Cancel successful')
-
-
-class AdHocCommandError(NetworkIncomingEvent):
-    name = 'adhoc-command-error'
-
-
-class AdHocCommandActionResponse(NetworkIncomingEvent):
-    name = 'adhoc-command-action-response'
-
-
-def get_instance(*args, **kwargs):
-    return AdHocCommands(*args, **kwargs), 'AdHocCommands'

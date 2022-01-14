@@ -28,7 +28,7 @@ from gajim.common import ged
 from gajim.common.helpers import open_uri
 from gajim.common.i18n import _
 
-from .util import get_builder
+from .builder import get_builder
 from .util import EventHelper
 from .util import open_window
 
@@ -98,7 +98,8 @@ class ServerInfo(Gtk.ApplicationWindow, EventHelper):
 
         self._ui.connection_type.set_text(address.type.value)
         if address.type.is_plain:
-            self._ui.conection_type.get_style_context().add_class('error-color')
+            self._ui.connection_type.get_style_context().add_class(
+                'error-color')
 
         # Connection proxy
         proxy = address.proxy

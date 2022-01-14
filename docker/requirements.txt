@@ -1,0 +1,13 @@
+PyGObject
+pycairo>=1.20
+mypy
+pylint==2.12.2
+codespell
+coverage
+css-parser
+keyring
+packaging
+precis-i18n
+pyOpenSSL
+types-pkg_resources
+requests

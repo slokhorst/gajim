@@ -12,6 +12,11 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+from typing import Any
+from typing import Optional
+from typing import cast
+
 import logging
 import sys
 
@@ -22,28 +27,25 @@ from gajim.common import app
 from gajim.common import configpaths
 from gajim.common import helpers
 from gajim.common.const import THRESHOLD_OPTIONS
-from gajim.common.nec import NetworkEvent
 from gajim.common.i18n import _
 from gajim.common.helpers import open_file
 from gajim.common.multimedia_helpers import AudioInputManager
 from gajim.common.multimedia_helpers import AudioOutputManager
 from gajim.common.multimedia_helpers import VideoInputManager
-
-from gajim.chat_control_base import ChatControlBase
+from gajim.common.events import StyleChanged
+from gajim.common.events import ThemeUpdate
 
 from .const import Setting
 from .const import SettingKind
 from .const import SettingType
-from .const import ControlType
 from .emoji_chooser import emoji_chooser
 from .settings import SettingsBox
 from .settings import SettingsDialog
 from .sidebar_switcher import SideBarSwitcher
 from .video_preview import VideoPreview
-from .util import get_available_iconsets
 from .util import open_window
 from .util import get_app_window
-from .util import get_builder
+from .builder import get_builder
 
 if app.is_installed('GSPELL'):
     from gi.repository import Gspell  # pylint: disable=ungrouped-imports
@@ -52,7 +54,7 @@ log = logging.getLogger('gajim.gui.preferences')
 
 
 class Preferences(Gtk.ApplicationWindow):
-    def __init__(self):
+    def __init__(self) -> None:
         Gtk.ApplicationWindow.__init__(self)
         self.set_application(app.app)
         self.set_position(Gtk.WindowPosition.CENTER)
@@ -64,7 +66,7 @@ class Preferences(Gtk.ApplicationWindow):
 
         self._ui = get_builder('preferences.ui')
 
-        self._video_preview = None
+        self._video_preview: Optional[VideoPreview] = None
         self._prefs = {}
 
         side_bar_switcher = SideBarSwitcher()
@@ -77,16 +79,15 @@ class Preferences(Gtk.ApplicationWindow):
 
         prefs = [
             ('window_behaviour', WindowBehaviour),
-            ('contact_list', ContactList),
             ('chats', Chats),
             ('group_chats', GroupChats),
+            ('file_preview', FilePreview),
             ('visual_notifications', VisualNotifications),
             ('sounds', Sounds),
             ('status_message', StatusMessage),
             ('automatic_status', AutomaticStatus),
             ('themes', Themes),
             ('emoji', Emoji),
-            ('status_icon', StatusIcon),
             ('server', Server),
             ('audio', Audio),
             ('video', Video),
@@ -100,6 +101,7 @@ class Preferences(Gtk.ApplicationWindow):
         self._ui.audio_video_info_bar.set_revealed(not app.is_installed('AV'))
 
         self.connect('key-press-event', self._on_key_press)
+        self.connect('destroy', self._on_destroy)
         self._ui.connect_signals(self)
 
         self.show_all()
@@ -119,57 +121,46 @@ class Preferences(Gtk.ApplicationWindow):
             pref_box.add(pref)
             self._prefs[ui_name] = pref
 
-    def _add_video_preview(self):
+    def _add_video_preview(self) -> None:
         if sys.platform == 'win32':
             return
         self._video_preview = VideoPreview()
         self._ui.video.add(self._video_preview.widget)
 
-    def _on_key_press(self, _widget, event):
+    def _on_key_press(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> None:
         if event.keyval == Gdk.KEY_Escape:
             self.destroy()
 
-    def get_video_preview(self):
+    def get_video_preview(self) -> Optional[VideoPreview]:
         return self._video_preview
 
     @staticmethod
-    def _on_features_clicked(_widget, _response):
+    def _on_features_clicked(_widget: Gtk.InfoBar,
+                             _response: Gtk.ResponseType
+                             ) -> None:
         open_window('Features')
 
-    def update_theme_list(self):
+    def update_theme_list(self) -> None:
         self._prefs['themes'].update_theme_list()
 
-    def update_proxy_list(self):
+    def update_proxy_list(self) -> None:
         self._prefs['miscellaneous'].update_proxy_list()
 
     @staticmethod
-    def get_all_controls():
-        for ctrl in app.interface.msg_win_mgr.get_controls():
-            yield ctrl
-        for account in app.connections:
-            for ctrl in app.interface.minimized_controls[account].values():
-                yield ctrl
-
-    @staticmethod
-    def get_all_muc_controls():
-        for ctrl in app.interface.msg_win_mgr.get_controls(
-                ControlType.GROUPCHAT):
-            yield ctrl
-        for account in app.connections:
-            for ctrl in app.interface.minimized_controls[account].values():
-                yield ctrl
-
-    @staticmethod
-    def _check_emoji_theme():
+    def _check_emoji_theme() -> None:
         # Ensure selected emoji theme is valid
         emoji_themes = helpers.get_available_emoticon_themes()
         settings_theme = app.settings.get('emoticons_theme')
         if settings_theme not in emoji_themes:
             app.settings.set('emoticons_theme', 'font')
 
+    def _on_destroy(self, _widget: Gtk.Widget) -> None:
+        self._prefs.clear()
+        app.check_finalize(self)
+
 
 class PreferenceBox(SettingsBox):
-    def __init__(self, settings):
+    def __init__(self, settings: list[Setting]) -> None:
         SettingsBox.__init__(self, None)
         self.get_style_context().add_class('settings-border')
         self.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -182,143 +173,34 @@ class PreferenceBox(SettingsBox):
 
 
 class WindowBehaviour(PreferenceBox):
-    def __init__(self, *args):
-        win_layout_items = {
-            'never': _('Detached contact list with detached chats'),
-            'always': _('Detached contact list with single chat'),
-            'always_with_roster': _('Single window for everything'),
-            'peracct': _('Detached contact list with chats grouped by account'),
-            'pertype': _('Detached contact list with chats grouped by type'),
-        }
+    def __init__(self, *args: Any) -> None:
 
-        roster_on_startup_items = {
+        main_window_on_startup_items = {
             'always': _('Always'),
             'never': _('Never'),
             'last_state': _('Restore last state'),
         }
 
-        tab_position_items = {
-            'top': _('Top'),
-            'bottom': _('Bottom'),
-            'left': _('Left'),
-            'Right': _('Right'),
-        }
-
         settings = [
             Setting(SettingKind.POPOVER,
-                    _('Window Layout'),
+                    _('Show Gajim on Startup'),
                     SettingType.CONFIG,
-                    'one_message_window',
-                    props={'entries': win_layout_items},
-                    callback=self._on_win_layout_changed),
-
-            Setting(SettingKind.POPOVER,
-                    _('Contact List on Startup'),
-                    SettingType.CONFIG,
-                    'show_roster_on_startup',
-                    props={'entries': roster_on_startup_items},
-                    desc=_('Show contact list when starting Gajim')),
+                    'show_main_window_on_startup',
+                    props={'entries': main_window_on_startup_items},
+                    desc=_('Show window when starting Gajim')),
 
             Setting(SettingKind.SWITCH,
-                    _('Quit on Close'),
+                    _('Quit Gajim on Close'),
                     SettingType.CONFIG,
-                    'quit_on_roster_x_button',
-                    desc=_('Quit when closing contact list')),
-
-            Setting(SettingKind.POPOVER,
-                    _('Tab Position'),
-                    SettingType.CONFIG,
-                    'tabs_position',
-                    props={'entries': tab_position_items},
-                    desc=_('Placement of chat window tabs'),
-                    callback=self._on_win_layout_changed),
+                    'quit_on_main_window_x_button',
+                    desc=_('Quit when closing Gajim’s window')),
         ]
 
         PreferenceBox.__init__(self, settings)
-
-    @staticmethod
-    def _on_win_layout_changed(*args):
-        app.interface.msg_win_mgr.reconfig()
-
-
-class ContactList(PreferenceBox):
-    def __init__(self, *args):
-
-        settings = [
-            Setting(SettingKind.SWITCH,
-                    _('Merge Accounts'),
-                    SettingType.CONFIG,
-                    'mergeaccounts',
-                    callback=self._on_merge_accounts),
-
-            Setting(SettingKind.SWITCH,
-                    _('Enable Metacontacts'),
-                    SettingType.CONFIG,
-                    'metacontacts_enabled'),
-
-            Setting(SettingKind.SWITCH,
-                    _('Show Avatars'),
-                    SettingType.CONFIG,
-                    'show_avatars_in_roster',
-                    callback=self._on_show_avatar_in_roster_changed),
-
-            Setting(SettingKind.SWITCH,
-                    _('Show Status Message'),
-                    SettingType.CONFIG,
-                    'show_status_msgs_in_roster',
-                    callback=self._on_show_status_in_roster),
-
-            Setting(SettingKind.SWITCH,
-                    _('Sort Contacts by Status'),
-                    SettingType.CONFIG,
-                    'sort_by_show_in_roster',
-                    callback=self._on_sort_by_show_in_roster),
-
-            Setting(SettingKind.SWITCH,
-                    _('Show Mood'),
-                    SettingType.CONFIG,
-                    'show_mood_in_roster'),
-
-            Setting(SettingKind.SWITCH,
-                    _('Show Activity'),
-                    SettingType.CONFIG,
-                    'show_activity_in_roster'),
-
-            Setting(SettingKind.SWITCH,
-                    _('Show Tune'),
-                    SettingType.CONFIG,
-                    'show_tunes_in_roster'),
-
-            Setting(SettingKind.SWITCH,
-                    _('Show Location'),
-                    SettingType.CONFIG,
-                    'show_location_in_roster'),
-        ]
-
-        PreferenceBox.__init__(self, settings)
-
-    @staticmethod
-    def _on_merge_accounts(*args):
-        app.app.activate_action('merge')
-
-    @staticmethod
-    def _on_show_avatar_in_roster_changed(*args):
-        app.interface.roster.setup_and_draw_roster()
-
-    @staticmethod
-    def _on_show_status_in_roster(*args):
-        app.interface.roster.setup_and_draw_roster()
-        controls = get_app_window('Preferences').get_all_muc_controls()
-        for ctrl in controls:
-            ctrl.roster.draw_contacts()
-
-    @staticmethod
-    def _on_sort_by_show_in_roster(*args):
-        app.interface.roster.setup_and_draw_roster()
 
 
 class Chats(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
 
         speller_desc = None
         if not app.is_installed('GSPELL'):
@@ -352,16 +234,10 @@ class Chats(PreferenceBox):
                     'show_send_message_button'),
 
             Setting(SettingKind.SWITCH,
-                    _('Show Status Message'),
+                    _('Show Status Changes'),
                     SettingType.CONFIG,
-                    'print_status_in_chats'),
-
-            Setting(SettingKind.SWITCH,
-                    _('Show Chat State In Tabs'),
-                    SettingType.CONFIG,
-                    'show_chatstate_in_tabs',
-                    desc=_('Show the contact’s chat state (e.g. typing) in '
-                           'the chat’s tab')),
+                    'print_status_in_chats',
+                    desc=_('For example: "Julia is now online"')),
 
             Setting(SettingKind.SWITCH,
                     _('Show Chat State In Banner'),
@@ -369,23 +245,16 @@ class Chats(PreferenceBox):
                     'show_chatstate_in_banner',
                     desc=_('Show the contact’s chat state (e.g. typing) in '
                            'the chats tab’s banner')),
-
-            Setting(SettingKind.SWITCH,
-                    _('Display Chat State In Contact List'),
-                    SettingType.CONFIG,
-                    'show_chatstate_in_roster',
-                    desc=_('Show the contact’s chat state (e.g. typing) in '
-                           'the contact list')),
         ]
 
         PreferenceBox.__init__(self, settings)
 
     @staticmethod
-    def _speller_available():
+    def _speller_available() -> bool:
         return app.is_installed('GSPELL')
 
     @staticmethod
-    def _on_use_speller(value, *args):
+    def _on_use_speller(value: bool, *args: Any) -> None:
         if not value:
             return
 
@@ -394,27 +263,14 @@ class Chats(PreferenceBox):
         if gspell_lang is None:
             gspell_lang = Gspell.language_get_default()
         app.settings.set('speller_language', gspell_lang.get_code())
-        for ctrl in get_app_window('Preferences').get_all_controls():
-            if isinstance(ctrl, ChatControlBase):
-                ctrl.set_speller()
+        for ctrl in app.window.get_controls():
+            ctrl.set_speller()
 
 
 class GroupChats(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
 
         settings = [
-
-            Setting(SettingKind.SWITCH,
-                    _('Show Subject'),
-                    SettingType.CONFIG,
-                    'show_subject_on_join'),
-
-            Setting(SettingKind.SWITCH,
-                    _('Sort Contacts by Status'),
-                    SettingType.CONFIG,
-                    'sort_by_show_in_muc',
-                    callback=self._on_sort_by_show_in_muc),
-
             Setting(SettingKind.POPOVER,
                     _('Default Sync Threshold'),
                     SettingType.CONFIG,
@@ -429,11 +285,28 @@ class GroupChats(PreferenceBox):
                     desc=_('Prefer direct messages in private group chats ')),
 
             Setting(SettingKind.SWITCH,
+                    _('Sort Participant List by Status'),
+                    SettingType.CONFIG,
+                    'sort_by_show_in_muc',
+                    callback=self._on_sort_by_show_in_muc),
+
+            Setting(SettingKind.SWITCH,
+                    _('Status Messages in Participants List'),
+                    SettingType.CONFIG,
+                    'show_status_msgs_in_roster',
+                    callback=self._on_show_status_in_roster),
+
+            Setting(SettingKind.SWITCH,
+                    _('Show Subject'),
+                    SettingType.CONFIG,
+                    'show_subject_on_join'),
+
+            Setting(SettingKind.SWITCH,
                     _('Show Joined / Left'),
                     SettingType.CONFIG,
                     'gc_print_join_left_default',
                     desc=_('Default for new group chats'),
-                    props={'button-text':_('Reset'),
+                    props={'button-text': _('Reset'),
                            'button-tooltip': _('Reset all group chats to the '
                                                'current default value'),
                            'button-style': 'destructive-action',
@@ -444,34 +317,104 @@ class GroupChats(PreferenceBox):
                     SettingType.CONFIG,
                     'gc_print_status_default',
                     desc=_('Default for new group chats'),
-                    props={'button-text':_('Reset'),
+                    props={'button-text': _('Reset'),
                            'button-tooltip': _('Reset all group chats to the '
                                                'current default value'),
                            'button-style': 'destructive-action',
                            'button-callback': self._reset_print_status}),
-
         ]
 
         PreferenceBox.__init__(self, settings)
 
     @staticmethod
-    def _on_sort_by_show_in_muc(*args):
-        for ctrl in get_app_window('Preferences').get_all_muc_controls():
-            ctrl.roster.invalidate_sort()
+    def _on_sort_by_show_in_muc(_value: bool, *args: Any) -> None:
+        for ctrl in app.window.get_controls():
+            if ctrl.is_groupchat:
+                ctrl.roster.invalidate_sort()
 
     @staticmethod
-    def _reset_join_left(button):
+    def _on_show_status_in_roster(_value: bool, *args: Any) -> None:
+        for ctrl in app.window.get_controls():
+            if ctrl.is_groupchat:
+                ctrl.roster.draw_contacts()
+
+    @staticmethod
+    def _reset_join_left(button: Gtk.Button) -> None:
         button.set_sensitive(False)
         app.settings.set_group_chat_settings('print_join_left', None)
 
     @staticmethod
-    def _reset_print_status(button):
+    def _reset_print_status(button: Gtk.Button) -> None:
         button.set_sensitive(False)
         app.settings.set_group_chat_settings('print_status', None)
 
 
+class FilePreview(PreferenceBox):
+    def __init__(self, *args: Any) -> None:
+        sizes = {
+            262144: '256 KiB',
+            524288: '512 KiB',
+            1048576: '1 MiB',
+            5242880: '5 MiB',
+            10485760: '10 MiB',
+        }
+
+        actions = {
+            'open': _('Open'),
+            'save_as': _('Save As…'),
+            'open_folder': _('Open Folder'),
+            'copy_link_location': _('Copy Link Location'),
+            'open_link_in_browser': _('Open Link in Browser'),
+        }
+
+        settings = [
+            Setting(SettingKind.SPIN,
+                    _('Preview Size'),
+                    SettingType.CONFIG,
+                    'preview_size',
+                    desc=_('Size of preview image'),
+                    props={'range_': (100, 1000)}),
+
+            Setting(SettingKind.POPOVER,
+                    _('Allowed File Size'),
+                    SettingType.CONFIG,
+                    'preview_max_file_size',
+                    desc=_('Maximum file size for preview generation'),
+                    props={'entries': sizes}),
+
+            Setting(SettingKind.SWITCH,
+                    _('Preview in Public Group Chats'),
+                    SettingType.CONFIG,
+                    'preview_anonymous_muc',
+                    desc=_('Generate preview automatically in public '
+                           'group chats (may disclose your data)')),
+
+            Setting(SettingKind.SWITCH,
+                    _('Preview all Image URLs'),
+                    SettingType.CONFIG,
+                    'preview_allow_all_images',
+                    desc=_('Generate preview for any URLs containing images '
+                           '(may be unsafe)')),
+
+            Setting(SettingKind.POPOVER,
+                    _('Left Click Action'),
+                    SettingType.CONFIG,
+                    'preview_leftclick_action',
+                    desc=_('Action when left-clicking a preview'),
+                    props={'entries': actions}),
+
+            Setting(SettingKind.SWITCH,
+                    _('HTTPS Verification'),
+                    SettingType.CONFIG,
+                    'preview_verify_https',
+                    desc=_('Whether to check for a valid certificate')),
+        ]
+
+        PreferenceBox.__init__(self, settings)
+
+
 class VisualNotifications(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
         trayicon_items = {
             'never': _('Hide icon'),
             'on_event': _('Only show for pending events'),
@@ -486,24 +429,16 @@ class VisualNotifications(PreferenceBox):
                     props={'entries': trayicon_items},
                     callback=self._on_trayicon),
 
-            Setting(SettingKind.SWITCH,
-                    _('Open Events'),
-                    SettingType.CONFIG,
-                    'autopopup',
-                    desc=_('Open events instead of showing a notification '
-                           'in the contact list')),
-
             Setting(SettingKind.NOTIFICATIONS,
                     _('Show Notifications'),
                     SettingType.DIALOG,
                     props={'dialog': NotificationsDialog}),
-
         ]
 
         PreferenceBox.__init__(self, settings)
 
     @staticmethod
-    def _on_trayicon(value, *args):
+    def _on_trayicon(value: str, *args: Any) -> None:
         if value == 'never':
             app.interface.hide_systray()
         elif value == 'on_event':
@@ -513,7 +448,7 @@ class VisualNotifications(PreferenceBox):
 
 
 class NotificationsDialog(SettingsDialog):
-    def __init__(self, account, parent):
+    def __init__(self, account: str, parent: Preferences) -> None:
 
         settings = [
             Setting(SettingKind.SWITCH,
@@ -524,18 +459,18 @@ class NotificationsDialog(SettingsDialog):
             Setting(SettingKind.SWITCH,
                     _('Notifications When Away'),
                     SettingType.CONFIG,
-                    'autopopupaway',
+                    'show_notifications_away',
                     desc=_('Show notifications even if you are Away, '
                            'Busy, etc.'),
                     bind='show_notifications'),
-            ]
+        ]
 
         SettingsDialog.__init__(self, parent, _('Notifications'),
                                 Gtk.DialogFlags.MODAL, settings, account)
 
 
 class Sounds(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
 
         settings = [
             Setting(SettingKind.SWITCH,
@@ -556,12 +491,12 @@ class Sounds(PreferenceBox):
 
         PreferenceBox.__init__(self, settings)
 
-    def _on_manage_sounds(self, *args):
+    def _on_manage_sounds(self, _button: Gtk.Button) -> None:
         open_window('ManageSounds', transient_for=self.get_toplevel())
 
 
 class StatusMessage(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
 
         settings = [
             Setting(SettingKind.SWITCH,
@@ -584,7 +519,7 @@ class StatusMessage(PreferenceBox):
 
 
 class AutomaticStatus(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
 
         settings = [
             Setting(SettingKind.AUTO_AWAY,
@@ -606,16 +541,16 @@ class AutomaticStatus(PreferenceBox):
         PreferenceBox.__init__(self, settings)
 
     @staticmethod
-    def _get_auto_away():
+    def _get_auto_away() -> bool:
         return app.settings.get('autoaway')
 
     @staticmethod
-    def _get_auto_xa():
+    def _get_auto_xa() -> bool:
         return app.settings.get('autoxa')
 
 
 class AutoAwayDialog(SettingsDialog):
-    def __init__(self, account, parent):
+    def __init__(self, account: str, parent: Preferences) -> None:
 
         settings = [
             Setting(SettingKind.SWITCH,
@@ -636,14 +571,14 @@ class AutoAwayDialog(SettingsDialog):
                     SettingType.CONFIG,
                     'autoaway_message',
                     bind='autoaway'),
-            ]
+        ]
 
         SettingsDialog.__init__(self, parent, _('Auto Away Settings'),
                                 Gtk.DialogFlags.MODAL, settings, account)
 
 
 class AutoExtendedAwayDialog(SettingsDialog):
-    def __init__(self, account, parent):
+    def __init__(self, account: str, parent: Preferences) -> None:
 
         settings = [
             Setting(SettingKind.SWITCH,
@@ -664,14 +599,14 @@ class AutoExtendedAwayDialog(SettingsDialog):
                     SettingType.CONFIG,
                     'autoxa_message',
                     bind='autoxa'),
-            ]
+        ]
 
         SettingsDialog.__init__(self, parent, _('Auto Extended Away Settings'),
                                 Gtk.DialogFlags.MODAL, settings, account)
 
 
 class Themes(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
 
         theme_items = self._get_theme_items()
 
@@ -703,37 +638,37 @@ class Themes(PreferenceBox):
         PreferenceBox.__init__(self, settings)
 
     @staticmethod
-    def _get_theme_items():
+    def _get_theme_items() -> list[str]:
         theme_items = ['default']
         for settings_theme in app.css_config.themes:
             theme_items.append(settings_theme)
         return theme_items
 
-    def update_theme_list(self):
+    def update_theme_list(self) -> None:
         self.get_setting('roster_theme').update_entries(self._get_theme_items())
 
-    def _on_edit_themes(self, *args):
+    def _on_edit_themes(self, _button: Gtk.Button) -> None:
         open_window('Themes', transient=self.get_toplevel())
 
     @staticmethod
-    def _on_theme_changed(value, *args):
+    def _on_theme_changed(value: str, *args: Any) -> None:
         app.css_config.change_theme(value)
-        app.nec.push_incoming_event(NetworkEvent('theme-update'))
-        app.interface.roster.repaint_themed_widgets()
-        app.interface.roster.change_roster_style(None)
+        app.ged.raise_event(ThemeUpdate())
+        app.ged.raise_event(StyleChanged())
 
     @staticmethod
-    def _on_dark_theme(value, *args):
+    def _on_dark_theme(value: str, *args: Any) -> None:
         app.css_config.set_dark_theme(int(value))
+        app.ged.raise_event(StyleChanged())
 
 
 class Emoji(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
         if sys.platform not in ('win32', 'darwin'):
             PreferenceBox.__init__(self, [])
             return
 
-        emoji_themes_items = []
+        emoji_themes_items: list[str] = []
         for theme in helpers.get_available_emoticon_themes():
             emoji_themes_items.append(theme)
 
@@ -749,54 +684,23 @@ class Emoji(PreferenceBox):
 
         PreferenceBox.__init__(self, settings)
 
-    def _on_emoticons_theme(self, *args):
+    def _on_emoticons_theme(self, *args: Any) -> None:
         emoji_chooser.load()
         self._toggle_emoticons()
 
     @staticmethod
-    def _toggle_emoticons():
-        controls = get_app_window('Preferences').get_all_controls()
-        for ctrl in controls:
+    def _toggle_emoticons() -> None:
+        for ctrl in app.window.get_controls():
             ctrl.toggle_emoticons()
 
 
-class StatusIcon(PreferenceBox):
-    def __init__(self, *args):
-
-        iconset_items = []
-        for _index, iconset_name in enumerate(get_available_iconsets()):
-            iconset_items.append(iconset_name)
-
-        settings = [
-            Setting(SettingKind.POPOVER,
-                    _('Status Icon Set'),
-                    SettingType.CONFIG,
-                    'iconset',
-                    props={'entries': iconset_items},
-                    callback=self._on_iconset_changed),
-
-            Setting(SettingKind.SWITCH,
-                    _('Use Transport Icons'),
-                    SettingType.CONFIG,
-                    'use_transports_iconsets',
-                    desc=_('Display protocol-specific status icons '
-                           '(ICQ, ..)')),
-        ]
-
-        PreferenceBox.__init__(self, settings)
-
-    @staticmethod
-    def _on_iconset_changed(*args):
-        app.interface.roster.update_icons()
-
-
 class Server(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
 
         settings = [
 
             Setting(SettingKind.USE_STUN_SERVER,
-                    _('Use Stun Server'),
+                    _('Use STUN Server'),
                     SettingType.DIALOG,
                     desc=_('Helps to establish calls through firewalls'),
                     props={'dialog': StunServerDialog}),
@@ -808,11 +712,11 @@ class Server(PreferenceBox):
 
 
 class StunServerDialog(SettingsDialog):
-    def __init__(self, account, parent):
+    def __init__(self, account: str, parent: Preferences) -> None:
 
         settings = [
             Setting(SettingKind.SWITCH,
-                    _('Use Stun Server'),
+                    _('Use STUN Server'),
                     SettingType.CONFIG,
                     'use_stun_server'),
 
@@ -821,14 +725,14 @@ class StunServerDialog(SettingsDialog):
                     SettingType.CONFIG,
                     'stun_server',
                     bind='use_stun_server')
-            ]
+        ]
 
-        SettingsDialog.__init__(self, parent, _('Auto Away Settings'),
+        SettingsDialog.__init__(self, parent, _('STUN Server Settings'),
                                 Gtk.DialogFlags.MODAL, settings, account)
 
 
 class Audio(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
 
         deps_installed = app.is_installed('AV')
 
@@ -863,18 +767,18 @@ class Audio(PreferenceBox):
         self.set_sensitive(deps_installed)
 
     @staticmethod
-    def _create_av_combo_items(items_dict):
+    def _create_av_combo_items(items_dict: dict[str, str]) -> dict[str, str]:
         items = enumerate(sorted(
             items_dict.items(),
             key=lambda x: '' if x[1].startswith('auto') else x[0].lower()))
-        combo_items = {}
+        combo_items: dict[str, str] = {}
         for _index, (name, value) in items:
             combo_items[value] = name
         return combo_items
 
 
 class Video(PreferenceBox):
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
 
         deps_installed = app.is_installed('AV')
 
@@ -939,31 +843,33 @@ class Video(PreferenceBox):
         self.set_sensitive(deps_installed)
 
     @staticmethod
-    def _on_video_input_changed(value, *args):
-        preview = get_app_window('Preferences').get_video_preview()
+    def _on_video_input_changed(_value: str, *args: Any) -> None:
+        pref_win = cast(Preferences, get_app_window('Preferences'))
+        preview = pref_win.get_video_preview()
         if preview is None or not preview.is_active:
             # changed signal gets triggered when we fill the combobox
             return
         preview.refresh()
 
     @staticmethod
-    def _toggle_live_preview(value, *args):
-        preview = get_app_window('Preferences').get_video_preview()
+    def _toggle_live_preview(value: bool, *args: Any) -> None:
+        pref_win = cast(Preferences, get_app_window('Preferences'))
+        preview = pref_win.get_video_preview()
         preview.toggle_preview(value)
 
     @staticmethod
-    def _create_av_combo_items(items_dict):
+    def _create_av_combo_items(items_dict: dict[str, str]) -> dict[str, str]:
         items = enumerate(sorted(
             items_dict.items(),
             key=lambda x: '' if x[1].startswith('auto') else x[0].lower()))
-        combo_items = {}
+        combo_items: dict[str, str] = {}
         for _index, (name, value) in items:
             combo_items[value] = name
         return combo_items
 
 
 class Miscellaneous(PreferenceBox):
-    def __init__(self, pref_window):
+    def __init__(self, pref_window: Preferences) -> None:
         self._hints_list = [
             'start_chat',
         ]
@@ -1001,30 +907,30 @@ class Miscellaneous(PreferenceBox):
         reset_button.set_sensitive(self._check_hints_reset)
 
     @staticmethod
-    def _get_proxies():
+    def _get_proxies() -> dict[str, str]:
         return {proxy: proxy for proxy in app.settings.get_proxies()}
 
     @staticmethod
-    def _on_proxy_edit(*args):
+    def _on_proxy_edit(*args: Any) -> None:
         open_window('ManageProxies')
 
-    def update_proxy_list(self):
+    def update_proxy_list(self) -> None:
         self.get_setting('global_proxy').update_entries(self._get_proxies())
 
-    def _check_hints_reset(self):
+    def _check_hints_reset(self) -> bool:
         for hint in self._hints_list:
-            if app.settings.get('show_help_%s' % hint) is False:
+            if app.settings.get(f'show_help_{hint}') is False:
                 return True
         return False
 
-    def _on_reset_hints(self, button):
+    def _on_reset_hints(self, button: Gtk.Button) -> None:
         for hint in self._hints_list:
-            app.settings.set('show_help_%s' % hint, True)
+            app.settings.set(f'show_help_{hint}', True)
         button.set_sensitive(False)
 
 
 class Advanced(PreferenceBox):
-    def __init__(self, pref_window):
+    def __init__(self, pref_window: Preferences) -> None:
 
         settings = [
             Setting(SettingKind.SWITCH,
@@ -1042,13 +948,13 @@ class Advanced(PreferenceBox):
             'clicked', self._on_advanced_config_editor)
 
     @staticmethod
-    def _on_debug_logging(value, *args):
+    def _on_debug_logging(value: bool, *args: Any) -> None:
         app.set_debug_mode(value)
 
     @staticmethod
-    def _on_open_debug_logs(*args):
+    def _on_open_debug_logs(*args: Any) -> None:
         open_file(configpaths.get('DEBUG'))
 
     @staticmethod
-    def _on_advanced_config_editor(*args):
+    def _on_advanced_config_editor(*args: Any) -> None:
         open_window('AdvancedConfig')

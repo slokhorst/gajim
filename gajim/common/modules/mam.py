@@ -28,12 +28,16 @@ from nbxmpp.structs import StanzaHandler
 from nbxmpp.modules.util import raise_if_error
 
 from gajim.common import app
-from gajim.common.nec import NetworkEvent
-from gajim.common.nec import NetworkIncomingEvent
+from gajim.common.events import ArchivingIntervalFinished
+from gajim.common.events import FeatureDiscovered
+from gajim.common.events import MamMessageReceived
+from gajim.common.events import MessageUpdated
+from gajim.common.events import RawMamMessageReceived
 from gajim.common.const import ArchiveState
 from gajim.common.const import KindConstant
 from gajim.common.const import SyncThreshold
 from gajim.common.helpers import AdditionalDataDict
+from gajim.common.helpers import get_retraction_text
 from gajim.common.modules.misc import parse_oob
 from gajim.common.modules.misc import parse_correction
 from gajim.common.modules.util import get_eme_message
@@ -68,6 +72,9 @@ class MAM(BaseModule):
         # Holds archive jids where catch up was successful
         self._catch_up_finished = []
 
+        self._con.connect_signal('state-changed', self._on_client_state_changed)
+        self._con.connect_signal('resume-failed', self._on_client_resume_failed)
+
     def pass_disco(self, info):
         if Namespace.MAM_2 not in info.features:
             return
@@ -75,12 +82,18 @@ class MAM(BaseModule):
         self.available = True
         self._log.info('Discovered MAM: %s', info.jid)
 
-        app.nec.push_incoming_event(
-            NetworkEvent('feature-discovered',
-                         account=self._account,
-                         feature=Namespace.MAM_2))
+        app.ged.raise_event(
+            FeatureDiscovered(account=self._account,
+                              feature=Namespace.MAM_2))
 
-    def reset_state(self):
+    def _on_client_resume_failed(self, _client, _signal_name):
+        self._reset_state()
+
+    def _on_client_state_changed(self, _client, _signal_name, state):
+        if state.is_disconnected:
+            self._reset_state()
+
+    def _reset_state(self):
         self._mam_query_ids.clear()
         self._catch_up_finished.clear()
 
@@ -160,11 +173,10 @@ class MAM(BaseModule):
         if not properties.is_mam_message:
             return
 
-        app.nec.push_incoming_event(
-            NetworkIncomingEvent('mam-message-received',
-                                 account=self._account,
-                                 stanza=stanza,
-                                 properties=properties))
+        app.ged.raise_event(
+            RawMamMessageReceived(account=self._account,
+                                  stanza=stanza,
+                                  properties=properties))
 
         if not self._from_valid_archive(stanza, properties):
             self._log.warning('Message from invalid archive %s',
@@ -216,6 +228,19 @@ class MAM(BaseModule):
             if properties.eme is not None:
                 msgtxt = get_eme_message(properties.eme)
 
+        if properties.is_moderation:
+            additional_data.set_value(
+                'retracted', 'by', properties.moderation.moderator_jid)
+            additional_data.set_value(
+                'retracted', 'timestamp', properties.moderation.timestamp)
+            additional_data.set_value(
+                'retracted', 'reason', properties.moderation.reason)
+
+            msgtxt = get_retraction_text(
+                self._account,
+                properties.moderation.moderator_jid,
+                properties.moderation.reason)
+
         if not msgtxt:
             # For example Chatstates, Receipts, Chatmarkers
             self._log.debug(stanza.getProperties())
@@ -233,29 +258,45 @@ class MAM(BaseModule):
                 return
             stanza_id = message_id
 
+        event_attr = {
+            'account': self._account,
+            'jid': str(properties.jid.bare),
+            'msgtxt': properties.body,
+            'properties': properties,
+            'additional_data': additional_data,
+            'unique_id': properties.id,
+            'stanza_id': stanza_id,
+            'archive_jid': properties.mam.archive,
+            'kind': kind,
+        }
+
+        correct_id = parse_correction(properties)
+        if correct_id is not None:
+            app.ged.raise_event(MessageUpdated(account=self._account,
+                                               jid=event_attr['jid'],
+                                               msgtxt=properties.body,
+                                               properties=properties,
+                                               correct_id=correct_id))
+            app.storage.archive.store_message_correction(
+                self._account,
+                properties.jid.bare,
+                correct_id,
+                properties.body,
+                properties.type.is_groupchat)
+            return
+
         app.storage.archive.insert_into_logs(
             self._account,
             with_,
             properties.mam.timestamp,
             kind,
-            unread=False,
             message=msgtxt,
             contact_name=properties.muc_nickname,
             additional_data=additional_data,
             stanza_id=stanza_id,
             message_id=properties.id)
 
-        app.nec.push_incoming_event(
-            NetworkEvent('mam-decrypted-message-received',
-                         account=self._account,
-                         additional_data=additional_data,
-                         correct_id=parse_correction(properties),
-                         archive_jid=properties.mam.archive,
-                         msgtxt=properties.body,
-                         properties=properties,
-                         kind=kind,
-                         )
-        )
+        app.ged.raise_event(MamMessageReceived(**event_attr))
 
     def _is_valid_request(self, properties):
         valid_id = self._mam_query_ids.get(properties.mam.archive, None)
@@ -491,8 +532,7 @@ class MAM(BaseModule):
                            result.jid, result.rsm.last)
             app.storage.archive.set_archive_infos(
                 result.jid, oldest_mam_timestamp=timestamp)
-            app.nec.push_incoming_event(NetworkEvent(
-                'archiving-interval-finished',
+            app.ged.raise_event(ArchivingIntervalFinished(
                 account=self._account,
                 query_id=queryid))
 
@@ -501,7 +541,3 @@ class MAM(BaseModule):
                                           end_date,
                                           result.rsm.last,
                                           queryid)
-
-
-def get_instance(*args, **kwargs):
-    return MAM(*args, **kwargs), 'MAM'

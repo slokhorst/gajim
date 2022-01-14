@@ -14,13 +14,9 @@
 
 # XEP-0172: User Nickname
 
-from typing import Any
-from typing import Tuple
-
 from nbxmpp.namespaces import Namespace
 
 from gajim.common import app
-from gajim.common.nec import NetworkEvent
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import event_node
 
@@ -47,19 +43,14 @@ class UserNickname(BaseModule):
             if nick is None:
                 nick = app.settings.get_account_setting(self._account, 'name')
             app.nicks[self._account] = nick
+            return
 
-        for contact in app.contacts.get_contacts(self._account,
-                                                 str(properties.jid)):
-            contact.contact_name = nick
+        app.storage.cache.set_contact(properties.jid, 'nickname', nick)
 
         self._log.info('Nickname for %s: %s', properties.jid, nick)
 
-        app.nec.push_incoming_event(
-            NetworkEvent('nickname-received',
-                         account=self._account,
-                         jid=properties.jid.bare,
-                         nickname=nick))
+        contact = self._con.get_module('Contacts').get_contact(properties.jid)
+        if contact is None:
+            return
 
-
-def get_instance(*args: Any, **kwargs: Any) -> Tuple[UserNickname, str]:
-    return UserNickname(*args, **kwargs), 'UserNickname'
+        contact.notify('nickname-update')

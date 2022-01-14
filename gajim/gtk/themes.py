@@ -14,163 +14,125 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-from collections import namedtuple
+from __future__ import annotations
+from typing import NamedTuple
+from typing import Optional
+from typing import Any
+from typing import Union
+from typing import cast
+
 from enum import IntEnum
 
 from gi.repository import Gtk
 from gi.repository import Gdk
+from gi.repository import Pango
 
 from gajim.common import app
-from gajim.common.nec import NetworkEvent
 from gajim.common.i18n import _
 from gajim.common.const import StyleAttr
+from gajim.common.events import StyleChanged
+from gajim.common.events import ThemeUpdate
 
 from .dialogs import ErrorDialog
 from .dialogs import DialogButton
 from .dialogs import ConfirmationDialog
-from .util import get_builder
+from .builder import get_builder
+from .preferences import Preferences
 from .util import get_app_window
 
-StyleOption = namedtuple('StyleOption', 'label selector attr')
 
-CSS_STYLE_OPTIONS = [
-    StyleOption(_('Chatstate Composing'),
-                '.gajim-state-composing',
-                StyleAttr.COLOR),
+class StyleOption(NamedTuple):
+    label: str
+    selector: str
+    attr: StyleAttr
 
-    StyleOption(_('Chatstate Inactive'),
-                '.gajim-state-inactive',
-                StyleAttr.COLOR),
 
-    StyleOption(_('Chatstate Gone'),
-                '.gajim-state-gone',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Chatstate Paused'),
-                '.gajim-state-paused',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Group Chat Tab New Directed Message'),
-                '.gajim-state-tab-muc-directed-msg',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Group Chat Tab New Message'),
-                '.gajim-state-tab-muc-msg',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Banner Foreground Color'),
-                '.gajim-banner',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Banner Background Color'),
-                '.gajim-banner',
-                StyleAttr.BACKGROUND),
-
-    StyleOption(_('Banner Font'),
-                '.gajim-banner',
+CSS_STYLE_OPTIONS: list[StyleOption] = [
+    StyleOption(_('Conversation: Text Font'),
+                '.gajim-conversation-text',
                 StyleAttr.FONT),
 
-    StyleOption(_('Account Row Foreground Color'),
-                '.gajim-account-row',
+    StyleOption(_('Conversation: Text Color'),
+                '.gajim-conversation-text',
                 StyleAttr.COLOR),
 
-    StyleOption(_('Account Row Background Color'),
-                '.gajim-account-row',
-                StyleAttr.BACKGROUND),
-
-    StyleOption(_('Account Row Font'),
-                '.gajim-account-row',
-                StyleAttr.FONT),
-
-    StyleOption(_('Group Row Foreground Color'),
-                '.gajim-group-row',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Group Row Background Color'),
-                '.gajim-group-row',
-                StyleAttr.BACKGROUND),
-
-    StyleOption(_('Group Row Font'),
-                '.gajim-group-row',
-                StyleAttr.FONT),
-
-    StyleOption(_('Contact Row Foreground Color'),
-                '.gajim-contact-row',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Contact Row Background Color'),
-                '.gajim-contact-row',
-                StyleAttr.BACKGROUND),
-
-    StyleOption(_('Contact Row Font'),
-                '.gajim-contact-row',
-                StyleAttr.FONT),
-
-    StyleOption(_('Conversation Font'),
-                '.gajim-conversation-font',
-                StyleAttr.FONT),
-
-    StyleOption(_('Incoming Nickname Color'),
-                '.gajim-incoming-nickname',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Outgoing Nickname Color'),
-                '.gajim-outgoing-nickname',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Incoming Message Text Color'),
-                '.gajim-incoming-message-text',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Incoming Message Text Font'),
-                '.gajim-incoming-message-text',
-                StyleAttr.FONT),
-
-    StyleOption(_('Outgoing Message Text Color'),
-                '.gajim-outgoing-message-text',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Outgoing Message Text Font'),
-                '.gajim-outgoing-message-text',
-                StyleAttr.FONT),
-
-    StyleOption(_('Status Message Color'),
-                '.gajim-status-message',
-                StyleAttr.COLOR),
-
-    StyleOption(_('Status Message Font'),
-                '.gajim-status-message',
-                StyleAttr.FONT),
-
-    StyleOption(_('URL Color'),
+    StyleOption(_('Conversation: URL Color'),
                 '.gajim-url',
                 StyleAttr.COLOR),
 
-    StyleOption(_('Highlight Message Color'),
-                '.gajim-highlight-message',
+    StyleOption(_('Conversation: Nickname Color (Incoming)'),
+                '.gajim-incoming-nickname',
                 StyleAttr.COLOR),
 
-    StyleOption(_('Message Correcting'),
+    StyleOption(_('Conversation: Nickname Color (Outgoing)'),
+                '.gajim-outgoing-nickname',
+                StyleAttr.COLOR),
+
+    StyleOption(_('Mention: Message Background Color'),
+                '.gajim-mention-highlight',
+                StyleAttr.BACKGROUND),
+
+    StyleOption(_('Status Message: Text Color'),
+                '.gajim-status-message',
+                StyleAttr.COLOR),
+
+    StyleOption(_('Status Message: Text Font'),
+                '.gajim-status-message',
+                StyleAttr.FONT),
+
+    StyleOption(_('Message Correction: Background Color'),
                 '.gajim-msg-correcting text',
                 StyleAttr.BACKGROUND),
 
-    StyleOption(_('Contact Disconnected Background'),
-                '.gajim-roster-disconnected',
+    StyleOption(_('Chat Banner: Foreground Color'),
+                '.gajim-banner',
+                StyleAttr.COLOR),
+
+    StyleOption(_('Chat Banner: Background Color'),
+                '.gajim-banner',
                 StyleAttr.BACKGROUND),
 
-    StyleOption(_('Contact Connected Background '),
-                '.gajim-roster-connected',
+    StyleOption(_('Chat Banner: Text Font'),
+                '.gajim-banner',
+                StyleAttr.FONT),
+
+    StyleOption(_('Contact List: Group Foreground Color'),
+                '.gajim-group-row',
+                StyleAttr.COLOR),
+
+    StyleOption(_('Contact List: Group Background Color'),
+                '.gajim-group-row',
                 StyleAttr.BACKGROUND),
-    StyleOption(_('Status Online Color'),
+
+    StyleOption(_('Contact List: Group Font'),
+                '.gajim-group-row',
+                StyleAttr.FONT),
+
+    StyleOption(_('Contact List: Contact Foreground Color'),
+                '.gajim-contact-row',
+                StyleAttr.COLOR),
+
+    StyleOption(_('Contact List: Contact Background Color'),
+                '.gajim-contact-row',
+                StyleAttr.BACKGROUND),
+
+    StyleOption(_('Contact List: Contact Font'),
+                '.gajim-contact-row',
+                StyleAttr.FONT),
+
+    StyleOption(_('Status: Online Color'),
                 '.gajim-status-online',
                 StyleAttr.COLOR),
-    StyleOption(_('Status Away Color'),
+
+    StyleOption(_('Status: Away Color'),
                 '.gajim-status-away',
                 StyleAttr.COLOR),
-    StyleOption(_('Status DND Color'),
+
+    StyleOption(_('Status: DND Color'),
                 '.gajim-status-dnd',
                 StyleAttr.COLOR),
-    StyleOption(_('Status Offline Color'),
+
+    StyleOption(_('Status: Offline Color'),
                 '.gajim-status-offline',
                 StyleAttr.COLOR),
 ]
@@ -181,7 +143,7 @@ class Column(IntEnum):
 
 
 class Themes(Gtk.ApplicationWindow):
-    def __init__(self, transient):
+    def __init__(self, transient: Gtk.Window) -> None:
         Gtk.ApplicationWindow.__init__(self)
         self.set_application(app.app)
         self.set_title(_('Gajim Themes'))
@@ -206,15 +168,25 @@ class Themes(Gtk.ApplicationWindow):
 
         self._fill_choose_listbox()
 
-    def _on_key_press(self, widget, event):
+    def _on_key_press(self,
+                      _widget: Gtk.Widget,
+                      event: Gdk.EventKey
+                      ) -> None:
         if event.keyval == Gdk.KEY_Escape:
             self.destroy()
 
-    def _get_themes(self):
+    def _get_themes(self) -> None:
+        current_theme = app.settings.get('roster_theme')
         for theme in app.css_config.themes:
+            if theme == current_theme:
+                self._ui.theme_store.prepend([theme])
+                continue
             self._ui.theme_store.append([theme])
 
-    def _on_theme_name_edit(self, _renderer, path, new_name):
+    def _on_theme_name_edit(self,
+                            _renderer: Gtk.CellRendererText,
+                            path: str,
+                            new_name: str) -> None:
         iter_ = self._ui.theme_store.get_iter(path)
         old_name = self._ui.theme_store[iter_][Column.THEME]
 
@@ -242,10 +214,10 @@ class Themes(Gtk.ApplicationWindow):
         app.settings.set('roster_theme', new_name)
         self._ui.theme_store.set_value(iter_, Column.THEME, new_name)
 
-    def _select_theme_row(self, iter_):
+    def _select_theme_row(self, iter_: Gtk.TreeIter) -> None:
         self._ui.theme_treeview.get_selection().select_iter(iter_)
 
-    def _on_theme_selected(self, tree_selection):
+    def _on_theme_selected(self, tree_selection: Gtk.TreeSelection) -> None:
         store, iter_ = tree_selection.get_selected()
         if iter_ is None:
             self._clear_options()
@@ -255,8 +227,10 @@ class Themes(Gtk.ApplicationWindow):
 
         self._ui.remove_theme_button.set_sensitive(True)
         self._load_options()
+        self._apply_theme(theme)
+        app.ged.raise_event(StyleChanged())
 
-    def _load_options(self):
+    def _load_options(self) -> None:
         self._ui.option_listbox.foreach(self._remove_option)
         for option in CSS_STYLE_OPTIONS:
             value = app.css_config.get_value(
@@ -268,7 +242,7 @@ class Themes(Gtk.ApplicationWindow):
             row = Option(option, value)
             self._ui.option_listbox.add(row)
 
-    def _add_option(self, _listbox, row):
+    def _add_option(self, _listbox: Gtk.ListBox, row: Option) -> None:
         # Add theme if there is none
         store, _ = self._ui.theme_treeview.get_selection().get_selected()
         first = store.get_iter_first()
@@ -288,18 +262,18 @@ class Themes(Gtk.ApplicationWindow):
         self._ui.option_listbox.add(row)
         self._ui.option_popover.popdown()
 
-    def _clear_options(self):
+    def _clear_options(self) -> None:
         self._ui.option_listbox.foreach(self._remove_option)
 
-    def _fill_choose_listbox(self):
+    def _fill_choose_listbox(self) -> None:
         for option in CSS_STYLE_OPTIONS:
             self._ui.choose_option_listbox.add(ChooseOption(option))
 
-    def _remove_option(self, row):
+    def _remove_option(self, row: Gtk.ListBoxRow) -> None:
         self._ui.option_listbox.remove(row)
         row.destroy()
 
-    def _on_add_new_theme(self, *args):
+    def _on_add_new_theme(self, *args: Any) -> None:
         name = self._create_theme_name()
         if not app.css_config.add_new_theme(name):
             return
@@ -311,29 +285,34 @@ class Themes(Gtk.ApplicationWindow):
         self._select_theme_row(iter_)
         self._apply_theme(name)
 
+    def reload_roster_theme(self) -> None:
+        tree_selection = self._ui.theme_treeview.get_selection()
+        store, iter_ = tree_selection.get_selected()
+        if iter_ is None:
+            return
+        theme = store[iter_][Column.THEME]
+        self._apply_theme(theme)
+
     @staticmethod
-    def _apply_theme(theme):
+    def _apply_theme(theme: str) -> None:
         app.settings.set('roster_theme', theme)
         app.css_config.change_theme(theme)
-        app.nec.push_incoming_event(NetworkEvent('theme-update'))
+        app.ged.raise_event(ThemeUpdate())
 
-        # Begin repainting themed widgets throughout
-        app.interface.roster.repaint_themed_widgets()
-        app.interface.roster.change_roster_style(None)
-
-    def _update_preferences_window(self):
-        window = get_app_window('Preferences')
+    @staticmethod
+    def _update_preferences_window() -> None:
+        window = cast(Optional[Preferences], get_app_window('Preferences'))
         if window is not None:
             window.update_theme_list()
 
     @staticmethod
-    def _create_theme_name():
-        i = 0
-        while 'newtheme%s' % i in app.css_config.themes:
-            i += 1
-        return 'newtheme%s' % i
+    def _create_theme_name() -> str:
+        index = 0
+        while f'newtheme{index}' in app.css_config.themes:
+            index += 1
+        return f'newtheme{index}'
 
-    def _on_remove_theme(self, *args):
+    def _on_remove_theme(self, *args: Any) -> None:
         store, iter_ = self._ui.theme_treeview.get_selection().get_selected()
         if iter_ is None:
             return
@@ -343,9 +322,12 @@ class Themes(Gtk.ApplicationWindow):
         def _remove_theme():
             if theme == app.settings.get('roster_theme'):
                 self._apply_theme('default')
+                app.ged.raise_event(StyleChanged())
 
             app.css_config.remove_theme(theme)
             self._update_preferences_window()
+            assert isinstance(store, Gtk.TreeStore)
+            assert iter_ is not None
             store.remove(iter_)
 
             first = store.get_iter_first()
@@ -369,7 +351,10 @@ class Themes(Gtk.ApplicationWindow):
 
 
 class Option(Gtk.ListBoxRow):
-    def __init__(self, option, value):
+    def __init__(self,
+                 option: StyleOption,
+                 value: Union[str, Pango.FontDescription, None]
+                 ) -> None:
         Gtk.ListBoxRow.__init__(self)
         self.option = option
         self._box = Gtk.Box(spacing=12)
@@ -381,8 +366,10 @@ class Option(Gtk.ListBoxRow):
         self._box.add(label)
 
         if option.attr in (StyleAttr.COLOR, StyleAttr.BACKGROUND):
+            assert not isinstance(value, Pango.FontDescription)
             self._init_color(value)
         elif option.attr == StyleAttr.FONT:
+            assert not isinstance(value, str)
             self._init_font(value)
 
         remove_button = Gtk.Button.new_from_icon_name(
@@ -395,7 +382,7 @@ class Option(Gtk.ListBoxRow):
         self.add(self._box)
         self.show_all()
 
-    def _init_color(self, color):
+    def _init_color(self, color: Optional[str]) -> None:
         color_button = Gtk.ColorButton()
         if color is not None:
             rgba = Gdk.RGBA()
@@ -405,7 +392,7 @@ class Option(Gtk.ListBoxRow):
         color_button.connect('color-set', self._on_color_set)
         self._box.add(color_button)
 
-    def _init_font(self, desc):
+    def _init_font(self, desc: Optional[Pango.FontDescription]) -> None:
         font_button = Gtk.FontButton()
         if desc is not None:
             font_button.set_font_desc(desc)
@@ -413,33 +400,40 @@ class Option(Gtk.ListBoxRow):
         font_button.connect('font-set', self._on_font_set)
         self._box.add(font_button)
 
-    def _on_color_set(self, color_button):
+    def _on_color_set(self, color_button: Gtk.ColorButton) -> None:
         color = color_button.get_rgba()
         color_string = color.to_string()
         app.css_config.set_value(
             self.option.selector, self.option.attr, color_string, pre=True)
-        app.nec.push_incoming_event(NetworkEvent('style-changed'))
+        app.ged.raise_event(StyleChanged())
+        themes_win = cast(Themes, self.get_toplevel())
+        themes_win.reload_roster_theme()
 
-    def _on_font_set(self, font_button):
+    def _on_font_set(self, font_button: Gtk.FontButton) -> None:
         desc = font_button.get_font_desc()
+        if desc is None:
+            return
         app.css_config.set_font(self.option.selector, desc, pre=True)
-        app.nec.push_incoming_event(NetworkEvent('style-changed'))
+        app.ged.raise_event(StyleChanged())
+        themes_win = cast(Themes, self.get_toplevel())
+        themes_win.reload_roster_theme()
 
-    def _on_remove(self, *args):
-        self.get_parent().remove(self)
+    def _on_remove(self, *args: Any) -> None:
+        listbox = cast(Gtk.ListBox, self.get_parent())
+        listbox.remove(self)
         app.css_config.remove_value(
             self.option.selector, self.option.attr, pre=True)
-        app.nec.push_incoming_event(NetworkEvent('style-changed'))
+        app.ged.raise_event(StyleChanged())
         self.destroy()
 
-    def __eq__(self, other):
-        if isinstance(other, ChooseOption):
-            return other.option == self.option
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ChooseOption):
+            raise NotImplementedError
         return other.option == self.option
 
 
 class ChooseOption(Gtk.ListBoxRow):
-    def __init__(self, option):
+    def __init__(self, option: StyleOption) -> None:
         Gtk.ListBoxRow.__init__(self)
         self.option = option
         label = Gtk.Label(label=option.label)

@@ -14,17 +14,19 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-import logging
 import os
 import sys
 import time
+import logging
 from datetime import datetime
+from typing import Optional
 
 from gajim.common import app
 from gajim.common import configpaths
 from gajim.common.i18n import _
 
-def parseLogLevel(arg):
+
+def parseLogLevel(arg: str) -> int:
     """
     Either numeric value or level name from logging module
     """
@@ -35,7 +37,8 @@ def parseLogLevel(arg):
     print(_('%s is not a valid loglevel') % repr(arg), file=sys.stderr)
     return 0
 
-def parseLogTarget(arg):
+
+def parseLogTarget(arg: str) -> str:
     """
     [gajim.]c.x.y  ->  gajim.c.x.y
     .other_logger  ->  other_logger
@@ -50,7 +53,8 @@ def parseLogTarget(arg):
         return arg
     return 'gajim.' + arg
 
-def parseAndSetLogLevels(arg):
+
+def parseAndSetLogLevels(arg: str) -> None:
     """
     [=]LOGLEVEL     ->  gajim=LOGLEVEL
     gajim=LOGLEVEL  ->  gajim=LOGLEVEL
@@ -78,7 +82,6 @@ def parseAndSetLogLevels(arg):
 
 
 class colors:
-    # pylint: disable=C0326
     NONE         = chr(27) + "[0m"
     BLACk        = chr(27) + "[30m"
     RED          = chr(27) + "[31m"
@@ -97,8 +100,10 @@ class colors:
     BRIGHT_CYAN  = chr(27) + "[36;1m"
     WHITE        = chr(27) + "[37;1m"
 
-def colorize(text, color):
+
+def colorize(text: str, color: str) -> str:
     return color + text + colors.NONE
+
 
 class FancyFormatter(logging.Formatter):
     """
@@ -112,17 +117,22 @@ class FancyFormatter(logging.Formatter):
         'CRITICAL': colors.BRIGHT_RED,
     }
 
-    def __init__(self, fmt, datefmt=None, use_color=False):
+    def __init__(self,
+                 fmt: Optional[str] = None,
+                 datefmt: Optional[str] = None,
+                 use_color: bool = False) -> None:
         logging.Formatter.__init__(self, fmt, datefmt)
         self.use_color = use_color
 
-    def formatTime(self, record, datefmt=None):
+    def formatTime(self,
+                   record: logging.LogRecord,
+                   datefmt: Optional[str] = None) -> str:
         f = logging.Formatter.formatTime(self, record, datefmt)
         if self.use_color:
             f = colorize(f, colors.DARK_GRAY)
         return f
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord) -> str:
         level = record.levelname
         record.levelname = '(%s)' % level[0]
 
@@ -136,7 +146,7 @@ class FancyFormatter(logging.Formatter):
         return logging.Formatter.format(self, record)
 
 
-def init():
+def init() -> None:
     """
     Iinitialize the logging system
     """
@@ -164,7 +174,7 @@ def init():
     root_log.propagate = False
 
     root_log = logging.getLogger('nbxmpp')
-    root_log.setLevel(logging.WARNING)
+    root_log.setLevel(logging.ERROR)
     root_log.addHandler(consoleloghandler)
     root_log.propagate = False
 
@@ -179,27 +189,30 @@ def init():
     if app.get_debug_mode() or os.environ.get('GAJIM_DEBUG', False):
         set_verbose()
 
-def set_loglevels(loglevels_string):
+
+def set_loglevels(loglevels_string: str) -> None:
     parseAndSetLogLevels(loglevels_string)
 
-def set_verbose():
+
+def set_verbose() -> None:
     parseAndSetLogLevels('gajim=DEBUG')
     parseAndSetLogLevels('.nbxmpp=INFO')
 
-def set_quiet():
+
+def set_quiet() -> None:
     parseAndSetLogLevels('gajim=CRITICAL')
     parseAndSetLogLevels('.nbxmpp=CRITICAL')
 
 
-def _redirect_output():
+def _redirect_output() -> None:
     debug_folder = configpaths.get('DEBUG')
     date = datetime.today().strftime('%d%m%Y-%H%M%S')
     filename = '%s-debug.log' % date
-    fd = open(debug_folder / filename, 'a')
+    fd = open(debug_folder / filename, 'a', encoding='utf8')
     sys.stderr = sys.stdout = fd
 
 
-def _cleanup_debug_logs():
+def _cleanup_debug_logs() -> None:
     debug_folder = configpaths.get('DEBUG')
     debug_files = list(debug_folder.glob('*-debug.log*'))
     now = time.time()

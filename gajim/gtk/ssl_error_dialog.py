@@ -12,21 +12,26 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-
-from gi.repository import Gtk
 from gi.repository import Gio
+from gi.repository import Gtk
 
 from gajim.common import app
+from gajim.common.client import Client
 
 from gajim.common.const import GIO_TLS_ERRORS
 from gajim.common.i18n import _
 
-from .util import get_builder
+from .builder import get_builder
 from .util import open_window
 
 
 class SSLErrorDialog(Gtk.ApplicationWindow):
-    def __init__(self, account, client, cert, error):
+    def __init__(self,
+                 account: str,
+                 client: Client,
+                 cert: Gio.TlsCertificate,
+                 error: Gio.TlsCertificateFlags
+                 ) -> None:
         Gtk.ApplicationWindow.__init__(self)
         self.set_name('SSLErrorDialog')
         self.set_application(app.app)
@@ -50,7 +55,7 @@ class SSLErrorDialog(Gtk.ApplicationWindow):
         self._ui.connect_signals(self)
         self.show_all()
 
-    def _process_error(self):
+    def _process_error(self) -> None:
         self._ui.intro_text.set_text(
             _('There was an error while attempting to verify the SSL '
               'certificate of your XMPP server (%s).') % self._server)
@@ -69,16 +74,18 @@ class SSLErrorDialog(Gtk.ApplicationWindow):
             self._ui.connect_button.set_no_show_all(True)
             self._ui.connect_button.hide()
 
-    def _on_view_cert_clicked(self, _button):
+    def _on_view_cert_clicked(self, _button: Gtk.Button) -> None:
         open_window('CertificateDialog',
                     account=self.account,
                     transient_for=self,
                     cert=self._cert)
 
-    def _on_add_certificate_toggled(self, checkbutton):
+    def _on_add_certificate_toggled(self,
+                                    checkbutton: Gtk.CheckButton
+                                    ) -> None:
         self._ui.connect_button.set_sensitive(checkbutton.get_active())
 
-    def _on_connect_clicked(self, _button):
+    def _on_connect_clicked(self, _button: Gtk.Button) -> None:
         if self._ui.add_certificate_checkbutton.get_active():
             app.cert_store.add_certificate(self._cert)
 

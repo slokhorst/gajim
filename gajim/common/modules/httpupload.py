@@ -83,12 +83,12 @@ class HTTPUpload(BaseModule):
                                          GLib.FormatSizeFlags.IEC_UNITS)
             self._log.info('Component has a maximum file size of: %s', size)
 
-        for ctrl in app.interface.msg_win_mgr.get_controls(acct=self._account):
+        for ctrl in app.window.get_controls(account=self._account):
             ctrl.update_actions()
 
     def make_transfer(self, path, encryption, contact, groupchat=False):
         if not path or not os.path.exists(path):
-            return None
+            raise FileError(_('Could not access file'))
 
         invalid_file = False
         stat = os.stat(path)
@@ -351,7 +351,7 @@ class HTTPFileTransfer(FileTransfer):
         self._uri_transform_func = func
 
     @property
-    def filename(self):
+    def filename(self) -> str:
         return os.path.basename(self._path)
 
     def set_error(self, domain, text=''):
@@ -376,7 +376,7 @@ class HTTPFileTransfer(FileTransfer):
     def get_chunk(self):
         if self._stream is None:
             if self._encryption is None:
-                self._stream = open(self._path, 'rb')
+                self._stream = open(self._path, 'rb')  # pylint: disable=consider-using-with
             else:
                 self._stream = io.BytesIO(self._data)
 
@@ -398,7 +398,3 @@ class HTTPFileTransfer(FileTransfer):
         self.put_uri = result.put_uri
         self.get_uri = result.get_uri
         self._headers = result.headers
-
-
-def get_instance(*args, **kwargs):
-    return HTTPUpload(*args, **kwargs), 'HTTPUpload'

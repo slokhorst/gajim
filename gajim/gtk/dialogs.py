@@ -12,30 +12,40 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-from datetime import datetime
-from collections import namedtuple
+from __future__ import annotations
 
-from gi.repository import GLib
+from typing import Any
+from typing import Dict
+from typing import NamedTuple
+from typing import List
+from typing import Optional
+
 from gi.repository import Gtk
-from gi.repository import Gdk
 from gi.repository import GdkPixbuf
 from gi.repository import Pango
 
 from gajim.common import app
 from gajim.common.i18n import _
 from gajim.common.const import ButtonAction
-from gajim.common.helpers import convert_gio_to_openssl_cert
 
-from .util import get_builder
+from .builder import get_builder
 from .util import get_thumbnail_size
 
 
-class DialogButton(namedtuple('DialogButton', ('response text callback args '
-                                               'kwargs action is_default'))):
+class DialogButton(NamedTuple):
+    response: Gtk.ResponseType
+    text: str
+    callback: Any
+    args: Any
+    kwargs: Any
+    action: ButtonAction
+    is_default: bool
+
+
     @classmethod
-    def make(cls, type_=None, **kwargs):
+    def make(cls, type_: Optional[str] = None, **kwargs: Any) -> DialogButton:
         # Defaults
-        default_kwargs = {
+        default_kwargs: dict[str, Any] = {
             'response': None,
             'text': None,
             'callback': None,
@@ -138,7 +148,7 @@ class HigDialog(Gtk.MessageDialog):
         """
         Show dialog
         """
-        vb = self.get_children()[0].get_children()[0] # Give focus to top vbox
+        vb = self.get_children()[0].get_children()[0]  # Give focus to top vbox
         # vb.set_flags(Gtk.CAN_FOCUS)
         vb.grab_focus()
         self.show_all()
@@ -149,7 +159,11 @@ class WarningDialog(HigDialog):
     HIG compliant warning dialog
     """
 
-    def __init__(self, pritext, sectext='', transient_for=None):
+    def __init__(self,
+                 pritext: str,
+                 sectext: str = '',
+                 transient_for: Optional[Gtk.Window] = None
+                 ) -> None:
         if transient_for is None:
             transient_for = app.app.get_active_window()
         HigDialog.__init__(self,
@@ -167,7 +181,11 @@ class InformationDialog(HigDialog):
     HIG compliant info dialog
     """
 
-    def __init__(self, pritext, sectext='', transient_for=None):
+    def __init__(self,
+                 pritext: str,
+                 sectext: str = '',
+                 transient_for: Optional[Gtk.Window] = None
+                 ) -> None:
         if transient_for is None:
             transient_for = app.app.get_active_window()
         HigDialog.__init__(self,
@@ -204,159 +222,15 @@ class ErrorDialog(HigDialog):
         self.popup()
 
 
-class CertificateDialog(Gtk.ApplicationWindow):
-    def __init__(self, transient_for, account, cert):
-        Gtk.ApplicationWindow.__init__(self)
-        self.account = account
-        self.set_name('CertificateDialog')
-        self.set_application(app.app)
-        self.set_show_menubar(False)
-        self.set_resizable(False)
-        self.set_position(Gtk.WindowPosition.CENTER)
-        self.set_title(_('Certificate'))
-
-        self._ui = get_builder('certificate_dialog.ui')
-        self.add(self._ui.certificate_box)
-
-        self.connect('key-press-event', self._on_key_press)
-
-        self._clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-
-        cert = convert_gio_to_openssl_cert(cert)
-        # Get data for labels and copy button
-        issuer = cert.get_issuer()
-        subject = cert.get_subject()
-
-        self._headline = _('Certificate for \n%s') % self.account
-        self._it_common_name = subject.commonName or ''
-        self._it_organization = subject.organizationName or ''
-        self._it_org_unit = subject.organizationalUnitName or ''
-        it_serial_no = str(cert.get_serial_number())
-        it_serial_no_half = int(len(it_serial_no) / 2)
-        self._it_serial_number = '%s\n%s' % (
-            it_serial_no[:it_serial_no_half],
-            it_serial_no[it_serial_no_half:])
-        self._ib_common_name = issuer.commonName or ''
-        self._ib_organization = issuer.organizationName or ''
-        self._ib_org_unit = issuer.organizationalUnitName or ''
-        issued = datetime.strptime(cert.get_notBefore().decode('ascii'),
-                                   '%Y%m%d%H%M%SZ')
-        self._issued = issued.strftime('%c %Z')
-        expires = datetime.strptime(cert.get_notAfter().decode('ascii'),
-                                    '%Y%m%d%H%M%SZ')
-        self._expires = expires.strftime('%c %Z')
-        sha1 = cert.digest('sha1').decode('utf-8')
-        self._sha1 = '%s\n%s' % (sha1[:29], sha1[30:])
-        sha256 = cert.digest('sha256').decode('utf-8')
-        self._sha256 = '%s\n%s\n%s\n%s' % (
-            sha256[:23], sha256[24:47], sha256[48:71], sha256[72:])
-
-        # Set labels
-        self._ui.label_cert_for_account.set_text(self._headline)
-        self._ui.data_it_common_name.set_text(self._it_common_name)
-        self._ui.data_it_organization.set_text(self._it_organization)
-        self._ui.data_it_organizational_unit.set_text(self._it_org_unit)
-        self._ui.data_it_serial_number.set_text(self._it_serial_number)
-        self._ui.data_ib_common_name.set_text(self._ib_common_name)
-        self._ui.data_ib_organization.set_text(self._ib_organization)
-        self._ui.data_ib_organizational_unit.set_text(self._ib_org_unit)
-        self._ui.data_issued_on.set_text(self._issued)
-        self._ui.data_expires_on.set_text(self._expires)
-        self._ui.data_sha1.set_text(self._sha1)
-        self._ui.data_sha256.set_text(self._sha256)
-
-        self.set_transient_for(transient_for)
-        self._ui.connect_signals(self)
-        self.show_all()
-
-    def _on_key_press(self, _widget, event):
-        if event.keyval == Gdk.KEY_Escape:
-            self.destroy()
-
-    def _on_copy_cert_info_button_clicked(self, _widget):
-        clipboard_text = \
-            self._headline + '\n\n' + \
-            _('Issued to\n') + \
-            _('Common Name (CN): ') + self._it_common_name + '\n' + \
-            _('Organization (O): ') + self._it_organization + '\n' + \
-            _('Organizational Unit (OU): ') + self._it_org_unit + '\n' + \
-            _('Serial Number: ') + self._it_serial_number + '\n\n' + \
-            _('Issued by\n') + \
-            _('Common Name (CN): ') + self._ib_common_name + '\n' + \
-            _('Organization (O): ') + self._ib_organization + '\n' + \
-            _('Organizational Unit (OU): ') + self._ib_org_unit + '\n\n' + \
-            _('Validity\n') + \
-            _('Issued on: ') + self._issued + '\n' + \
-            _('Expires on: ') + self._expires + '\n\n' + \
-            _('SHA-1:') + '\n' + \
-            self._sha1 + '\n' + \
-            _('SHA-256:') + '\n' + \
-            self._sha256 + '\n'
-        self._clipboard.set_text(clipboard_text, -1)
-
-
-class PassphraseDialog:
-    """
-    Class for Passphrase dialog
-    """
-    def __init__(self, titletext, labeltext, checkbuttontext=None,
-                 ok_handler=None, cancel_handler=None, transient_for=None):
-        self._ui = get_builder('passphrase_dialog.ui')
-        self.window = self._ui.get_object('passphrase_dialog')
-        self.passphrase = -1
-        self.window.set_title(titletext)
-        self._ui.message_label.set_text(labeltext)
-
-        self._ok = False
-
-        self.cancel_handler = cancel_handler
-        self.ok_handler = ok_handler
-        self._ui.ok_button.connect('clicked', self.on_okbutton_clicked)
-        self._ui.cancel_button.connect('clicked', self.on_cancelbutton_clicked)
-
-        self._ui.connect_signals(self)
-        if transient_for is None:
-            transient_for = app.app.get_active_window()
-        self.window.set_transient_for(transient_for)
-        self.window.show_all()
-
-        self.check = bool(checkbuttontext)
-        if self._ui.save_passphrase_checkbutton:
-            self._ui.save_passphrase_checkbutton.set_label(checkbuttontext)
-        else:
-            self._ui.save_passphrase_checkbutton.hide()
-
-    def on_okbutton_clicked(self, _widget):
-        if not self.ok_handler:
-            return
-
-        passph = self._ui.passphrase_entry.get_text()
-
-        if self.check:
-            checked = self._ui.save_passphrase_checkbutton.get_active()
-        else:
-            checked = False
-
-        self._ok = True
-
-        self.window.destroy()
-
-        if isinstance(self.ok_handler, tuple):
-            self.ok_handler[0](passph, checked, *self.ok_handler[1:])
-        else:
-            self.ok_handler(passph, checked)
-
-    def on_cancelbutton_clicked(self, _widget):
-        self.window.destroy()
-
-    def on_passphrase_dialog_destroy(self, _widget):
-        if self.cancel_handler and not self._ok:
-            self.cancel_handler()
-
-
 class ConfirmationDialog(Gtk.MessageDialog):
-    def __init__(self, title, text, sec_text, buttons,
-                 modal=True, transient_for=None):
+    def __init__(self,
+                 title: str,
+                 text: str,
+                 sec_text: str,
+                 buttons: List[DialogButton],
+                 modal: bool = True,
+                 transient_for: Optional[Gtk.Window] = None
+                 ) -> None:
         if transient_for is None:
             transient_for = app.app.get_active_window()
         Gtk.MessageDialog.__init__(self,
@@ -368,7 +242,7 @@ class ConfirmationDialog(Gtk.MessageDialog):
 
         self.get_style_context().add_class('confirmation-dialog')
 
-        self._buttons = {}
+        self._buttons: Dict[Gtk.ResponseType, DialogButton] = {}
 
         for button in buttons:
             self._buttons[button.response] = button
@@ -383,7 +257,10 @@ class ConfirmationDialog(Gtk.MessageDialog):
 
         self.connect('response', self._on_response)
 
-    def _on_response(self, _dialog, response):
+    def _on_response(self,
+                     _dialog: Gtk.MessageDialog,
+                     response: Gtk.ResponseType
+                     ) -> None:
         if response == Gtk.ResponseType.DELETE_EVENT:
             # Look if DELETE_EVENT is mapped to another response
             response = self._buttons.get(response, None)
@@ -400,7 +277,7 @@ class ConfirmationDialog(Gtk.MessageDialog):
             button.callback(*button.args, **button.kwargs)
         self.destroy()
 
-    def show(self):
+    def show(self) -> None:
         self.show_all()
 
 
@@ -408,8 +285,15 @@ NewConfirmationDialog = ConfirmationDialog
 
 
 class ConfirmationCheckDialog(ConfirmationDialog):
-    def __init__(self, title, text, sec_text, check_text,
-                 buttons, modal=True, transient_for=None):
+    def __init__(self,
+                 title: str,
+                 text: str,
+                 sec_text: str,
+                 check_text: str,
+                 buttons: List[DialogButton],
+                 modal: bool = True,
+                 transient_for: Optional[Gtk.Window] = None
+                 ) -> None:
         ConfirmationDialog.__init__(self,
                                     title,
                                     text,
@@ -431,7 +315,10 @@ class ConfirmationCheckDialog(ConfirmationDialog):
 
         self.get_content_area().add(self._checkbutton)
 
-    def _on_response(self, _dialog, response):
+    def _on_response(self,
+                     _dialog: Gtk.MessageDialog,
+                     response: Gtk.ResponseType
+                     ) -> None:
         button = self._buttons.get(response)
         if button is not None:
             button.args.insert(0, self._checkbutton.get_active())
@@ -442,8 +329,16 @@ NewConfirmationCheckDialog = ConfirmationCheckDialog
 
 
 class PastePreviewDialog(ConfirmationCheckDialog):
-    def __init__(self, title, text, sec_text, check_text, image,
-                 buttons, modal=True, transient_for=None):
+    def __init__(self,
+                 title: str,
+                 text: str,
+                 sec_text: str,
+                 check_text: str,
+                 image: GdkPixbuf.Pixbuf,
+                 buttons: List[DialogButton],
+                 modal: bool = True,
+                 transient_for: Optional[Gtk.Window] = None
+                 ) -> None:
         ConfirmationCheckDialog.__init__(self,
                                          title,
                                          text,
@@ -474,8 +369,15 @@ class PastePreviewDialog(ConfirmationCheckDialog):
 
 
 class InputDialog(ConfirmationDialog):
-    def __init__(self, title, text, sec_text, buttons, input_str=None,
-                 transient_for=None, modal=True):
+    def __init__(self,
+                 title: str,
+                 text: str,
+                 sec_text: str,
+                 buttons: List[DialogButton],
+                 input_str: Optional[str] = None,
+                 modal: bool = True,
+                 transient_for: Optional[Gtk.Window] = None,
+                 ) -> None:
         ConfirmationDialog.__init__(self,
                                     title,
                                     text,
@@ -495,50 +397,14 @@ class InputDialog(ConfirmationDialog):
 
         self.get_content_area().add(self._entry)
 
-    def _on_response(self, _dialog, response):
+    def _on_response(self,
+                     _dialog: Gtk.MessageDialog,
+                     response: Gtk.ResponseType
+                     ) -> None:
         button = self._buttons.get(response)
         if button is not None:
             button.args.insert(0, self._entry.get_text())
         super()._on_response(_dialog, response)
-
-
-class TimeoutWindow:
-    """
-    Class designed to be derivated by other windows
-    Derived windows close automatically after reaching the timeout
-    """
-    def __init__(self, timeout):
-        self.title_text = ''
-        self._countdown_left = timeout
-        self._timeout_source_id = None
-
-    def start_timeout(self):
-        if self._countdown_left > 0:
-            self.countdown()
-            self._timeout_source_id = GLib.timeout_add_seconds(
-                1, self.countdown)
-
-    def stop_timeout(self, *args, **kwargs):
-        if self._timeout_source_id is not None:
-            GLib.source_remove(self._timeout_source_id)
-            self._timeout_source_id = None
-        self.set_title(self.title_text)
-
-    def on_timeout(self):
-        """
-        To be implemented by derivated classes
-        """
-
-    def countdown(self):
-        if self._countdown_left <= 0:
-            self._timeout_source_id = None
-            self.on_timeout()
-            return False
-
-        self.set_title('%s [%s]' % (
-            self.title_text, str(self._countdown_left)))
-        self._countdown_left -= 1
-        return True
 
 
 class ShortcutsWindow:

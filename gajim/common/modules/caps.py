@@ -30,7 +30,6 @@ from gajim.common import app
 from gajim.common.const import COMMON_FEATURES
 from gajim.common.const import Entity
 from gajim.common.helpers import get_optional_features
-from gajim.common.nec import NetworkEvent
 from gajim.common.task_manager import Task
 from gajim.common.modules.base import BaseModule
 
@@ -107,13 +106,12 @@ class Caps(BaseModule):
             self._queue_task(task)
             return
 
-        jid = str(properties.jid)
-        app.storage.cache.set_last_disco_info(jid, disco_info, cache_only=True)
-        app.nec.push_incoming_event(
-            NetworkEvent('caps-update',
-                         account=self._account,
-                         fjid=jid,
-                         jid=properties.jid.bare))
+        app.storage.cache.set_last_disco_info(properties.jid,
+                                              disco_info,
+                                              cache_only=True)
+
+        contact = self._con.get_module('Contacts').get_contact(properties.jid)
+        contact.notify('caps-update')
 
     def _execute_task(self, task):
         self._log.info('Request %s from %s', task.entity.hash, task.entity.jid)
@@ -148,7 +146,7 @@ class Caps(BaseModule):
             return
 
         app.storage.cache.add_caps_entry(
-            str(disco_info.jid),
+            disco_info.jid,
             task.entity.method,
             disco_info.get_caps_hash(),
             disco_info)
@@ -160,11 +158,9 @@ class Caps(BaseModule):
         for task in tasks:
             self._remove_task(task)
             self._log.info('Update %s', task.entity.jid)
-            app.nec.push_incoming_event(
-                NetworkEvent('caps-update',
-                             account=self._account,
-                             fjid=str(task.entity.jid),
-                             jid=task.entity.jid.bare))
+            contact = self._con.get_module('Contacts').get_contact(
+                task.entity.jid)
+            contact.notify('caps-update')
 
     def update_caps(self):
         if not app.account_is_connected(self._account):
@@ -212,10 +208,11 @@ class EntityCapsTask(Task):
             return False
 
         if self._from_muc:
-            muc = client.get_module('MUC').get_manager().get(
-                self.entity.jid.bare)
+            contact = client.get_module('Contacts').get_contact(
+                self.entity.jid.bare,
+                groupchat=True)
 
-            if muc is None or not muc.state.is_joined:
+            if not contact.is_joined:
                 self.set_obsolete()
                 return False
 
@@ -226,7 +223,3 @@ class EntityCapsTask(Task):
 
     def __hash__(self):
         return hash(self.entity)
-
-
-def get_instance(*args, **kwargs):
-    return Caps(*args, **kwargs), 'Caps'

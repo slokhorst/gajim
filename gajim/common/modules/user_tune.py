@@ -14,18 +14,14 @@
 
 # XEP-0118: User Tune
 
-from typing import Any
-from typing import Tuple
-
 from nbxmpp.namespaces import Namespace
 
 from gajim.common import app
 from gajim.common import ged
-from gajim.common.nec import NetworkEvent
+from gajim.common.events import TuneReceived
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import event_node
 from gajim.common.modules.util import store_publish
-from gajim.common.const import PEPEventType
 from gajim.common.dbus.music_track import MusicTrackListener
 from gajim.common.helpers import event_filter
 
@@ -41,6 +37,7 @@ class UserTune(BaseModule):
         BaseModule.__init__(self, con)
         self._register_pubsub_handler(self._tune_received)
         self._tune_data = None
+        self._tunes = {}
 
         self.register_events([
             ('music-track-changed', ged.CORE, self._on_music_track_changed),
@@ -56,26 +53,16 @@ class UserTune(BaseModule):
             return
 
         data = properties.pubsub_event.data
-        for contact in app.contacts.get_contacts(self._account,
-                                                 str(properties.jid)):
-            if data is not None:
-                contact.pep[PEPEventType.TUNE] = data
-            else:
-                contact.pep.pop(PEPEventType.TUNE, None)
-
         if properties.is_self_message:
-            if data is not None:
-                self._con.pep[PEPEventType.TUNE] = data
-            else:
-                self._con.pep.pop(PEPEventType.TUNE, None)
             self._tune_data = data
+        else:
+            self._tunes[properties.jid] = data
 
-        app.nec.push_incoming_event(
-            NetworkEvent('tune-received',
-                         account=self._account,
-                         jid=properties.jid.bare,
-                         tune=data,
-                         is_self_message=properties.is_self_message))
+        app.ged.raise_event(TuneReceived(
+            account=self._account,
+            jid=properties.jid.bare,
+            tune=data,
+            is_self_message=properties.is_self_message))
 
     @store_publish
     def set_tune(self, tune):
@@ -118,7 +105,3 @@ class UserTune(BaseModule):
             return
 
         self.set_tune(event.info)
-
-
-def get_instance(*args: Any, **kwargs: Any) -> Tuple[UserTune, str]:
-    return UserTune(*args, **kwargs), 'UserTune'

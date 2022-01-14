@@ -15,21 +15,22 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
 from typing import Any
 from typing import List
 from typing import Tuple
 from typing import Optional
+from typing import Union
 
-import sys
-import weakref
 import logging
 import math
 import textwrap
-import functools
+from io import BytesIO
 from importlib import import_module
-import xml.etree.ElementTree as ET
 from functools import wraps
 from functools import lru_cache
+from pathlib import Path
 
 try:
     from PIL import Image
@@ -37,41 +38,43 @@ except Exception:
     pass
 
 from gi.repository import Gdk
+from gi.repository import Gio
 from gi.repository import Gtk
 from gi.repository import GLib
-from gi.repository import Gio
 from gi.repository import Pango
 from gi.repository import GdkPixbuf
-import nbxmpp
 import cairo
+import nbxmpp
+from nbxmpp import JID
+from nbxmpp.structs import LocationData
 
 from gajim.common import app
 from gajim.common import configpaths
-from gajim.common import i18n
 from gajim.common.i18n import _
 from gajim.common.helpers import URL_REGEX
-from gajim.common.const import MOODS
-from gajim.common.const import ACTIVITIES
 from gajim.common.const import LOCATION_DATA
 from gajim.common.const import Display
 from gajim.common.const import StyleAttr
-from gajim.common.nec import EventHelper as CommonEventHelper
+from gajim.common.ged import EventHelper as CommonEventHelper
+from gajim.common.styling import PlainBlock
+from gajim.common.structs import VariantMixin
 
 from .const import GajimIconSet
 from .const import WINDOW_MODULES
 
-_icon_theme = Gtk.IconTheme.get_default()
-if _icon_theme is not None:
-    _icon_theme.append_search_path(str(configpaths.get('ICONS')))
 
 log = logging.getLogger('gajim.gui.util')
+
+
+MenuValueT = Union[None, str, GLib.Variant, VariantMixin]
+MenuItemListT = list[tuple[str, str, MenuValueT]]
 
 
 class NickCompletionGenerator:
     def __init__(self, self_nick: str) -> None:
         self.nick = self_nick
-        self.sender_list = []  # type: List[str]
-        self.attention_list = []  # type: List[str]
+        self.sender_list: List[str] = []
+        self.attention_list: List[str] = []
 
     def change_nick(self, new_nick: str) -> None:
         self.nick = new_nick
@@ -113,7 +116,6 @@ class NickCompletionGenerator:
                 if contact == contact_old:
                     lst[idx] = contact_new
 
-
     def generate_suggestions(self, nicks: List[str],
                              beginning: str) -> List[str]:
         """
@@ -151,96 +153,71 @@ class NickCompletionGenerator:
         return matches + other_nicks
 
 
-class Builder:
-    def __init__(self,
-                 filename: str,
-                 widgets: List[str] = None,
-                 domain: str = None,
-                 gettext_: Any = None) -> None:
-        self._builder = Gtk.Builder()
-
-        if domain is None:
-            domain = i18n.DOMAIN
-        self._builder.set_translation_domain(domain)
-
-        if gettext_ is None:
-            gettext_ = _
-
-        xml_text = self._load_string_from_filename(filename, gettext_)
-
-        if widgets is not None:
-            self._builder.add_objects_from_string(xml_text, widgets)
-        else:
-            self._builder.add_from_string(xml_text)
-
-    @staticmethod
-    @functools.lru_cache(maxsize=None)
-    def _load_string_from_filename(filename, gettext_):
-        file_path = str(configpaths.get('GUI') / filename)
-
-        if sys.platform == "win32":
-            # This is a workaround for non working translation on Windows
-            tree = ET.parse(file_path)
-            for node in tree.iter():
-                if 'translatable' in node.attrib and node.text is not None:
-                    node.text = gettext_(node.text)
-
-            return ET.tostring(tree.getroot(),
-                               encoding='unicode',
-                               method='xml')
-
-
-        file = Gio.File.new_for_path(file_path)
-        content = file.load_contents(None)
-        return content[1].decode()
-
-    def __getattr__(self, name):
-        try:
-            return getattr(self._builder, name)
-        except AttributeError:
-            return self._builder.get_object(name)
-
-
-def get_builder(file_name: str, widgets: List[str] = None) -> Builder:
-    return Builder(file_name, widgets)
-
-
-def set_urgency_hint(window: Any, setting: bool) -> None:
+def set_urgency_hint(window: Gtk.Window, setting: bool) -> None:
     if app.settings.get('use_urgency_hint'):
         window.set_urgency_hint(setting)
 
 
 def icon_exists(name: str) -> bool:
-    return _icon_theme.has_icon(name)
+    return Gtk.IconTheme.get_default().has_icon(name)
 
 
-def load_icon(icon_name, widget=None, size=16, pixbuf=False,
-              scale=None, flags=Gtk.IconLookupFlags.FORCE_SIZE):
+def load_icon_info(icon_name: str,
+                   size: int,
+                   scale: Optional[int],
+                   flags: Gtk.IconLookupFlags) -> Optional[Gtk.IconInfo]:
 
-    if widget is not None:
-        scale = widget.get_scale_factor()
+    if scale is None:
+        scale = app.window.get_scale_factor()
 
     if not scale:
         log.warning('Could not determine scale factor')
         scale = 1
 
+    icon_theme = Gtk.IconTheme.get_default()
+
     try:
-        iconinfo = _icon_theme.lookup_icon_for_scale(
+        iconinfo = icon_theme.lookup_icon_for_scale(
             icon_name, size, scale, flags)
         if iconinfo is None:
             log.info('No icon found for %s', icon_name)
-            return
-        if pixbuf:
-            return iconinfo.load_icon()
-        return iconinfo.load_surface(None)
-    except GLib.GError as error:
+            return None
+        return iconinfo
+    except GLib.Error as error:
         log.error('Unable to load icon %s: %s', icon_name, str(error))
+    return None
 
 
-def get_app_icon_list(scale_widget):
-    pixbufs = []
+def load_icon_surface(
+        icon_name: str,
+        size: int = 16,
+        scale: Optional[int] = None,
+        flags: Gtk.IconLookupFlags = Gtk.IconLookupFlags.FORCE_SIZE,
+        ) -> Optional[cairo.Surface]:
+
+    icon_info = load_icon_info(icon_name, size, scale, flags)
+    if icon_info is None:
+        return None
+    return icon_info.load_surface(None)
+
+
+def load_icon_pixbuf(icon_name: str,
+                     size: int = 16,
+                     scale: Optional[int] = None,
+                     flags: Gtk.IconLookupFlags = Gtk.IconLookupFlags.FORCE_SIZE,
+                     ) -> Optional[GdkPixbuf.Pixbuf]:
+
+    icon_info = load_icon_info(icon_name, size, scale, flags)
+    if icon_info is None:
+        return None
+    return icon_info.load_icon()
+
+
+def get_app_icon_list(scale_widget: Gtk.Widget) -> list[GdkPixbuf.Pixbuf]:
+    scale = scale_widget.get_scale_factor()
+    pixbufs: list[GdkPixbuf.Pixbuf] = []
     for size in (16, 32, 48, 64, 128):
-        pixbuf = load_icon('org.gajim.Gajim', scale_widget, size, pixbuf=True)
+        pixbuf = load_icon_pixbuf('org.gajim.Gajim', size=size, scale=scale)
         if pixbuf is not None:
             pixbufs.append(pixbuf)
     return pixbufs
@@ -253,31 +230,33 @@ def get_icon_name(name: str,
         name = 'notinroster'
 
     if iconset is not None:
-        return '%s-%s' % (iconset, name)
+        return f'{iconset}-{name}'
 
     if transport is not None:
-        return '%s-%s' % (transport, name)
+        return f'{transport}-{name}'
 
     iconset = app.settings.get('iconset')
     if not iconset:
         iconset = 'dcraven'
-    return '%s-%s' % (iconset, name)
+    return f'{iconset}-{name}'
 
 
-def load_user_iconsets():
+def load_user_iconsets() -> None:
     iconsets_path = configpaths.get('MY_ICONSETS')
     if not iconsets_path.exists():
         return
+
+    icon_theme = Gtk.IconTheme.get_default()
 
     for path in iconsets_path.iterdir():
         if not path.is_dir():
             continue
         log.info('Found iconset: %s', path.stem)
-        _icon_theme.append_search_path(str(path))
+        icon_theme.append_search_path(str(path))
 
 
-def get_available_iconsets():
-    iconsets = []
+def get_available_iconsets() -> list[str]:
+    iconsets: list[str] = []
     for iconset in GajimIconSet:
         iconsets.append(iconset.value)
 
@@ -292,7 +271,7 @@ def get_available_iconsets():
     return iconsets
 
 
-def get_total_screen_geometry() -> Tuple[int, int]:
+def get_total_screen_geometry() -> tuple[int, int]:
     total_width = 0
     total_height = 0
     display = Gdk.Display.get_default()
@@ -313,10 +292,9 @@ def resize_window(window: Gtk.Window, width: int, height: int) -> None:
     screen_w, screen_h = get_total_screen_geometry()
     if not width or not height:
         return
-    if width > screen_w:
-        width = screen_w
-    if height > screen_h:
-        height = screen_h
+
+    width = min(width, screen_w)
+    height = min(height, screen_h)
     window.resize(abs(width), abs(height))
 
 
@@ -325,10 +303,9 @@ def move_window(window: Gtk.Window, pos_x: int, pos_y: int) -> None:
     Move the window, but also check if out of screen
     """
     screen_w, screen_h = get_total_screen_geometry()
-    if pos_x < 0:
-        pos_x = 0
-    if pos_y < 0:
-        pos_y = 0
+    pos_x = max(pos_x, 0)
+    pos_y = max(pos_y, 0)
+
     width, height = window.get_size()
     if pos_x + width > screen_w:
         pos_x = screen_w - width
@@ -337,14 +314,25 @@ def move_window(window: Gtk.Window, pos_x: int, pos_y: int) -> None:
     window.move(pos_x, pos_y)
 
 
-def restore_roster_position(window):
-    if not app.settings.get('save-roster-position'):
+def save_main_window_position() -> None:
+    if not app.settings.get('save_main_window_position'):
         return
     if app.is_display(Display.WAYLAND):
         return
-    move_window(window,
-                app.settings.get('roster_x-position'),
-                app.settings.get('roster_y-position'))
+    x_pos, y_pos = app.window.get_position()
+    log.debug('Saving main window position: %s %s', x_pos, y_pos)
+    app.settings.set('mainwin_x_position', x_pos)
+    app.settings.set('mainwin_y_position', y_pos)
+
+
+def restore_main_window_position() -> None:
+    if not app.settings.get('save_main_window_position'):
+        return
+    if app.is_display(Display.WAYLAND):
+        return
+    move_window(app.window,
+                app.settings.get('mainwin_x_position'),
+                app.settings.get('mainwin_y_position'))
 
 
 def get_completion_liststore(entry: Gtk.Entry) -> Gtk.ListStore:
@@ -412,7 +400,8 @@ def at_the_end(widget: Gtk.ScrolledWindow) -> bool:
     return adj_v.get_value() == max_scroll_pos
 
 
-def get_image_button(icon_name, tooltip, toggle=False):
+def get_image_button(icon_name: str, tooltip: str,
+                     toggle: bool = False) -> Gtk.Button:
     if toggle:
         button = Gtk.ToggleButton()
         image = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
@@ -424,8 +413,9 @@ def get_image_button(icon_name, tooltip, toggle=False):
 
 
 def get_image_from_icon_name(icon_name: str, scale: int) -> Any:
+    icon_theme = Gtk.IconTheme.get_default()
     icon = get_icon_name(icon_name)
-    surface = _icon_theme.load_surface(icon, 16, scale, None, 0)
+    surface = icon_theme.load_surface(icon, 16, scale, None, 0)
     return Gtk.Image.new_from_surface(surface)
 
 
@@ -437,15 +427,18 @@ def gtk_month(month: int) -> int:
     return month - 1
 
 
-def convert_rgb_to_hex(rgb_string: str) -> str:
-    rgb = Gdk.RGBA()
-    rgb.parse(rgb_string)
-    rgb.to_color()
-
-    red = int(rgb.red * 255)
-    green = int(rgb.green * 255)
-    blue = int(rgb.blue * 255)
+def convert_rgba_to_hex(rgba: Gdk.RGBA) -> str:
+    red = int(rgba.red * 255)
+    green = int(rgba.green * 255)
+    blue = int(rgba.blue * 255)
     return '#%02x%02x%02x' % (red, green, blue)
+
+
+def convert_rgb_to_hex(rgb_string: str) -> str:
+    rgba = Gdk.RGBA()
+    rgba.parse(rgb_string)
+    rgba.to_color()
+    return convert_rgba_to_hex(rgba)
 
 
 @lru_cache(maxsize=1024)
@@ -453,6 +446,16 @@ def convert_rgb_string_to_float(rgb_string: str) -> Tuple[float, float, float]:
     rgba = Gdk.RGBA()
     rgba.parse(rgb_string)
     return (rgba.red, rgba.green, rgba.blue)
+
+
+def rgba_to_float(rgba: Gdk.RGBA) -> Tuple[float, float, float]:
+    return (rgba.red, rgba.green, rgba.blue)
+
+
+def make_rgba(color_string: str) -> Gdk.RGBA:
+    rgba = Gdk.RGBA()
+    rgba.parse(color_string)
+    return rgba
 
 
 def get_monitor_scale_factor() -> int:
@@ -464,54 +467,7 @@ def get_monitor_scale_factor() -> int:
     return monitor.get_scale_factor()
 
 
-def get_metacontact_surface(icon_name, expanded, scale):
-    icon_size = 16
-    state_surface = _icon_theme.load_surface(
-        icon_name, icon_size, scale, None, 0)
-    if 'event' in icon_name:
-        return state_surface
-
-    if expanded:
-        icon = get_icon_name('opened')
-        expanded_surface = _icon_theme.load_surface(
-            icon, icon_size, scale, None, 0)
-    else:
-        icon = get_icon_name('closed')
-        expanded_surface = _icon_theme.load_surface(
-            icon, icon_size, scale, None, 0)
-    ctx = cairo.Context(state_surface)
-    ctx.rectangle(0, 0, icon_size, icon_size)
-    ctx.set_source_surface(expanded_surface)
-    ctx.fill()
-    return state_surface
-
-
-def get_show_in_roster(event, session=None):
-    """
-    Return True if this event must be shown in roster, else False
-    """
-    if event == 'gc_message_received':
-        return True
-    if event == 'message_received':
-        if session and session.control:
-            return False
-    return True
-
-
-def get_show_in_systray(type_, account, jid):
-    """
-    Return True if this event must be shown in systray, else False
-    """
-    if type_ == 'printed_gc_msg':
-        contact = app.contacts.get_groupchat_contact(account, jid)
-        if contact is not None:
-            return contact.can_notify()
-        # it's not an highlighted message, don't show in systray
-        return False
-    return app.settings.get('trayicon_notification_on_events')
-
-
-def get_primary_accel_mod():
+def get_primary_accel_mod() -> Optional[Gdk.ModifierType]:
     """
     Returns the primary Gdk.ModifierType modifier.
     cmd on osx, ctrl everywhere else.
@@ -519,7 +475,7 @@ def get_primary_accel_mod():
     return Gtk.accelerator_parse("<Primary>")[1]
 
 
-def get_hardware_key_codes(keyval):
+def get_hardware_key_codes(keyval: int) -> List[int]:
     keymap = Gdk.Keymap.get_for_display(Gdk.Display.get_default())
 
     valid, key_map_keys = keymap.get_entries_for_keyval(keyval)
@@ -537,52 +493,8 @@ def ensure_not_destroyed(func):
     return func_wrapper
 
 
-def format_mood(mood, text):
-    if mood is None:
-        return ''
-    mood = MOODS[mood]
-    markuptext = '<b>%s</b>' % GLib.markup_escape_text(mood)
-    if text is not None:
-        markuptext += ' (%s)' % GLib.markup_escape_text(text)
-    return markuptext
-
-
-def get_account_mood_icon_name(account):
-    client = app.get_client(account)
-    mood = client.get_module('UserMood').get_current_mood()
-    return f'mood-{mood.mood}' if mood is not None else mood
-
-
-def format_activity(activity, subactivity, text):
-    if subactivity in ACTIVITIES[activity]:
-        subactivity = ACTIVITIES[activity][subactivity]
-    activity = ACTIVITIES[activity]['category']
-
-    markuptext = '<b>' + GLib.markup_escape_text(activity)
-    if subactivity:
-        markuptext += ': ' + GLib.markup_escape_text(subactivity)
-    markuptext += '</b>'
-    if text:
-        markuptext += ' (%s)' % GLib.markup_escape_text(text)
-    return markuptext
-
-
-def get_activity_icon_name(activity, subactivity=None):
-    icon_name = 'activity-%s' % activity.replace('_', '-')
-    if subactivity is not None:
-        icon_name += '-%s' % subactivity.replace('_', '-')
-    return icon_name
-
-
-def get_account_activity_icon_name(account):
-    client = app.get_client(account)
-    activity = client.get_module('UserActivity').get_current_activity()
-    if activity is None:
-        return None
-    return get_activity_icon_name(activity.activity, activity.subactivity)
-
-
-def format_tune(artist, _length, _rating, source, title, _track, _uri):
+def format_tune(artist: str, _length: str, _rating: str, source: str,
+                title: str, _track: str, _uri: str) -> str:
     artist = GLib.markup_escape_text(artist or _('Unknown Artist'))
     title = GLib.markup_escape_text(title or _('Unknown Title'))
     source = GLib.markup_escape_text(source or _('Unknown Source'))
@@ -594,13 +506,13 @@ def format_tune(artist, _length, _rating, source, title, _track, _uri):
     return tune_string
 
 
-def get_account_tune_icon_name(account):
+def get_account_tune_icon_name(account: str) -> Optional[str]:
     client = app.get_client(account)
     tune = client.get_module('UserTune').get_current_tune()
     return None if tune is None else 'audio-x-generic'
 
 
-def format_location(location):
+def format_location(location: LocationData) -> str:
     location = location._asdict()
     location_string = ''
     for attr, value in location.items():
@@ -617,13 +529,24 @@ def format_location(location):
     return location_string.strip()
 
 
-def get_account_location_icon_name(account):
+def get_account_location_icon_name(account: str) -> Optional[str]:
     client = app.get_client(account)
     location = client.get_module('UserLocation').get_current_location()
     return None if location is None else 'applications-internet'
 
 
-def format_fingerprint(fingerprint):
+def format_eta(time_: Union[int, float]) -> str:
+    times = {'minutes': 0, 'seconds': 0}
+    time_ = int(time_)
+    times['seconds'] = time_ % 60
+    if time_ >= 60:
+        time_ = int(time_ / 60)
+        times['minutes'] = round(time_ % 60)
+        return _('%(minutes)s min %(seconds)s s') % times
+    return _('%s s') % times['seconds']
+
+
+def format_fingerprint(fingerprint: str) -> str:
     fplen = len(fingerprint)
     wordsize = fplen // 8
     buf = ''
@@ -633,7 +556,7 @@ def format_fingerprint(fingerprint):
     return buf.rstrip().upper()
 
 
-def find_widget(name, container):
+def find_widget(name: str, container: Gtk.Widget) -> Optional[Gtk.Widget]:
     for child in container.get_children():
         if Gtk.Buildable.get_name(child) == name:
             return child
@@ -643,7 +566,7 @@ def find_widget(name, container):
 
 
 class MultiLineLabel(Gtk.Label):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: any) -> None:
         Gtk.Label.__init__(self, *args, **kwargs)
         self.set_line_wrap(True)
         self.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
@@ -651,16 +574,16 @@ class MultiLineLabel(Gtk.Label):
 
 
 class MaxWidthComboBoxText(Gtk.ComboBoxText):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         Gtk.ComboBoxText.__init__(self, *args, **kwargs)
-        self._max_width = 100
+        self._max_width: int = 100
         text_renderer = self.get_cells()[0]
         text_renderer.set_property('ellipsize', Pango.EllipsizeMode.END)
 
-    def set_max_size(self, size):
+    def set_max_size(self, size: int) -> None:
         self._max_width = size
 
-    def do_get_preferred_width(self):
+    def do_get_preferred_width(self) -> Tuple[int, int]:
         minimum_width, natural_width = Gtk.ComboBoxText.do_get_preferred_width(
             self)
 
@@ -671,7 +594,7 @@ class MaxWidthComboBoxText(Gtk.ComboBoxText):
         return minimum_width, natural_width
 
 
-def text_to_color(text):
+def text_to_color(text: str) -> Tuple[float, float, float]:
     if app.css_config.prefer_dark:
         background = (0, 0, 0)  # RGB (0, 0, 0) black
     else:
@@ -685,21 +608,8 @@ def get_color_for_account(account: str) -> str:
     return rgba.to_string()
 
 
-def generate_account_badge(account):
-    account_label = app.get_account_label(account)
-    badge = Gtk.Label(label=account_label)
-    badge.set_ellipsize(Pango.EllipsizeMode.END)
-    badge.set_max_width_chars(12)
-    badge.set_size_request(50, -1)
-    account_class = app.css_config.get_dynamic_class(account)
-    badge_context = badge.get_style_context()
-    badge_context.add_class(account_class)
-    badge_context.add_class('badge')
-    return badge
-
-
 @lru_cache(maxsize=16)
-def get_css_show_class(show):
+def get_css_show_class(show: str) -> str:
     if show in ('online', 'chat'):
         return '.gajim-status-online'
     if show == 'away':
@@ -710,7 +620,45 @@ def get_css_show_class(show):
     return '.gajim-status-offline'
 
 
-def scale_with_ratio(size, width, height):
+def add_css_to_widget(widget: Any, css: str) -> None:
+    provider = Gtk.CssProvider()
+    provider.load_from_data(bytes(css.encode()))
+    context = widget.get_style_context()
+    context.add_provider(provider,
+                         Gtk.STYLE_PROVIDER_PRIORITY_USER)
+
+
+def get_pixbuf_from_data(file_data: bytes) -> Optional[GdkPixbuf.Pixbuf]:
+    # TODO: This already exists in preview_helpery pixbuf_from_data
+    """
+    Get image data and returns GdkPixbuf.Pixbuf
+    """
+    pixbufloader = GdkPixbuf.PixbufLoader()
+    try:
+        pixbufloader.write(file_data)
+        pixbufloader.close()
+        pixbuf = pixbufloader.get_pixbuf()
+    except GLib.Error:
+        pixbufloader.close()
+
+        log.warning('loading avatar using pixbufloader failed, trying to '
+                    'convert avatar image using pillow')
+        try:
+            avatar = Image.open(BytesIO(file_data)).convert("RGBA")
+            array = GLib.Bytes.new(avatar.tobytes())
+            width, height = avatar.size
+            pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(
+                array, GdkPixbuf.Colorspace.RGB,
+                True, 8, width, height, width * 4)
+        except Exception:
+            log.warning('Could not use pillow to convert avatar image, '
+                        'image cannot be displayed', exc_info=True)
+            return None
+
+    return pixbuf
+
+
+def scale_with_ratio(size: int, width: int, height: int) -> Tuple[int, int]:
     if height == width:
         return size, size
     if height > width:
@@ -721,14 +669,32 @@ def scale_with_ratio(size, width, height):
     return size, int(size / ratio)
 
 
-def load_pixbuf(path, size=None):
+def scale_pixbuf(pixbuf: GdkPixbuf.Pixbuf,
+                 size: int) -> Optional[GdkPixbuf.Pixbuf]:
+    width, height = scale_with_ratio(size,
+                                     pixbuf.get_width(),
+                                     pixbuf.get_height())
+    return pixbuf.scale_simple(width, height,
+                               GdkPixbuf.InterpType.BILINEAR)
+
+
+def scale_pixbuf_from_data(data: bytes,
+                           size: int
+                           ) -> Optional[GdkPixbuf.Pixbuf]:
+    pixbuf = get_pixbuf_from_data(data)
+    return scale_pixbuf(pixbuf, size)
+
+
+def load_pixbuf(path: Union[str, Path],
+                size: Optional[int] = None
+                ) -> Optional[GdkPixbuf.Pixbuf]:
     try:
         if size is None:
             return GdkPixbuf.Pixbuf.new_from_file(str(path))
         return GdkPixbuf.Pixbuf.new_from_file_at_scale(
             str(path), size, size, True)
 
-    except GLib.GError:
+    except GLib.Error:
         try:
             with open(path, 'rb') as im_handle:
                 img = Image.open(im_handle)
@@ -755,7 +721,7 @@ def load_pixbuf(path, size=None):
         return None
 
 
-def get_thumbnail_size(pixbuf, size):
+def get_thumbnail_size(pixbuf: GdkPixbuf.Pixbuf, size: int) -> Tuple[int, int]:
     # Calculates the new thumbnail size while preserving the aspect ratio
     image_width = pixbuf.get_width()
     image_height = pixbuf.get_height()
@@ -774,7 +740,7 @@ def get_thumbnail_size(pixbuf, size):
     return image_width, image_height
 
 
-def make_href_markup(string):
+def make_href_markup(string: str) -> str:
     url_color = app.css_config.get_value('.gajim-url', StyleAttr.COLOR)
     color = convert_rgb_to_hex(url_color)
 
@@ -788,7 +754,7 @@ def make_href_markup(string):
     return URL_REGEX.sub(_to_href, string)
 
 
-def get_app_windows(account):
+def get_app_windows(account: str) -> List[Gtk.Window]:
     windows = []
     for win in app.app.get_windows():
         if hasattr(win, 'account'):
@@ -797,7 +763,10 @@ def get_app_windows(account):
     return windows
 
 
-def get_app_window(name, account=None, jid=None):
+def get_app_window(name: str,
+                   account: Optional[str] = None,
+                   jid: Optional[Union[str, JID]] = None
+                   ) -> Optional[Gtk.Window]:
     for win in app.app.get_windows():
         if type(win).__name__ != name:
             continue
@@ -813,7 +782,7 @@ def get_app_window(name, account=None, jid=None):
     return None
 
 
-def open_window(name, **kwargs):
+def open_window(name: str, **kwargs: Any) -> Any:
     window = get_app_window(name,
                             kwargs.get('account'),
                             kwargs.get('jid'))
@@ -841,5 +810,127 @@ def check_destroy(widget):
     widget.connect('destroy', _destroy)
 
 
-def check_finalize(obj, name):
-    weakref.finalize(obj, print, f'{name} has been finalized')
+def _connect_destroy(sender, func, detailed_signal, handler, *args, **kwargs):
+    """Connect a bound method to a foreign object signal and disconnect
+    if the object the method is bound to emits destroy (Gtk.Widget subclass).
+    Also works if the handler is a nested function in a method and
+    references the method's bound object.
+    This solves the problem that the sender holds a strong reference
+    to the bound method and the bound to object doesn't get GCed.
+    """
+
+    if hasattr(handler, "__self__"):
+        obj = handler.__self__
+    else:
+        # XXX: get the "self" var of the enclosing scope.
+        # Used for nested functions which ref the object but aren't methods.
+        # In case they don't ref "self" normal connect() should be used anyway.
+        index = handler.__code__.co_freevars.index("self")
+        obj = handler.__closure__[index].cell_contents
+
+    assert obj is not sender
+
+    handler_id = func(detailed_signal, handler, *args, **kwargs)
+
+    def disconnect_cb(*args):
+        sender.disconnect(handler_id)
+
+    obj.connect('destroy', disconnect_cb)
+    return handler_id
+
+
+def connect_destroy(sender, *args, **kwargs):
+    return _connect_destroy(sender, sender.connect, *args, **kwargs)
+
+
+def wrap_with_event_box(klass):
+    @wraps(klass)
+    def klass_wrapper(*args, **kwargs):
+        widget = klass(*args, **kwargs)
+        event_box = Gtk.EventBox()
+
+        def _on_realize(*args):
+            event_box.get_window().set_cursor(get_cursor('pointer'))
+
+        event_box.connect_after('realize', _on_realize)
+        event_box.add(widget)
+        return event_box
+    return klass_wrapper
+
+
+class AccountBadge(Gtk.Label):
+    def __init__(self, account: str) -> None:
+        Gtk.Label.__init__(self)
+        self.set_ellipsize(Pango.EllipsizeMode.END)
+        self.set_max_width_chars(12)
+        self.set_size_request(50, -1)
+        self.get_style_context().add_class('badge')
+        self._account = account
+
+        self.refresh()
+        self.show()
+
+    def refresh(self) -> None:
+        label = app.get_account_label(self._account)
+        self.set_text(label)
+        account_class = app.css_config.get_dynamic_class(self._account)
+        self.get_style_context().add_class(account_class)
+        self.set_tooltip_text(_('Account: %s') % label)
+
+
+def make_pango_attributes(block: PlainBlock) -> Pango.AttrList:
+    attrlist = Pango.AttrList()
+    for span in block.spans:
+        attr = get_style_attribute_with_name(span.name)
+        attr.start_index = span.start_byte
+        attr.end_index = span.end_byte
+        attrlist.insert(attr)
+    return attrlist
+
+
+def get_style_attribute_with_name(name: str) -> Pango.Attribute:
+    if name == 'strong':
+        return Pango.attr_weight_new(Pango.Weight.BOLD)
+
+    if name == 'strike':
+        return Pango.attr_strikethrough_new(True)
+
+    if name == 'emphasis':
+        return Pango.attr_style_new(Pango.Style.ITALIC)
+
+    if name == 'pre':
+        return Pango.attr_family_new('monospace')
+
+    raise ValueError('unknown attribute %s' % name)
+
+
+def get_key_theme() -> Optional[str]:
+    settings = Gtk.Settings.get_default()
+    if settings is None:
+        return None
+    return settings.get_property('gtk-key-theme-name')
+
+
+def make_menu_item(label: str,
+                   action: Optional[str] = None,
+                   value: MenuValueT = None) -> Gio.MenuItem:
+
+    if value is None:
+        return Gio.MenuItem.new(label, action)
+
+    item = Gio.MenuItem.new(label)
+    if isinstance(value, str):
+        item.set_detailed_action(f'{action}({value})')
+    elif isinstance(value, VariantMixin):
+        item.set_action_and_target_value(action, value.to_variant())
+    else:
+        item.set_action_and_target_value(action, value)
+    return item
+
+
+def make_menu(menuitems: MenuItemListT) -> Gio.Menu:
+    menu = Gio.Menu()
+    for item in menuitems:
+        menuitem = make_menu_item(*item)
+        menu.append_item(menuitem)
+    return menu

@@ -18,7 +18,8 @@ import nbxmpp
 from nbxmpp.namespaces import Namespace
 
 from gajim.common import app
-from gajim.common.nec import NetworkEvent
+from gajim.common.events import AgentRemoved
+from gajim.common.events import GatewayPromptReceived
 from gajim.common.modules.base import BaseModule
 
 
@@ -34,7 +35,7 @@ class Gateway(BaseModule):
 
         self._con.connection.SendAndCallForResponse(
             iq, self._on_unsubscribe_result)
-        self._con.get_module('Roster').del_item(agent)
+        self._con.get_module('Roster').delete_item(agent)
 
     def _on_unsubscribe_result(self, _nbxmpp_client, stanza):
         if not nbxmpp.isResultNode(stanza):
@@ -43,20 +44,22 @@ class Gateway(BaseModule):
 
         agent = stanza.getFrom().bare
         jid_list = []
-        for jid in app.contacts.get_jid_list(self._account):
-            if jid.endswith('@' + agent):
-                jid_list.append(jid)
-                self._log.info('Removing contact %s due to'
-                               ' unregistered transport %s', jid, agent)
-                self._con.get_module('Presence').unsubscribe(jid)
-                # Transport contacts can't have 2 resources
-                if jid in app.to_be_removed[self._account]:
-                    # This way we'll really remove it
-                    app.to_be_removed[self._account].remove(jid)
+        for contact in self._client.get_module('Roster').iter_contacts:
+            if contact.jid.domain == agent:
+                jid_list.append(contact.jid)
+                self._log.info(
+                    'Removing contact %s due to unregistered transport %s',
+                    contact.jid,
+                    agent)
+                self._con.get_module('Presence').unsubscribe(contact.jid)
 
-        app.nec.push_incoming_event(
-            NetworkEvent('agent-removed',
-                         conn=self._con,
+                # Transport contacts can't have 2 resources
+                if contact.jid in app.to_be_removed[self._account]:
+                    # This way we'll really remove it
+                    app.to_be_removed[self._account].remove(contact.jid)
+
+        app.ged.raise_event(
+            AgentRemoved(conn=self._con,
                          agent=agent,
                          jid_list=jid_list))
 
@@ -85,17 +88,12 @@ class Gateway(BaseModule):
             prompt = None
             prompt_jid = None
 
-        app.nec.push_incoming_event(
-            NetworkEvent('gateway-prompt-received',
-                         conn=self._con,
-                         fjid=fjid,
-                         jid=jid,
-                         resource=resource,
-                         desc=desc,
-                         prompt=prompt,
-                         prompt_jid=prompt_jid,
-                         stanza=stanza))
-
-
-def get_instance(*args, **kwargs):
-    return Gateway(*args, **kwargs), 'Gateway'
+        app.ged.raise_event(
+            GatewayPromptReceived(conn=self._con,
+                                  fjid=fjid,
+                                  jid=jid,
+                                  resource=resource,
+                                  desc=desc,
+                                  prompt=prompt,
+                                  prompt_jid=prompt_jid,
+                                  stanza=stanza))

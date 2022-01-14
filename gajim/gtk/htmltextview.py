@@ -47,8 +47,8 @@ from gajim.common import app
 from gajim.common.const import StyleAttr
 from gajim.common.helpers import open_uri
 from gajim.common.helpers import parse_uri
-from gajim.gui_menu_builder import get_conv_context_menu
 
+from .menus import get_conv_context_menu
 from .util import get_cursor
 
 log = logging.getLogger('gajim.htmlview')
@@ -208,12 +208,11 @@ class HtmlHandler(xml.sax.handler.ContentHandler):
     It keeps a stack of "style spans" (start/end element pairs) and a stack of
     list counters, for nested lists.
     """
-    def __init__(self, textview, conv_textview, startiter):
+    def __init__(self, textview, startiter):
         xml.sax.handler.ContentHandler.__init__(self)
         self.textbuf = textview.get_buffer()
         self.textview = textview
         self.iter = startiter
-        self.conv_textview = conv_textview
         self.text = ''
         self.starting = True
         self.preserve = False
@@ -561,11 +560,10 @@ class HtmlHandler(xml.sax.handler.ContentHandler):
         return False
 
     def handle_specials(self, text):
-        if self.conv_textview:
-            self.iter = self.conv_textview.detect_and_print_special_text(
-                text, self._get_style_tags(), iter_=self.iter)
-        else:
-            self._insert_text(text)
+        # TODO: Parse formatting
+        # self.iter = self.textview.parse_formatting(
+        #    text, self._get_style_tags(), iter_=self.iter)
+        self._insert_text(text)
 
     def characters(self, content):
         if self.preserve:
@@ -729,7 +727,7 @@ class HtmlTextView(Gtk.TextView):
 
     def _on_destroy(self, *args):
         # We restore the TextView’s drag destination to avoid a GTK warning
-        # when closing the control. ChatControlBase.shutdown() calls destroy()
+        # when closing the control. BaseControl.shutdown() calls destroy()
         # on the control’s main box, causing GTK to recursively destroy the
         # child widgets. GTK then tries to set a target list on the TextView,
         # resulting in a warning because the Widget has no drag destination.
@@ -830,14 +828,14 @@ class HtmlTextView(Gtk.TextView):
         open_uri(uri, account=self.account)
         return Gdk.EVENT_STOP
 
-    def display_html(self, html, textview, conv_textview, iter_=None):
+    def display_html(self, html, textview, iter_=None):
         buffer_ = self.get_buffer()
         if iter_:
             eob = iter_
         else:
             eob = buffer_.get_end_iter()
         parser = xml.sax.make_parser()
-        parser.setContentHandler(HtmlHandler(textview, conv_textview, eob))
+        parser.setContentHandler(HtmlHandler(textview, eob))
         parser.parse(StringIO(html))
         # If the xhtml ends with a BLOCK element we have to remove
         # the \n we add after BLOCK elements

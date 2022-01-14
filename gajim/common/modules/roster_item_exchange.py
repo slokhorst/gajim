@@ -20,8 +20,8 @@ from nbxmpp.structs import StanzaHandler
 
 from gajim.common import app
 from gajim.common import helpers
+from gajim.common.events import RosterItemExchangeEvent
 from gajim.common.i18n import _
-from gajim.common.nec import NetworkIncomingEvent
 from gajim.common.modules.base import BaseModule
 
 
@@ -62,7 +62,7 @@ class RosterItemExchange(BaseModule):
                                   item.getAttr('jid'))
                 continue
             name = item.getAttr('name')
-            contact = app.contacts.get_contact(self._account, jid)
+            contact = self._get_contact(jid)
             groups = []
             same_groups = True
             for group in item.getTags('group'):
@@ -86,8 +86,8 @@ class RosterItemExchange(BaseModule):
 
         self._log.info('Items: %s', exchange_items_list)
 
-        app.nec.push_incoming_event(RosterItemExchangeEvent(
-            None, conn=self._con,
+        app.ged.raise_event(RosterItemExchangeEvent(
+            conn=self._con,
             fjid=str(stanza.getFrom()),
             exchange_items_list=exchange_items_list,
             action=action))
@@ -101,30 +101,20 @@ class RosterItemExchange(BaseModule):
         if type_ == 'message':
             if len(contacts) == 1:
                 msg = _('Sent contact: "%(jid)s" (%(name)s)') % {
-                    'jid': contacts[0].get_full_jid(),
-                    'name': contacts[0].get_shown_name()}
+                    'jid': contacts[0].jid, 'name': contacts[0].name}
             else:
                 msg = _('Sent contacts:')
                 for contact in contacts:
-                    msg += '\n "%s" (%s)' % (contact.get_full_jid(),
-                                             contact.get_shown_name())
+                    msg += '\n "%s" (%s)' % (contact.jid, contact.name)
             stanza = nbxmpp.Message(to=app.get_jid_without_resource(fjid),
                                     body=msg)
         elif type_ == 'iq':
             stanza = nbxmpp.Iq(to=fjid, typ='set')
         xdata = stanza.addChild(name='x', namespace=Namespace.ROSTERX)
         for contact in contacts:
-            name = contact.get_shown_name()
+            name = contact.name
             xdata.addChild(name='item', attrs={'action': 'add',
-                                               'jid': contact.jid,
+                                               'jid': str(contact.jid),
                                                'name': name})
             self._log.info('Send contact: %s %s', contact.jid, name)
         self._con.connection.send(stanza)
-
-
-class RosterItemExchangeEvent(NetworkIncomingEvent):
-    name = 'roster-item-exchange-received'
-
-
-def get_instance(*args, **kwargs):
-    return RosterItemExchange(*args, **kwargs), 'RosterItemExchange'

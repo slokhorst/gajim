@@ -22,7 +22,11 @@ from nbxmpp.structs import StanzaHandler
 from nbxmpp.util import generate_id
 
 from gajim.common import app
-from gajim.common.nec import NetworkEvent
+from gajim.common.events import GcMessageReceived
+from gajim.common.events import MessageError
+from gajim.common.events import MessageReceived
+from gajim.common.events import MessageUpdated
+from gajim.common.events import RawMessageReceived
 from gajim.common.helpers import AdditionalDataDict
 from gajim.common.helpers import should_log
 from gajim.common.const import KindConstant
@@ -88,8 +92,7 @@ class Message(BaseModule):
 
         self._log.info('Received from %s', stanza.getFrom())
 
-        app.nec.push_incoming_event(NetworkEvent(
-            'raw-message-received',
+        app.ged.raise_event(RawMessageReceived(
             conn=self._con,
             stanza=stanza,
             account=self._account))
@@ -133,29 +136,23 @@ class Message(BaseModule):
 
         msgtxt = properties.body
 
-        # TODO: remove all control UI stuff
-        gc_control = app.interface.msg_win_mgr.get_gc_control(
-            jid, self._account)
-        if not gc_control:
-            minimized = app.interface.minimized_controls[self._account]
-            gc_control = minimized.get(jid)
         session = None
-        if not properties.type.is_groupchat:
-            if properties.is_muc_pm and properties.type.is_error:
-                session = self._con.find_session(fjid, properties.thread)
-                if not session:
-                    session = self._con.get_latest_session(fjid)
-                if not session:
-                    session = self._con.make_new_session(
-                        fjid, properties.thread, type_='pm')
-            else:
-                session = self._con.get_or_create_session(
-                    fjid, properties.thread)
+        # if not properties.type.is_groupchat:
+            # if properties.is_muc_pm and properties.type.is_error:
+            #     session = self._con.find_session(fjid, properties.thread)
+            #     if not session:
+            #         session = self._con.get_latest_session(fjid)
+            #     if not session:
+            #         session = self._con.make_new_session(
+            #             fjid, properties.thread, type_='pm')
+            # else:
+            #     session = self._con.get_or_create_session(
+            #         fjid, properties.thread)
 
-            if properties.thread and not session.received_thread_id:
-                session.received_thread_id = True
+            # if properties.thread and not session.received_thread_id:
+            #     session.received_thread_id = True
 
-            session.last_receive = time.time()
+            # session.last_receive = time.time()
 
         additional_data = AdditionalDataDict()
 
@@ -165,11 +162,6 @@ class Message(BaseModule):
 
         parse_oob(properties, additional_data)
         parse_xhtml(properties, additional_data)
-
-        app.nec.push_incoming_event(NetworkEvent('update-client-info',
-                                                 account=self._account,
-                                                 jid=jid,
-                                                 resource=resource))
 
         if properties.is_encrypted:
             additional_data['encrypted'] = properties.encrypted.additional_data
@@ -187,20 +179,36 @@ class Message(BaseModule):
             'account': self._account,
             'additional_data': additional_data,
             'fjid': fjid,
-            'jid': jid,
+            'jid': fjid if properties.is_muc_pm else jid,
             'resource': resource,
             'stanza_id': stanza_id,
             'unique_id': stanza_id or message_id,
-            'correct_id': parse_correction(properties),
             'msgtxt': msgtxt,
             'session': session,
             'delayed': properties.user_timestamp is not None,
-            'gc_control': gc_control,
-            'popup': False,
             'msg_log_id': None,
             'displaymarking': displaymarking,
             'properties': properties,
         }
+
+        correct_id = parse_correction(properties)
+        if correct_id is not None:
+            event = MessageUpdated(
+                        account=self._account,
+                        jid=event_attr['jid'],
+                        msgtxt=msgtxt,
+                        properties=properties,
+                        correct_id=correct_id)
+
+            if should_log(self._account, jid):
+                app.storage.archive.store_message_correction(
+                    self._account,
+                    jid,
+                    correct_id,
+                    msgtxt,
+                    properties.type.is_groupchat)
+            app.ged.raise_event(event)
+            return
 
         if type_.is_groupchat:
             if not msgtxt:
@@ -209,14 +217,31 @@ class Message(BaseModule):
             event_attr.update({
                 'room_jid': jid,
             })
-            event = NetworkEvent('gc-message-received', **event_attr)
-            app.nec.push_incoming_event(event)
+            event = GcMessageReceived(**event_attr)
+            app.ged.raise_event(event)
             # TODO: Some plugins modify msgtxt in the GUI event
             self._log_muc_message(event)
             return
 
-        app.nec.push_incoming_event(
-            NetworkEvent('decrypted-message-received', **event_attr))
+        app.ged.raise_event(MessageReceived(**event_attr))
+
+        log_type = KindConstant.CHAT_MSG_RECV
+        if properties.is_sent_carbon:
+            log_type = KindConstant.CHAT_MSG_SENT
+
+        if not should_log(self._account, jid) or not msgtxt:
+            return
+
+        app.storage.archive.insert_into_logs(
+            self._account,
+            fjid if properties.is_muc_pm else jid,
+            properties.timestamp,
+            log_type,
+            message=msgtxt,
+            subject=properties.subject,
+            additional_data=additional_data,
+            stanza_id=stanza_id or message_id,
+            message_id=properties.id)
 
     def _message_error_received(self, _con, _stanza, properties):
         jid = properties.jid
@@ -231,9 +256,8 @@ class Message(BaseModule):
             properties.id,
             properties.error)
 
-        app.nec.push_incoming_event(
-            NetworkEvent('message-error',
-                         account=self._account,
+        app.ged.raise_event(
+            MessageError(account=self._account,
                          jid=jid,
                          room_jid=jid,
                          message_id=properties.id,
@@ -374,6 +398,15 @@ class Message(BaseModule):
         if message.message is None:
             return
 
+        if message.correct_id is not None:
+            app.storage.archive.store_message_correction(
+                self._account,
+                message.jid,
+                message.correct_id,
+                message.message,
+                message.is_groupchat)
+            return
+
         app.storage.archive.insert_into_logs(
             self._account,
             message.jid,
@@ -384,7 +417,3 @@ class Message(BaseModule):
             additional_data=message.additional_data,
             message_id=message.message_id,
             stanza_id=message.message_id)
-
-
-def get_instance(*args, **kwargs):
-    return Message(*args, **kwargs), 'Message'

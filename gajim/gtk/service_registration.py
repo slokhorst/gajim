@@ -38,12 +38,12 @@ class Page(IntEnum):
 
 
 class ServiceRegistration(Gtk.Assistant):
-    def __init__(self, account, agent):
+    def __init__(self, account, address):
         Gtk.Assistant.__init__(self)
+        self.account = account
 
         self._con = app.connections[account]
-        self._agent = agent
-        self._account = account
+        self._agent = address
         self._data_form_widget = None
 
         self.set_application(app.app)
@@ -218,8 +218,9 @@ class ErrorPage(Gtk.Box):
         icon.get_style_context().add_class('error-color')
         icon.set_valign(Gtk.Align.END)
         self._label = Gtk.Label()
-        self._label.get_style_context().add_class('bold16')
         self._label.set_valign(Gtk.Align.START)
+        self._label.set_max_width_chars(50)
+        self._label.set_line_wrap(True)
 
         self.add(icon)
         self.add(self._label)

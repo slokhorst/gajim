@@ -35,9 +35,9 @@ from gi.repository import GLib
 from gajim.common import app
 from gajim.common import helpers
 from gajim.common import jingle_xtls
+from gajim.common.events import FileRequestError
 from gajim.common.file_props import FilesProp
 from gajim.common.socks5 import Socks5SenderClient
-from gajim.common.nec import NetworkEvent
 from gajim.common.modules.base import BaseModule
 
 
@@ -209,17 +209,17 @@ class Bytestream(BaseModule):
             if is_transfer_stopped(file_props):
                 continue
             receiver_jid = file_props.receiver
-            if contact.get_full_jid() == receiver_jid:
+            if contact.jid == receiver_jid:
                 file_props.error = -5
                 self.remove_transfer(file_props)
-                app.nec.push_incoming_event(
-                    NetworkEvent('file-request-error',
-                                 conn=self._con,
-                                 jid=app.get_jid_without_resource(contact.jid),
-                                 file_props=file_props,
-                                 error_msg=''))
+                app.ged.raise_event(
+                    FileRequestError(
+                        conn=self._con,
+                        jid=app.get_jid_without_resource(contact.jid),
+                        file_props=file_props,
+                        error_msg=''))
             sender_jid = file_props.sender
-            if contact.get_full_jid() == sender_jid:
+            if contact.jid == sender_jid:
                 file_props.error = -3
                 self.remove_transfer(file_props)
 
@@ -267,12 +267,12 @@ class Bytestream(BaseModule):
             self._result_socks5_sid, file_props)
         if not listener:
             file_props.error = -5
-            app.nec.push_incoming_event(
-                NetworkEvent('file-request-error',
-                             conn=self._con,
-                             jid=app.get_jid_without_resource(receiver),
-                             file_props=file_props,
-                             error_msg=''))
+            app.ged.raise_event(
+                FileRequestError(
+                    conn=self._con,
+                    jid=app.get_jid_without_resource(receiver),
+                    file_props=file_props,
+                    error_msg=''))
             self._connect_error(file_props.sid,
                                 error='not-acceptable',
                                 error_type='modify')
@@ -322,9 +322,7 @@ class Bytestream(BaseModule):
             port = app.settings.get('file_transfers_port')
             self._add_streamhosts_to_query(query, sender, port, my_ips)
         except socket.gaierror:
-            from gajim.common.connection_handlers_events import InformationEvent
-            app.nec.push_incoming_event(
-                InformationEvent(None, dialog_name='wrong-host'))
+            log.error('wrong host, invalid local address?')
 
     def _add_addiditional_streamhosts_to_query(self, query, file_props):
         sender = file_props.sender
@@ -521,12 +519,11 @@ class Bytestream(BaseModule):
         if msg:
             self.disconnect_transfer(file_props)
             file_props.error = -3
-            app.nec.push_incoming_event(
-                NetworkEvent('file-request-error',
-                             conn=self._con,
-                             jid=app.get_jid_without_resource(to),
-                             file_props=file_props,
-                             error_msg=msg))
+            app.ged.raise_event(
+                FileRequestError(conn=self._con,
+                                 jid=app.get_jid_without_resource(to),
+                                 file_props=file_props,
+                                 error_msg=msg))
 
     def _proxy_auth_ok(self, proxy):
         """
@@ -556,15 +553,14 @@ class Bytestream(BaseModule):
         if not file_props:
             return
         file_props.error = -4
-        app.nec.push_incoming_event(
-            NetworkEvent('file-request-error',
-                         conn=self._con,
-                         jid=app.get_jid_without_resource(jid),
-                         file_props=file_props,
-                         error_msg=''))
+        app.ged.raise_event(
+            FileRequestError(conn=self._con,
+                             jid=app.get_jid_without_resource(jid),
+                             file_props=file_props,
+                             error_msg=''))
         raise nbxmpp.NodeProcessed
 
-    def _on_bytestream_set(self, con, iq_obj, _properties):
+    def _on_bytestream_set(self, _con, iq_obj, _properties):
         target = iq_obj.getAttr('to')
         id_ = iq_obj.getAttr('id')
         query = iq_obj.getTag('query')
@@ -640,7 +636,7 @@ class Bytestream(BaseModule):
                     app.socks5queue.activate_proxy(host['idx'])
                     raise nbxmpp.NodeProcessed
 
-    def _on_bytestream_result(self, con, iq_obj, _properties):
+    def _on_bytestream_result(self, _con, iq_obj, _properties):
         frm = self._ft_get_from(iq_obj)
         real_id = iq_obj.getAttr('id')
         query = iq_obj.getTag('query')
@@ -713,7 +709,3 @@ class Bytestream(BaseModule):
             app.socks5queue.send_file(file_props, self._account, 'server')
 
         raise nbxmpp.NodeProcessed
-
-
-def get_instance(*args, **kwargs):
-    return Bytestream(*args, **kwargs), 'Bytestream'

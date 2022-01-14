@@ -16,6 +16,7 @@
 # XEP-0249: Direct MUC Invitations
 
 import logging
+from collections import defaultdict
 
 import nbxmpp
 from nbxmpp.namespaces import Namespace
@@ -29,14 +30,17 @@ from gi.repository import GLib
 
 from gajim.common import app
 from gajim.common import helpers
-from gajim.common import ged
 from gajim.common.const import KindConstant
 from gajim.common.const import MUCJoinedState
+from gajim.common.events import MessageUpdated
+from gajim.common.events import MucAdded
+from gajim.common.events import MucDecline
+from gajim.common.events import MucInvitation
 from gajim.common.helpers import AdditionalDataDict
 from gajim.common.helpers import get_default_muc_config
-from gajim.common.helpers import to_user_string
-from gajim.common.helpers import event_filter
-from gajim.common.nec import NetworkEvent
+from gajim.common.helpers import get_group_chat_nick
+from gajim.common.structs import MUCData
+from gajim.common.structs import MUCPresenceData
 from gajim.common.modules.bits_of_binary import store_bob_data
 from gajim.common.modules.base import BaseModule
 
@@ -62,7 +66,8 @@ class MUC(BaseModule):
         'request_voice',
         'approve_voice_request',
         'destroy',
-        'request_disco_info'
+        'request_disco_info',
+        'retract_message'
     ]
 
     def __init__(self, con):
@@ -79,6 +84,10 @@ class MUC(BaseModule):
                           priority=49),
             StanzaHandler(name='message',
                           callback=self._on_subject_change,
+                          typ='groupchat',
+                          priority=49),
+            StanzaHandler(name='message',
+                          callback=self._on_update_message,
                           typ='groupchat',
                           priority=49),
             StanzaHandler(name='message',
@@ -104,15 +113,25 @@ class MUC(BaseModule):
                           priority=49)
         ]
 
-        self.register_events([
-            ('account-disconnected', ged.CORE, self._on_account_disconnected),
-        ])
+        self._con.connect_signal('state-changed',
+                                 self._on_client_state_changed)
+        self._con.connect_signal('resume-failed',
+                                 self._on_client_resume_failed)
 
-        self._manager = MUCManager(self._log)
         self._rejoin_muc = set()
         self._join_timeouts = {}
         self._rejoin_timeouts = {}
         self._muc_service_jid = None
+        self._joined_users = defaultdict(dict)
+        self._mucs = {}
+        self._muc_nicknames = {}
+
+    def _on_resume_failed(self, _client, _signal_name):
+        self._reset_presence()
+
+    def _on_state_changed(self, _client, _signal_name, state):
+        if state.is_disconnected:
+            self._reset_presence()
 
     @property
     def supported(self):
@@ -121,9 +140,6 @@ class MUC(BaseModule):
     @property
     def service_jid(self):
         return self._muc_service_jid
-
-    def get_manager(self):
-        return self._manager
 
     def pass_disco(self, info):
         for identity in info.identities:
@@ -136,41 +152,117 @@ class MUC(BaseModule):
                 self._muc_service_jid = info.jid
                 raise nbxmpp.NodeProcessed
 
-    def join(self, muc_data):
+    def get_muc_data(self, room_jid):
+        return self._mucs.get(room_jid)
+
+    def set_password(self, room_jid, password):
+        muc_data = self.get_muc_data(room_jid)
+        muc_data.password = password
+
+    def _get_mucs_with_state(self, states):
+        return [muc for muc in self._mucs.values() if muc.state in states]
+
+    def _set_muc_state(self, room_jid, state):
+        try:
+            muc = self._mucs[room_jid]
+        except KeyError:
+            raise ValueError('set_muc_state() called '
+                             'on unknown muc: %s' % room_jid)
+
+        if muc.state == state:
+            return
+
+        self._log.info('Set MUC state: %s %s', room_jid, state)
+
+        muc.state = state
+        contact = self._get_contact(room_jid, groupchat=True)
+        contact.notify('state-changed')
+
+    def _reset_state(self):
+        for room_jid in list(self._rejoin_timeouts.keys()):
+            self._remove_rejoin_timeout(room_jid)
+
+        for room_jid in list(self._join_timeouts.keys()):
+            self._remove_join_timeout(room_jid)
+
+        for muc in self._mucs.values():
+            self._joined_users.pop(muc.jid, None)
+            self._set_muc_state(muc.jid, MUCJoinedState.NOT_JOINED)
+            room = self._get_contact(muc.jid)
+            room.set_not_joined()
+            room.notify('room-left')
+
+        self._joined_users.clear()
+
+    def _create_muc_data(self, room_jid, nick, password, config):
+        if not nick:
+            nick = get_group_chat_nick(self._account, room_jid)
+
+        # Fetch data from bookmarks
+        bookmark = self._con.get_module('Bookmarks').get_bookmark(room_jid)
+        if bookmark is not None:
+            if bookmark.password is not None:
+                password = bookmark.password
+
+        return MUCData(room_jid, nick, password, config)
+
+    def join(self, jid, nick=None, password=None, config=None):
         if not app.account_is_available(self._account):
             return
 
-        self._manager.add(muc_data)
+        self._con.get_module('Contacts').add_contact(jid, groupchat=True)
+
+        muc_data = self._mucs.get(jid)
+        if muc_data is None:
+            muc_data = self._create_muc_data(jid, nick, password, config)
+            self._mucs[jid] = muc_data
+            self._push_muc_added_event(jid)
+
+        elif nick is not None:
+            # Currently MUCData is never discarded so if it exists it contains
+            # the nickname of a previous join. The user may chose now on a new
+            # join a different nickname, so update MUCData here.
+            muc_data.nick = nick
+
+        if not muc_data.state.is_not_joined:
+            self._log.warning('Can’t join MUC %s, state: %s',
+                              jid, muc_data.state)
+            return
 
         disco_info = app.storage.cache.get_last_disco_info(muc_data.jid,
                                                            max_age=60)
         if disco_info is None:
+            self._set_muc_state(muc_data.jid, MUCJoinedState.JOINING)
             self._con.get_module('Discovery').disco_muc(
                 muc_data.jid,
                 callback=self._on_disco_result)
         else:
             self._join(muc_data)
 
-    def create(self, muc_data):
+    def create(self, jid, config):
         if not app.account_is_available(self._account):
             return
 
-        self._manager.add(muc_data)
+        self._con.get_module('Contacts').add_contact(jid, groupchat=True)
+        muc_data = self._create_muc_data(jid, None, None, config)
+        self._mucs[jid] = muc_data
         self._create(muc_data)
+        self._push_muc_added_event(jid)
+
+    def _push_muc_added_event(self, jid):
+        app.ged.raise_event(MucAdded(account=self._account, jid=jid))
 
     def _on_disco_result(self, task):
         try:
             result = task.finish()
         except StanzaError as error:
             self._log.info('Disco %s failed: %s', error.jid, error.get_text())
-            app.nec.push_incoming_event(
-                NetworkEvent('muc-join-failed',
-                             account=self._account,
-                             room_jid=error.jid.bare,
-                             error=error))
+
+            room = self._get_contact(error.jid.bare)
+            room.notify('room-join-failed', error)
             return
 
-        muc_data = self._manager.get(result.info.jid)
+        muc_data = self._mucs.get(result.info.jid)
         if muc_data is None:
             self._log.warning('MUC Data not found, join aborted')
             return
@@ -189,12 +281,12 @@ class MUC(BaseModule):
             muc_x.setTagData('password', muc_data.password)
 
         self._log.info('Join MUC: %s', muc_data.jid)
-        self._manager.set_state(muc_data.jid, MUCJoinedState.JOINING)
-        self._con.connection.send(presence)
+        self._set_muc_state(muc_data.jid, MUCJoinedState.JOINING)
+        self._con.send_stanza(presence)
 
     def _rejoin(self, room_jid):
-        muc_data = self._manager.get(room_jid)
-        if muc_data.state == MUCJoinedState.NOT_JOINED:
+        muc_data = self._mucs[room_jid]
+        if muc_data.state.is_not_joined:
             self._log.info('Rejoin %s', room_jid)
             self._join(muc_data)
         return True
@@ -208,22 +300,34 @@ class MUC(BaseModule):
         presence.setTag(Namespace.MUC + ' x')
 
         self._log.info('Create MUC: %s', muc_data.jid)
-        self._manager.set_state(muc_data.jid, MUCJoinedState.CREATING)
-        self._con.connection.send(presence)
+        self._set_muc_state(muc_data.jid, MUCJoinedState.CREATING)
+        self._con.send_stanza(presence)
 
     def leave(self, room_jid, reason=None):
         self._log.info('Leave MUC: %s', room_jid)
+
+        self._con.get_module('Bookmarks').modify(room_jid, autojoin=False)
+
+        muc_data = self._mucs.get(room_jid)
+        if muc_data is None:
+            return
+
+        if muc_data.state.is_not_joined:
+            return
+
         self._remove_join_timeout(room_jid)
         self._remove_rejoin_timeout(room_jid)
-        self._manager.set_state(room_jid, MUCJoinedState.NOT_JOINED)
-        muc_data = self._manager.get(room_jid)
+
         self._con.get_module('Presence').send_presence(
             muc_data.occupant_jid,
             typ='unavailable',
             status=reason,
             caps=False)
-        # We leave a group chat, disable bookmark autojoin
-        self._con.get_module('Bookmarks').modify(room_jid, autojoin=False)
+
+        self._set_muc_state(room_jid, MUCJoinedState.NOT_JOINED)
+        room = self._get_contact(room_jid)
+        room.set_not_joined()
+        room.notify('room-left')
 
     def configure_room(self, room_jid):
         self._nbxmpp('MUC').request_config(room_jid,
@@ -234,16 +338,14 @@ class MUC(BaseModule):
             result = task.finish()
         except StanzaError as error:
             self._log.info(error)
-            app.nec.push_incoming_event(NetworkEvent(
-                'muc-configuration-failed',
-                account=self._account,
-                room_jid=error.jid,
-                error=error))
+
+            room = self._get_contact(error.jid.bare)
+            room.notfiy('room-config-failed', error)
             return
 
         self._log.info('Configure room: %s', result.jid)
 
-        muc_data = self._manager.get(result.jid)
+        muc_data = self._mucs[result.jid]
         self._apply_config(result.form, muc_data.config)
         self.set_config(result.jid,
                         result.form,
@@ -267,11 +369,9 @@ class MUC(BaseModule):
             result = task.finish()
         except StanzaError as error:
             self._log.info(error)
-            app.nec.push_incoming_event(NetworkEvent(
-                'muc-configuration-failed',
-                account=self._account,
-                room_jid=error.jid,
-                error=error))
+
+            room = self._get_contact(error.jid.bare)
+            room.notfiy('room-config-failed', error)
             return
 
         self._con.get_module('Discovery').disco_muc(
@@ -299,18 +399,17 @@ class MUC(BaseModule):
             return
 
         jid = result.info.jid
-        muc_data = self._manager.get(jid)
+        muc_data = self._mucs[jid]
         self._room_join_complete(muc_data)
 
         self._log.info('Configuration finished: %s', jid)
-        app.nec.push_incoming_event(NetworkEvent(
-            'muc-configuration-finished',
-            account=self._account,
-            room_jid=jid))
+
+        room = self._get_contact(jid.bare)
+        room.notify('room-config-finished')
 
     def update_presence(self):
-        mucs = self._manager.get_mucs_with_state([MUCJoinedState.JOINED,
-                                                  MUCJoinedState.JOINING])
+        mucs = self._get_mucs_with_state([MUCJoinedState.JOINED,
+                                          MUCJoinedState.JOINING])
 
         status, message, idle = self._con.get_presence_state()
         for muc_data in mucs:
@@ -327,11 +426,18 @@ class MUC(BaseModule):
             show=status,
             status=message)
 
-    def _on_error_presence(self, _con, _stanza, properties):
+    def _on_error_presence(self, _con, stanza, properties):
         room_jid = properties.jid.bare
-        muc_data = self._manager.get(room_jid)
+        muc_data = self._mucs.get(room_jid)
         if muc_data is None:
             return
+
+        if properties.jid.resource != muc_data.nick:
+            self._log.warning('Unknown error presence')
+            self._log.warning(stanza)
+            return
+
+        room = self._get_contact(room_jid)
 
         if muc_data.state == MUCJoinedState.JOINING:
             if properties.error.condition == 'conflict':
@@ -340,86 +446,86 @@ class MUC(BaseModule):
                 self._log.info('Nickname conflict: %s change to %s',
                                muc_data.jid, muc_data.nick)
                 self._join(muc_data)
+
             elif properties.error.condition == 'not-authorized':
                 self._remove_rejoin_timeout(room_jid)
-                self._manager.set_state(room_jid, MUCJoinedState.NOT_JOINED)
-                self._raise_muc_event('muc-password-required', properties)
+                self._set_muc_state(room_jid, MUCJoinedState.NOT_JOINED)
+                room.notify('room-password-required', properties)
+
             else:
-                self._manager.set_state(room_jid, MUCJoinedState.NOT_JOINED)
+                self._set_muc_state(room_jid, MUCJoinedState.NOT_JOINED)
                 if room_jid not in self._rejoin_muc:
-                    app.nec.push_incoming_event(
-                        NetworkEvent('muc-join-failed',
-                                     account=self._account,
-                                     room_jid=room_jid,
-                                     error=properties.error))
+                    room.notify('room-join-failed', properties.error)
 
         elif muc_data.state == MUCJoinedState.CREATING:
-            self._manager.set_state(room_jid, MUCJoinedState.NOT_JOINED)
-            app.nec.push_incoming_event(
-                NetworkEvent('muc-creation-failed',
-                             account=self._account,
-                             room_jid=room_jid,
-                             error=properties.error))
+            self._set_muc_state(room_jid, MUCJoinedState.NOT_JOINED)
+            room.notify('room-creation-failed', properties)
 
         elif muc_data.state == MUCJoinedState.CAPTCHA_REQUEST:
-            app.nec.push_incoming_event(
-                NetworkEvent('muc-captcha-error',
-                             account=self._account,
-                             room_jid=room_jid,
-                             error_text=to_user_string(properties.error)))
-            self._manager.set_state(room_jid, MUCJoinedState.CAPTCHA_FAILED)
-            self._manager.set_state(room_jid, MUCJoinedState.NOT_JOINED)
+            self._set_muc_state(room_jid, MUCJoinedState.CAPTCHA_FAILED)
+            self._set_muc_state(room_jid, MUCJoinedState.NOT_JOINED)
+            room.notify('room-captcha-error', properties.error)
 
         elif muc_data.state == MUCJoinedState.CAPTCHA_FAILED:
-            self._manager.set_state(room_jid, MUCJoinedState.NOT_JOINED)
+            self._set_muc_state(room_jid, MUCJoinedState.NOT_JOINED)
 
         else:
-            self._raise_muc_event('muc-presence-error', properties)
+            room.notify('room-presence-error', properties)
 
     def _on_muc_user_presence(self, _con, stanza, properties):
         if properties.type == PresenceType.ERROR:
             return
 
         room_jid = str(properties.muc_jid)
-        if room_jid not in self._manager:
+        if room_jid not in self._mucs:
             self._log.warning('Presence from unknown MUC')
             self._log.warning(stanza)
             return
 
-        muc_data = self._manager.get(room_jid)
+        muc_data = self._mucs[room_jid]
+        occupant = self._get_contact(properties.jid, groupchat=True)
+        room = self._get_contact(properties.jid.bare)
 
         if properties.is_muc_destroyed:
-            for contact in app.contacts.get_gc_contact_list(
-                    self._account, room_jid):
-                contact.presence = PresenceType.UNAVAILABLE
             self._log.info('MUC destroyed: %s', room_jid)
             self._remove_join_timeout(room_jid)
-            self._manager.set_state(room_jid, MUCJoinedState.NOT_JOINED)
-            self._raise_muc_event('muc-destroyed', properties)
+            self._set_muc_state(room_jid, MUCJoinedState.NOT_JOINED)
+            self._con.get_module('Bookmarks').remove(room_jid)
+            room.set_not_joined()
+            room.notify('room-destroyed', properties)
             return
-
-        contact = app.contacts.get_gc_contact(self._account,
-                                              room_jid,
-                                              properties.muc_nickname)
 
         if properties.is_nickname_changed:
             if properties.is_muc_self_presence:
                 muc_data.nick = properties.muc_user.nick
                 self._con.get_module('Bookmarks').modify(muc_data.jid,
                                                          nick=muc_data.nick)
-            app.contacts.remove_gc_contact(self._account, contact)
-            contact.name = properties.muc_user.nick
-            app.contacts.add_gc_contact(self._account, contact)
+
             initiator = 'Server' if properties.is_nickname_modified else 'User'
             self._log.info('%s nickname changed: %s to %s',
                            initiator,
                            properties.jid,
                            properties.muc_user.nick)
-            self._raise_muc_event('muc-nickname-changed', properties)
+
+            # Create a copy of the contact object
+            new_occupant = room.add_resource(properties.muc_user.nick)
+            new_occupant.set_presence(occupant.presence)
+
+            presence = self._process_user_presence(properties)
+            occupant.update_presence(presence, properties)
+
+            # new_nick = properties.muc_user.nick
+            # nick = properties.muc_nickname
+            # presence_dict = self._joined_users[properties.jid.bare]
+            # presence_dict[new_nick] = presence_dict.pop(nick)
+            # self._manager.change_nickname
+            # TODO remove presence from manager
+
+            room.notify('user-nickname-changed', occupant, properties)
             return
 
-        if contact is None and properties.type.is_available:
-            self._add_new_muc_contact(properties)
+        is_joined = self._is_user_joined(properties.jid)
+        if not is_joined and properties.type.is_available:
             if properties.is_muc_self_presence:
                 self._log.info('Self presence: %s', properties.jid)
                 if muc_data.state == MUCJoinedState.JOINING:
@@ -434,16 +540,15 @@ class MUC(BaseModule):
                         self.configure_room(room_jid)
 
                 self._start_join_timeout(room_jid)
-                self._raise_muc_event('muc-self-presence', properties)
 
-            else:
-                self._log.info('User joined: %s', properties.jid)
-                self._raise_muc_event('muc-user-joined', properties)
+            presence = self._process_user_presence(properties)
+            occupant.update_presence(presence, properties)
             return
 
         if properties.is_muc_self_presence and properties.is_kicked:
-            self._manager.set_state(room_jid, MUCJoinedState.NOT_JOINED)
-            self._raise_muc_event('muc-self-kicked', properties)
+            self._set_muc_state(room_jid, MUCJoinedState.NOT_JOINED)
+            room.set_not_joined()
+            room.notify('room-kicked', properties)
             status_codes = properties.muc_status_codes or []
             if StatusCode.REMOVED_SERVICE_SHUTDOWN in status_codes:
                 self._start_rejoin_timeout(room_jid)
@@ -454,58 +559,27 @@ class MUC(BaseModule):
             # unavailable presence, because we left the MUC
             return
 
-        if properties.type.is_unavailable:
-            for _event in app.events.get_events(self._account,
-                                                jid=str(properties.jid),
-                                                types=['pm']):
-                contact.show = properties.show
-                contact.presence = properties.type
-                contact.status = properties.status
-                contact.affiliation = properties.affiliation
-                app.interface.handle_event(self._account,
-                                           str(properties.jid),
-                                           'pm')
-                # Handle only the first pm event, the rest will be
-                # handled by the opened ChatControl
-                break
+        presence = self._process_user_presence(properties)
+        occupant.update_presence(presence, properties)
 
-            if contact is None:
-                # If contact is None, its probably that a user left from a not
-                # insync MUC, can happen on older servers
-                self._log.warning('Unknown contact left groupchat: %s',
-                                  properties.jid)
-            else:
-                # We remove the contact from the MUC, but there could be
-                # a PrivateChatControl open, so we update the contacts presence
-                contact.presence = properties.type
-                app.contacts.remove_gc_contact(self._account, contact)
-            self._log.info('User %s left', properties.jid)
-            self._raise_muc_event('muc-user-left', properties)
-            return
+    def _process_user_presence(self, properties):
+        jid = properties.jid
+        muc_presence = MUCPresenceData.from_presence(properties)
+        if not muc_presence.available:
+            self._joined_users[jid.bare].pop(jid.resource)
+        else:
+            self._joined_users[jid.bare][jid.resource] = muc_presence
+        return muc_presence
 
-        if contact.affiliation != properties.affiliation:
-            contact.affiliation = properties.affiliation
-            self._log.info('Affiliation changed: %s %s',
-                           properties.jid,
-                           properties.affiliation)
-            self._raise_muc_event('muc-user-affiliation-changed', properties)
+    def _is_user_joined(self, jid):
+        try:
+            self._joined_users[jid.bare][jid.resource]
+        except KeyError:
+            return False
+        return True
 
-        if contact.role != properties.role:
-            contact.role = properties.role
-            self._log.info('Role changed: %s %s',
-                           properties.jid,
-                           properties.role)
-            self._raise_muc_event('muc-user-role-changed', properties)
-
-        if (contact.status != properties.status or
-                contact.show != properties.show):
-            contact.status = properties.status
-            contact.show = properties.show
-            self._log.info('Show/Status changed: %s %s %s',
-                           properties.jid,
-                           properties.status,
-                           properties.show)
-            self._raise_muc_event('muc-user-status-show-changed', properties)
+    def get_joined_users(self, jid):
+        return list(self._joined_users[jid].keys())
 
     def _start_rejoin_timeout(self, room_jid):
         self._remove_rejoin_timeout(room_jid)
@@ -536,15 +610,8 @@ class MUC(BaseModule):
             GLib.source_remove(id_)
             del self._join_timeouts[room_jid]
 
-    def _raise_muc_event(self, event_name, properties):
-        app.nec.push_incoming_event(
-            NetworkEvent(event_name,
-                         account=self._account,
-                         room_jid=properties.jid.bare,
-                         properties=properties))
-        self._log_muc_event(event_name, properties)
-
     def _log_muc_event(self, event_name, properties):
+        # TODO CURRENTLY NOT USED
         if event_name not in ['muc-user-joined',
                               'muc-user-left',
                               'muc-user-status-show-changed']:
@@ -577,68 +644,50 @@ class MUC(BaseModule):
             show=show,
             additional_data=additional_data)
 
-    def _add_new_muc_contact(self, properties):
-        real_jid = None
-        if properties.muc_user.jid is not None:
-            real_jid = str(properties.muc_user.jid)
-        contact = app.contacts.create_gc_contact(
-            room_jid=properties.jid.bare,
-            account=self._account,
-            name=properties.muc_nickname,
-            show=properties.show,
-            status=properties.status,
-            presence=properties.type,
-            role=properties.role,
-            affiliation=properties.affiliation,
-            jid=real_jid,
-            avatar_sha=properties.avatar_sha)
-        app.contacts.add_gc_contact(self._account, contact)
-
     def _on_subject_change(self, _con, _stanza, properties):
         if not properties.is_muc_subject:
             return
 
-        self._handle_subject_change(str(properties.muc_jid),
-                                    properties.subject,
-                                    properties.muc_nickname,
-                                    properties.user_timestamp)
+        room_jid = properties.jid.bare
+
+        muc_data = self._mucs.get(room_jid)
+        if muc_data is None:
+            self._log.warning('No MUCData found for %s', room_jid)
+            return
+
+        muc_data.subject = properties.subject
+        room = self._get_contact(room_jid)
+        room.notify('room-subject', properties)
+
+        if muc_data.state == MUCJoinedState.JOINING:
+            self._room_join_complete(muc_data)
+            room.notify('room-joined')
 
         raise nbxmpp.NodeProcessed
+
+    def _on_update_message(self, _con, _stanza, properties):
+        if properties.is_moderation:
+            app.storage.archive.update_additional_data(
+                self._account, properties.moderation.stanza_id, properties)
+
+            app.ged.raise_event(
+                MessageUpdated(account=self._account,
+                               jid=properties.jid,
+                               properties=properties))
+
+            raise nbxmpp.NodeProcessed
 
     def _fake_subject_change(self, room_jid):
         # This is for servers which don’t send empty subjects as part of the
         # event order on joining a MUC. For example jabber.ru
         self._log.warning('Fake subject received for %s', room_jid)
         del self._join_timeouts[room_jid]
-        self._handle_subject_change(room_jid, None, None, None)
-
-    def _handle_subject_change(self, room_jid, subject, nickname, timestamp):
-        contact = app.contacts.get_groupchat_contact(self._account, room_jid)
-        if contact is None:
-            return
-
-        contact.status = subject
-
-        app.nec.push_incoming_event(
-            NetworkEvent('muc-subject',
-                         account=self._account,
-                         room_jid=room_jid,
-                         subject=subject,
-                         nickname=nickname,
-                         user_timestamp=timestamp,
-                         is_fake=subject is None))
-
-        muc_data = self._manager.get(room_jid)
-        if muc_data.state == MUCJoinedState.JOINING:
-            self._room_join_complete(muc_data)
-            app.nec.push_incoming_event(
-                NetworkEvent('muc-joined',
-                             account=self._account,
-                             room_jid=muc_data.jid))
+        room = self._get_contact(room_jid)
+        room.notify('room-joined')
 
     def _room_join_complete(self, muc_data):
         self._remove_join_timeout(muc_data.jid)
-        self._manager.set_state(muc_data.jid, MUCJoinedState.JOINED)
+        self._set_muc_state(muc_data.jid, MUCJoinedState.JOINED)
         self._remove_rejoin_timeout(muc_data.jid)
 
         # We successfully joined a MUC, set add bookmark with autojoin
@@ -648,20 +697,18 @@ class MUC(BaseModule):
             password=muc_data.password,
             nick=muc_data.nick)
 
+        disco_info = app.storage.cache.get_last_disco_info(muc_data.jid)
+        if disco_info.has_mam_2:
+            self._con.get_module('MAM').request_archive_on_muc_join(
+                muc_data.jid)
+
     def _on_voice_request(self, _con, _stanza, properties):
         if not properties.is_voice_request:
             return
 
-        jid = str(properties.jid)
-        contact = app.contacts.get_groupchat_contact(self._account, jid)
-        if contact is None:
-            return
+        room = self._get_contact(properties.jid.bare)
+        room.notify('room-voice-request', properties)
 
-        app.nec.push_incoming_event(
-            NetworkEvent('muc-voice-request',
-                         account=self._account,
-                         room_jid=str(properties.muc_jid),
-                         voice_request=properties.voice_request))
         raise nbxmpp.NodeProcessed
 
     def _on_captcha_challenge(self, _con, _stanza, properties):
@@ -673,7 +720,7 @@ class MUC(BaseModule):
             self._log.warning('Ignore captcha challenge received from MAM')
             raise nbxmpp.NodeProcessed
 
-        muc_data = self._manager.get(properties.jid)
+        muc_data = self._mucs.get(properties.jid)
         if muc_data is None:
             return
 
@@ -682,27 +729,20 @@ class MUC(BaseModule):
                               MUCJoinedState.JOINING)
             return
 
-        contact = app.contacts.get_groupchat_contact(self._account,
-                                                     str(properties.jid))
-        if contact is None:
-            return
-
         self._log.info('Captcha challenge received from %s', properties.jid)
         store_bob_data(properties.captcha.bob_data)
         muc_data.captcha_id = properties.id
 
-        self._manager.set_state(properties.jid, MUCJoinedState.CAPTCHA_REQUEST)
+        self._set_muc_state(properties.jid, MUCJoinedState.CAPTCHA_REQUEST)
         self._remove_rejoin_timeout(properties.jid)
 
-        app.nec.push_incoming_event(
-            NetworkEvent('muc-captcha-challenge',
-                         account=self._account,
-                         room_jid=properties.jid.bare,
-                         form=properties.captcha.form))
+        room = self._get_contact(properties.jid.bare)
+        room.notify('room-captcha-challenge', properties)
+
         raise nbxmpp.NodeProcessed
 
     def cancel_captcha(self, room_jid):
-        muc_data = self._manager.get(room_jid)
+        muc_data = self._mucs.get(room_jid)
         if muc_data is None:
             return
 
@@ -710,11 +750,11 @@ class MUC(BaseModule):
             self._log.warning('No captcha message id available')
             return
         self._nbxmpp('MUC').cancel_captcha(room_jid, muc_data.captcha_id)
-        self._manager.set_state(room_jid, MUCJoinedState.CAPTCHA_FAILED)
-        self._manager.set_state(room_jid, MUCJoinedState.NOT_JOINED)
+        self._set_muc_state(room_jid, MUCJoinedState.CAPTCHA_FAILED)
+        self._set_muc_state(room_jid, MUCJoinedState.NOT_JOINED)
 
     def send_captcha(self, room_jid, form_node):
-        self._manager.set_state(room_jid, MUCJoinedState.JOINING)
+        self._set_muc_state(room_jid, MUCJoinedState.JOINING)
         self._nbxmpp('MUC').send_captcha(room_jid,
                                          form_node,
                                          callback=self._on_captcha_result)
@@ -723,15 +763,12 @@ class MUC(BaseModule):
         try:
             task.finish()
         except StanzaError as error:
-            muc_data = self._manager.get(error.jid)
+            muc_data = self._mucs.get(error.jid)
             if muc_data is None:
                 return
-            self._manager.set_state(error.jid, MUCJoinedState.CAPTCHA_FAILED)
-            app.nec.push_incoming_event(
-                NetworkEvent('muc-captcha-error',
-                             account=self._account,
-                             room_jid=str(error.jid),
-                             error_text=to_user_string(error)))
+            self._set_muc_state(error.jid, MUCJoinedState.CAPTCHA_FAILED)
+            room = self._get_contact(error.jid)
+            room.notify('room-captcha-error', error)
 
     def _on_config_change(self, _con, _stanza, properties):
         if not properties.is_muc_config_change:
@@ -740,11 +777,10 @@ class MUC(BaseModule):
         room_jid = str(properties.muc_jid)
         self._log.info('Received config change: %s %s',
                        room_jid, properties.muc_status_codes)
-        app.nec.push_incoming_event(
-            NetworkEvent('muc-config-changed',
-                         account=self._account,
-                         room_jid=room_jid,
-                         status_codes=properties.muc_status_codes))
+
+        room = self._get_contact(room_jid)
+        room.notify('room-config-changed', properties)
+
         raise nbxmpp.NodeProcessed
 
     def _on_invite_or_decline(self, _con, _stanza, properties):
@@ -756,10 +792,9 @@ class MUC(BaseModule):
             self._log.info('Invite declined from: %s, reason: %s',
                            data.from_, data.reason)
 
-            app.nec.push_incoming_event(
-                NetworkEvent('muc-decline',
-                             account=self._account,
-                             **data._asdict()))
+            app.ged.raise_event(
+                MucDecline(account=self._account,
+                           **data._asdict()))
             raise nbxmpp.NodeProcessed
 
         if properties.muc_invite is not None:
@@ -769,7 +804,8 @@ class MUC(BaseModule):
 
             self._log.info('Invite from: %s, to: %s', data.from_, data.muc)
 
-            if app.in_groupchat(self._account, data.muc):
+            contact = self._get_contact(data.muc, groupchat=True)
+            if contact.is_joined:
                 # We are already in groupchat. Ignore invitation
                 self._log.info('We are already in this room')
                 raise nbxmpp.NodeProcessed
@@ -790,68 +826,25 @@ class MUC(BaseModule):
             return
 
         invite_data = task.get_user_data()
-        app.nec.push_incoming_event(
-            NetworkEvent('muc-invitation',
-                         account=self._account,
-                         info=result.info,
-                         **invite_data._asdict()))
+        app.ged.raise_event(
+            MucInvitation(account=self._account,
+                          info=result.info,
+                          **invite_data._asdict()))
 
-    def invite(self, room, to, reason=None, continue_=False):
+    def invite(self, room, jid, reason=None, continue_=False):
         type_ = InviteType.MEDIATED
-        contact = app.contacts.get_contact_from_full_jid(self._account, to)
+        contact = self._get_contact(jid)
         if contact and contact.supports(Namespace.CONFERENCE):
             type_ = InviteType.DIRECT
 
-        password = app.gc_passwords.get(room, None)
-        self._log.info('Invite %s to %s', to, room)
-        return self._nbxmpp('MUC').invite(room, to, reason, password,
+        password = self._mucs[room].password
+        self._log.info('Invite %s to %s', jid, room)
+        return self._nbxmpp('MUC').invite(room, jid, reason, password,
                                           continue_, type_)
 
-    @event_filter(['account'])
-    def _on_account_disconnected(self, _event):
-        for room_jid in list(self._rejoin_timeouts.keys()):
-            self._remove_rejoin_timeout(room_jid)
+    def _on_client_state_changed(self, _client, _signal_name, state):
+        if state.is_disconnected:
+            self._reset_state()
 
-        for room_jid in list(self._join_timeouts.keys()):
-            self._remove_join_timeout(room_jid)
-
-
-class MUCManager:
-    def __init__(self, logger):
-        self._log = logger
-        self._mucs = {}
-
-    def add(self, muc):
-        self._mucs[muc.jid] = muc
-
-    def remove(self, muc):
-        self._mucs.pop(muc.jid, None)
-
-    def get(self, room_jid):
-        return self._mucs.get(room_jid)
-
-    def set_state(self, room_jid, state):
-        muc = self._mucs.get(room_jid)
-        if muc is not None:
-            if muc.state == state:
-                return
-            self._log.info('Set MUC state: %s %s', room_jid, state)
-            muc.state = state
-
-    def get_joined_mucs(self):
-        mucs = self._mucs.values()
-        return [muc.jid for muc in mucs if muc.state == MUCJoinedState.JOINED]
-
-    def get_mucs_with_state(self, states):
-        return [muc for muc in self._mucs.values() if muc.state in states]
-
-    def reset_state(self):
-        for muc in self._mucs.values():
-            self.set_state(muc.jid, MUCJoinedState.NOT_JOINED)
-
-    def __contains__(self, room_jid):
-        return room_jid in self._mucs
-
-
-def get_instance(*args, **kwargs):
-    return MUC(*args, **kwargs), 'MUC'
+    def _on_client_resume_failed(self, _client, _signal_name):
+        self._reset_state()

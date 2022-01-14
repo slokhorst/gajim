@@ -12,20 +12,27 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+from typing import Any
+from typing import List
+from typing import Optional
+from typing import Tuple
+
 import time
 
 import nbxmpp
 from gi.repository import Gdk
 from gi.repository import Gtk
 from gi.repository import GLib
+from gi.repository import GtkSource
 
 from gajim.common import app
 from gajim.common import ged
+from gajim.common.const import Direction
 from gajim.common.i18n import _
-from gajim.common.const import StyleAttr
 
-from . import util
-from .util import get_builder
+from .builder import get_builder
+from .util import at_the_end
+from .util import scroll_to_end
 from .util import MaxWidthComboBoxText
 from .util import EventHelper
 from .dialogs import ErrorDialog
@@ -36,18 +43,18 @@ from .const import SettingType
 
 
 class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
-    def __init__(self):
+    def __init__(self) -> None:
         Gtk.ApplicationWindow.__init__(self)
         EventHelper.__init__(self)
         self.set_application(app.app)
         self.set_position(Gtk.WindowPosition.CENTER)
-        self.set_default_size(600, 600)
+        self.set_default_size(800, 600)
         self.set_resizable(True)
         self.set_show_menubar(False)
         self.set_name('XMLConsoleWindow')
 
-        self.selected_account = None
-        self._selected_send_account = None
+        self.selected_account: Optional[str] = None
+        self._selected_send_account: Optional[str] = None
         self.presence = True
         self.message = True
         self.iq = True
@@ -63,7 +70,8 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
         self._set_titlebar()
         self.add(self._ui.box)
 
-        self._ui.paned.set_position(self._ui.paned.get_property('max-position'))
+        self._ui.paned.set_position(
+            self._ui.paned.get_property('max-position'))
 
         self._combo = MaxWidthComboBoxText()
         self._combo.set_max_size(200)
@@ -77,44 +85,64 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
         self._ui.actionbar.pack_end(self._combo)
 
         self._create_tags()
+
+        source_manager = GtkSource.LanguageManager.get_default()
+        lang = source_manager.get_language('xml')
+        self._ui.sourceview.get_buffer().set_language(lang)
+
+        self._style_scheme_manager = GtkSource.StyleSchemeManager.get_default()
+        style_scheme = self._get_style_scheme()
+        if style_scheme is not None:
+            self._ui.sourceview.get_buffer().set_style_scheme(style_scheme)
+
         self.show_all()
 
-        self.connect('key_press_event', self._on_key_press_event)
+        self.connect('key_press_event', self._on_key_press)
         self._ui.connect_signals(self)
 
         self.register_events([
             ('stanza-received', ged.GUI1, self._nec_stanza_received),
             ('stanza-sent', ged.GUI1, self._nec_stanza_sent),
+            ('style-changed', ged.GUI1, self._on_style_changed)
         ])
 
-    def _on_value_change(self, combo):
+    def _get_style_scheme(self) -> Optional[GtkSource.StyleScheme]:
+        if app.css_config.prefer_dark:
+            style_scheme = self._style_scheme_manager.get_scheme(
+                'solarized-dark')
+        else:
+            style_scheme = self._style_scheme_manager.get_scheme(
+                'solarized-light')
+        return style_scheme
+
+    def _on_style_changed(self, *args: Any) -> None:
+        style_scheme = self._get_style_scheme()
+        if style_scheme is not None:
+            self._ui.sourceview.get_buffer().set_style_scheme(style_scheme)
+
+    def _on_value_change(self, combo: Gtk.ComboBox) -> None:
         self._selected_send_account = combo.get_active_id()
 
-    def _set_titlebar(self):
+    def _set_titlebar(self) -> None:
         if self.selected_account is None:
             title = _('All Accounts')
         else:
             title = app.get_jid_from_account(self.selected_account)
         self._ui.headerbar.set_subtitle(title)
 
-    def _create_tags(self):
-        buffer_ = self._ui.textview.get_buffer()
-        in_color = app.css_config.get_value(
-            '.gajim-incoming-nickname', StyleAttr.COLOR)
-        out_color = app.css_config.get_value(
-            '.gajim-outgoing-nickname', StyleAttr.COLOR)
-
-        tags = ['presence', 'message', 'stream', 'iq']
-
-        tag = buffer_.create_tag('incoming')
-        tag.set_property('foreground', in_color)
-        tag = buffer_.create_tag('outgoing')
-        tag.set_property('foreground', out_color)
-
+    def _create_tags(self) -> None:
+        tags = [
+            'incoming',
+            'outgoing',
+            'presence',
+            'message',
+            'stream',
+            'iq'
+        ]
         for tag_name in tags:
-            buffer_.create_tag(tag_name)
+            self._ui.sourceview.get_buffer().create_tag(tag_name)
 
-    def _on_key_press_event(self, _widget, event):
+    def _on_key_press(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> None:
         if event.keyval == Gdk.KEY_Escape:
             if self._ui.search_revealer.get_child_revealed():
                 self._ui.search_revealer.set_reveal_child(False)
@@ -132,10 +160,15 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
             self._ui.search_toggle.set_active(
                 not self._ui.search_revealer.get_child_revealed())
         if event.keyval == Gdk.KEY_F3:
-            self._find(True)
+            self._find(Direction.NEXT)
 
-    def _on_row_activated(self, _listbox, row):
+    def _on_row_activated(self,
+                          _listbox: Gtk.ListBox,
+                          row: Gtk.ListBoxRow
+                          ) -> None:
         text = row.get_child().get_text()
+
+        # pylint: disable=line-too-long
         input_text = None
         if text == 'Presence':
             input_text = (
@@ -154,13 +187,19 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
                 '<iq to="" type="" xmlns="jabber:client">\n'
                 '<query xmlns=""></query>\n'
                 '</iq>')
+        elif text == 'Disco Info':
+            input_text = (
+                '<iq to="" type="get" xmlns="jabber:client">\n'
+                '<query xmlns="http://jabber.org/protocol/disco#info"></query>\n'
+                '</iq>')
+        # pylint: enable=line-too-long
 
         if input_text is not None:
             buffer_ = self._ui.input_entry.get_buffer()
             buffer_.set_text(input_text)
             self._ui.input_entry.grab_focus()
 
-    def _on_send(self, *args):
+    def _on_send(self, *args: Any) -> None:
         if not self._selected_send_account:
             return
         if not app.account_is_available(self._selected_send_account):
@@ -191,13 +230,13 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
             self.last_stanza = stanza
             buffer_.set_text('')
 
-    def _on_paste_last(self, *args):
+    def _on_paste_last(self, *args: Any) -> None:
         buffer_ = self._ui.input_entry.get_buffer()
         if buffer_ is not None and self.last_stanza is not None:
             buffer_.set_text(self.last_stanza)
         self._ui.input_entry.grab_focus()
 
-    def _on_input(self, button, *args):
+    def _on_input(self, button: Gtk.ToggleButton) -> None:
         if button.get_active():
             self._ui.paned.get_child2().show()
             self._ui.send.show()
@@ -212,20 +251,23 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
             self._combo.hide()
             self._ui.menubutton.hide()
 
-    def _on_search_toggled(self, button):
+    def _on_search_toggled(self, button: Gtk.ToggleButton) -> None:
         self._ui.search_revealer.set_reveal_child(button.get_active())
         self._ui.search_entry.grab_focus()
 
-    def _on_search_activate(self, _widget):
-        self._find(True)
+    def _on_search_activate(self, _entry: Gtk.SearchEntry) -> None:
+        self._find(Direction.NEXT)
 
-    def _on_search_clicked(self, button):
-        forward = bool(button is self._ui.search_forward)
-        self._find(forward)
+    def _on_search_clicked(self, button: Gtk.ToolButton) -> None:
+        if button is self._ui.search_forward:
+            direction = Direction.NEXT
+        else:
+            direction = Direction.PREV
+        self._find(direction)
 
-    def _find(self, forward):
+    def _find(self, direction: Direction) -> None:
         search_str = self._ui.search_entry.get_text()
-        textbuffer = self._ui.textview.get_buffer()
+        textbuffer = self._ui.sourceview.get_buffer()
         cursor_mark = textbuffer.get_insert()
         current_pos = textbuffer.get_iter_at_mark(cursor_mark)
 
@@ -239,7 +281,7 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
         if search_str != self.last_search:
             current_pos = textbuffer.get_start_iter()
 
-        if forward:
+        if direction == Direction.NEXT:
             match = current_pos.forward_search(
                 search_str,
                 Gtk.TextSearchFlags.VISIBLE_ONLY |
@@ -257,11 +299,11 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
             match_start, match_end = match
             textbuffer.select_range(match_start, match_end)
             mark = textbuffer.create_mark('last_pos', match_end, True)
-            self._ui.textview.scroll_to_mark(mark, 0, True, 0.5, 0.5)
+            self._ui.sourceview.scroll_to_mark(mark, 0, True, 0.5, 0.5)
         self.last_search = search_str
 
     @staticmethod
-    def _get_accounts():
+    def _get_accounts() -> List[Tuple[str, str]]:
         accounts = app.get_accounts_sorted()
         combo_accounts = []
         for account in accounts:
@@ -270,8 +312,8 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
         combo_accounts.append(('AccountWizard', 'Account Wizard'))
         return combo_accounts
 
-    def _on_filter_options(self, *args):
-        if self.filter_dialog:
+    def _on_filter_options(self, _button: Gtk.Button) -> None:
+        if self.filter_dialog is not None:
             self.filter_dialog.present()
             return
 
@@ -311,20 +353,20 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
                                             settings, self.selected_account)
         self.filter_dialog.connect('destroy', self._on_filter_destroyed)
 
-    def _on_filter_destroyed(self, _win):
+    def _on_filter_destroyed(self, _widget: Gtk.Widget) -> None:
         self.filter_dialog = None
 
-    def _on_clear(self, *args):
-        self._ui.textview.get_buffer().set_text('')
+    def _on_clear(self, _button: Gtk.Button) -> None:
+        self._ui.sourceview.get_buffer().set_text('')
 
-    def _set_account(self, value, _data):
+    def _set_account(self, value: str, _data: Any) -> None:
         self.selected_account = value
         self._set_titlebar()
 
-    def _on_setting(self, value, data):
+    def _on_setting(self, value: bool, data: str) -> None:
         setattr(self, data, value)
         value = not value
-        table = self._ui.textview.get_buffer().get_tag_table()
+        table = self._ui.sourceview.get_buffer().get_tag_table()
         tag = table.lookup(data)
         if data in ('incoming', 'outgoing'):
             if value:
@@ -358,9 +400,9 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
         if not stanza:
             return
 
-        at_the_end = util.at_the_end(self._ui.scrolled)
+        is_at_the_end = at_the_end(self._ui.scrolled)
 
-        buffer_ = self._ui.textview.get_buffer()
+        buffer_ = self._ui.sourceview.get_buffer()
         end_iter = buffer_.get_end_iter()
 
         type_ = kind
@@ -380,5 +422,5 @@ class XMLConsoleWindow(Gtk.ApplicationWindow, EventHelper):
             stanza=stanza)
         buffer_.insert_with_tags_by_name(end_iter, stanza, type_, kind)
 
-        if at_the_end:
-            GLib.idle_add(util.scroll_to_end, self._ui.scrolled)
+        if is_at_the_end:
+            GLib.idle_add(scroll_to_end, self._ui.scrolled)

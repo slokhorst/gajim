@@ -21,7 +21,7 @@ from nbxmpp.structs import StanzaHandler
 from nbxmpp.modules.util import raise_if_error
 
 from gajim.common import app
-from gajim.common.nec import NetworkEvent
+from gajim.common.events import FeatureDiscovered
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import as_task
 
@@ -38,7 +38,7 @@ class Blocking(BaseModule):
     def __init__(self, con):
         BaseModule.__init__(self, con)
 
-        self.blocked = []
+        self.blocked = set()
 
         self.handlers = [
             StanzaHandler(name='iq',
@@ -54,12 +54,14 @@ class Blocking(BaseModule):
             return
 
         self.supported = True
-        app.nec.push_incoming_event(
-            NetworkEvent('feature-discovered',
-                         account=self._account,
-                         feature=Namespace.BLOCKING))
+        app.ged.raise_event(
+            FeatureDiscovered(account=self._account,
+                              feature=Namespace.BLOCKING))
 
         self._log.info('Discovered blocking: %s', info.jid)
+
+    def is_blocked(self, jid):
+        return jid in self.blocked
 
     @as_task
     def get_blocking_list(self):
@@ -69,10 +71,10 @@ class Blocking(BaseModule):
 
         raise_if_error(blocking_list)
 
-        self.blocked = list(blocking_list)
-        app.nec.push_incoming_event(NetworkEvent('blocking',
-                                                 conn=self._con,
-                                                 changed=self.blocked))
+        self.blocked = blocking_list
+        for contact in self._get_contacts_from_jids(blocking_list):
+            contact.set_blocked()
+
         yield blocking_list
 
     @as_task
@@ -93,47 +95,53 @@ class Blocking(BaseModule):
         if not properties.is_blocking:
             return
 
-        changed_list = []
-
         if properties.blocking.unblock_all:
-            self.blocked = []
-            for jid in self.blocked:
-                self._presence_probe(jid)
-            self._log.info('Unblock all Push')
+            unblock = set(self.blocked)
+            self.blocked = set()
+            self._unblock_jids(unblock)
+            raise nbxmpp.NodeProcessed
 
-        for jid in properties.blocking.unblock:
-            changed_list.append(jid)
-            if jid not in self.blocked:
-                continue
-            self.blocked.remove(jid)
-            self._presence_probe(jid)
-            self._log.info('Unblock Push: %s', jid)
+        if properties.blocking.unblock:
+            self.blocked -= properties.blocking.unblock
+            self._unblock_jids(properties.blocking.unblock)
 
-        for jid in properties.blocking.block:
-            if jid in self.blocked:
-                continue
-            changed_list.append(jid)
-            self.blocked.append(jid)
-            self._set_contact_offline(str(jid))
-            self._log.info('Block Push: %s', jid)
-
-        app.nec.push_incoming_event(NetworkEvent('blocking',
-                                                 conn=self._con,
-                                                 changed=changed_list))
+        if properties.blocking.block:
+            block = properties.blocking.block
+            self.blocked.update(block)
+            for contact in self._get_contacts_from_jids(block):
+                self._log.info('Block Push: %s', contact.jid)
+                contact.set_blocked()
 
         raise nbxmpp.NodeProcessed
 
-    def _set_contact_offline(self, jid: str) -> None:
-        contact_list = app.contacts.get_contacts(self._account, jid)
-        for contact in contact_list:
-            contact.show = 'offline'
+    def _unblock_jids(self, jids):
+        for contact in self._get_contacts_from_jids(jids):
+            contact.set_unblocked()
+            self._presence_probe(contact.jid)
+            self._log.info('Unblock Push: %s', contact.jid)
+
+    def _get_contacts_from_jids(self, jids):
+        for jid in jids:
+            if jid.resource is not None:
+                # Currently not supported by GUI
+                continue
+
+            if jid.is_domain:
+                module = self._con.get_module('Contacts')
+                contacts = module.get_contacts_with_domain(jid.domain)
+                for contact in contacts:
+                    if contact.is_groupchat:
+                        # Currently not supported by GUI
+                        continue
+
+                    yield contact
+
+                continue
+
+            yield self._get_contact(jid)
 
     def _presence_probe(self, jid: JID) -> None:
         self._log.info('Presence probe: %s', jid)
         # Send a presence Probe to get the current Status
         probe = nbxmpp.Presence(jid, 'probe', frm=self._con.get_own_jid())
         self._nbxmpp().send(probe)
-
-
-def get_instance(*args, **kwargs):
-    return Blocking(*args, **kwargs), 'Blocking'

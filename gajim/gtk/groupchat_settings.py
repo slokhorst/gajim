@@ -13,6 +13,7 @@
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
 from gi.repository import Gtk
+from nbxmpp.protocol import JID
 
 from gajim.common.const import THRESHOLD_OPTIONS
 from gajim.common.i18n import _
@@ -24,7 +25,7 @@ from .settings import SettingsBox
 
 
 class GroupChatSettings(SettingsBox):
-    def __init__(self, account, jid):
+    def __init__(self, account: str, jid: JID) -> None:
         SettingsBox.__init__(self, account, jid)
 
         self.get_style_context().add_class('settings-border')
@@ -38,7 +39,7 @@ class GroupChatSettings(SettingsBox):
             'all': _('All Chat States')
         }
 
-        settings = [
+        settings: list[Setting] = [
             Setting(SettingKind.SWITCH,
                     _('Show Join/Leave'),
                     SettingType.GROUP_CHAT,
@@ -47,22 +48,13 @@ class GroupChatSettings(SettingsBox):
             Setting(SettingKind.SWITCH,
                     _('Show Status Changes'),
                     SettingType.GROUP_CHAT,
-                    'print_status'),
+                    'print_status',
+                    desc=_('For example: "Julia is now online"')),
 
             Setting(SettingKind.SWITCH,
                     _('Notify on all Messages'),
                     SettingType.GROUP_CHAT,
                     'notify_on_all_messages'),
-
-            Setting(SettingKind.SWITCH,
-                    _('Minimize on Close'),
-                    SettingType.GROUP_CHAT,
-                    'minimize_on_close'),
-
-            Setting(SettingKind.SWITCH,
-                    _('Minimize When Joining Automatically'),
-                    SettingType.GROUP_CHAT,
-                    'minimize_on_autojoin'),
 
             Setting(SettingKind.POPOVER,
                     _('Send Chat State'),

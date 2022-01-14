@@ -25,7 +25,7 @@ from gajim.common import app
 from gajim.common import helpers
 from gajim.common import configpaths
 
-from .util import get_builder
+from .builder import get_builder
 from .emoji_data import emoji_data
 from .emoji_data import emoji_pixbufs
 from .emoji_data import Emoji
@@ -265,7 +265,6 @@ class EmojiChooser(Gtk.Popover):
 
         self.connect('key-press-event', self._key_press)
         self._builder.connect_signals(self)
-        self.show_all()
 
     @property
     def text_widget(self):
@@ -401,6 +400,7 @@ class EmojiChooser(Gtk.Popover):
         GLib.timeout_add(100, flowbox.unselect_child, child)
         codepoint, pixbuf = child.get_emoji()
         self._text_widget().insert_emoji(codepoint, pixbuf)
+        self._text_widget().grab_focus()
 
     def do_destroy(self):
         # Remove the references we hold to other objects

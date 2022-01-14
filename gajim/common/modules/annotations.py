@@ -15,12 +15,14 @@
 # XEP-0145: Annotations
 
 from typing import Any
-from typing import Dict  # pylint: disable=unused-import
-from typing import Tuple
+from typing import Dict
+from typing import Union
+from typing import Optional
 
 from nbxmpp.errors import StanzaError
 from nbxmpp.errors import MalformedStanzaError
 from nbxmpp.structs import AnnotationNote
+from nbxmpp.protocol import JID
 
 from gajim.common.types import ConnectionT
 from gajim.common.modules.base import BaseModule
@@ -37,7 +39,7 @@ class Annotations(BaseModule):
     def __init__(self, con: ConnectionT) -> None:
         BaseModule.__init__(self, con)
 
-        self._annotations = {}  # type: Dict[str, AnnotationNote]
+        self._annotations: Dict[Union[JID, str], AnnotationNote] = {}
 
     def request_annotations(self) -> None:
         self._nbxmpp('Annotations').request_annotations(
@@ -54,13 +56,9 @@ class Annotations(BaseModule):
         for note in annotations:
             self._annotations[note.jid] = note
 
-    def get_note(self, jid: str) -> AnnotationNote:
+    def get_note(self, jid: str) -> Optional[AnnotationNote]:
         return self._annotations.get(jid)
 
     def set_note(self, note: AnnotationNote) -> None:
         self._annotations[note.jid] = note
         self.set_annotations(self._annotations.values())
-
-
-def get_instance(*args: Any, **kwargs: Any) -> Tuple[Annotations, str]:
-    return Annotations(*args, **kwargs), 'Annotations'

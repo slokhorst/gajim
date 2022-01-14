@@ -1,26 +1,72 @@
-from enum import IntEnum, Enum, unique
-from collections import namedtuple
+# This file is part of Gajim.
+#
+# Gajim is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published
+# by the Free Software Foundation; version 3 only.
+#
+# Gajim is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+
+from __future__ import annotations
+
+from typing import Any, Union
+from typing import NamedTuple
+
+from enum import IntEnum
+from enum import Enum
+from enum import unique
+from functools import total_ordering
 
 from gi.repository import Gio
 
 from nbxmpp.namespaces import Namespace
+from nbxmpp.const import PresenceShow
+from nbxmpp.protocol import JID
 
 from gajim.common.i18n import _
 from gajim.common.i18n import Q_
 
-EncryptionData = namedtuple('EncryptionData', 'additional_data')
-EncryptionData.__new__.__defaults__ = (None,)  # type: ignore
 
-Entity = namedtuple('Entity', 'jid node hash method')
+STOP_EVENT = True
+PROPAGATE_EVENT = False
+
+
+class EncryptionData(NamedTuple):
+    additional_data: Any = None
+
+
+class Entity(NamedTuple):
+    jid: JID
+    node: str
+    hash: str
+    method: str
+
+
+class RowHeaderType(IntEnum):
+    ACTIVE = 0
+    CONVERSATIONS = 1
+    PINNED = 2
 
 
 class AvatarSize(IntEnum):
     TAB = 16
+    SHOW_CIRCLE = 24
     ROSTER = 32
+    VCARD_HEADER = 40
+    ACCOUNT_SIDE_BAR = 40
+    WORKSPACE = 40
+    WORKSPACE_EDIT = 100
     CHAT = 48
     NOTIFICATION = 48
+    CALL = 100
     GROUP_INFO = 100
-    TOOLTIP = 125
+    TOOLTIP = 100
+    ACCOUNT_PAGE = 150
     VCARD = 200
     PUBLISH = 200
 
@@ -54,6 +100,10 @@ class KindConstant(IntEnum):
     SINGLE_MSG_SENT = 5
     CHAT_MSG_SENT = 6
     ERROR = 7
+    FILE_TRANSFER_INCOMING = 8
+    FILE_TRANSFER_OUTGOING = 9
+    CALL_INCOMING = 10
+    CALL_OUTGOING = 11
 
     def __str__(self):
         return str(self.value)
@@ -141,18 +191,6 @@ class PEPEventType(IntEnum):
     BOOKMARKS = 8
 
 
-@unique
-class Chatstate(IntEnum):
-    COMPOSING = 0
-    PAUSED = 1
-    ACTIVE = 2
-    INACTIVE = 3
-    GONE = 4
-
-    def __str__(self):
-        return self.name.lower()
-
-
 class SyncThreshold(IntEnum):
     NO_SYNC = -1
     NO_THRESHOLD = 0
@@ -177,6 +215,11 @@ class Trust(IntEnum):
     UNDECIDED = 1
     BLIND = 2
     VERIFIED = 3
+
+
+class Direction(IntEnum):
+    NEXT = 0
+    PREV = 1
 
 
 class Display(Enum):
@@ -272,6 +315,24 @@ class ClientState(IntEnum):
         return self == ClientState.AVAILABLE
 
 
+class SimpleClientState(Enum):
+    DISCONNECTED = 'disconnected'
+    CONNECTED = 'connected'
+    RESUME_IN_PREGRESS = 'resume-in-progress'
+
+    @property
+    def is_disconnected(self):
+        return self == SimpleClientState.DISCONNECTED
+
+    @property
+    def is_connected(self):
+        return self == SimpleClientState.CONNECTED
+
+    @property
+    def is_resume_in_progress(self):
+        return self == SimpleClientState.RESUME_IN_PREGRESS
+
+
 class JingleState(Enum):
     NULL = 'stop'
     CONNECTING = 'connecting'
@@ -331,184 +392,6 @@ EME_MESSAGES = {
           'and could not be decrypted.')
 }
 
-
-ACTIVITIES = {
-    'doing_chores': {
-        'category': _('Doing Chores'),
-        'buying_groceries': _('Buying Groceries'),
-        'cleaning': _('Cleaning'),
-        'cooking': _('Cooking'),
-        'doing_maintenance': _('Doing Maintenance'),
-        'doing_the_dishes': _('Doing the Dishes'),
-        'doing_the_laundry': _('Doing the Laundry'),
-        'gardening': _('Gardening'),
-        'running_an_errand': _('Running an Errand'),
-        'walking_the_dog': _('Walking the Dog')},
-    'drinking': {
-        'category': _('Drinking'),
-        'having_a_beer': _('Having a Beer'),
-        'having_coffee': _('Having Coffee'),
-        'having_tea': _('Having Tea')},
-    'eating': {
-        'category': _('Eating'),
-        'having_a_snack': _('Having a Snack'),
-        'having_breakfast': _('Having Breakfast'),
-        'having_dinner': _('Having Dinner'),
-        'having_lunch': _('Having Lunch')},
-    'exercising': {
-        'category': _('Exercising'),
-        'cycling': _('Cycling'),
-        'dancing': _('Dancing'),
-        'hiking': _('Hiking'),
-        'jogging': _('Jogging'),
-        'playing_sports': _('Playing Sports'),
-        'running': _('Running'),
-        'skiing': _('Skiing'),
-        'swimming': _('Swimming'),
-        'working_out': _('Working out')},
-    'grooming': {
-        'category': _('Grooming'),
-        'at_the_spa': _('At the Spa'),
-        'brushing_teeth': _('Brushing Teeth'),
-        'getting_a_haircut': _('Getting a Haircut'),
-        'shaving': _('Shaving'),
-        'taking_a_bath': _('Taking a Bath'),
-        'taking_a_shower': _('Taking a Shower')},
-    'having_appointment': {
-        'category': _('Having an Appointment')},
-    'inactive': {
-        'category': _('Inactive'),
-        'day_off': _('Day Off'),
-        'hanging_out': _('Hanging out'),
-        'hiding': _('Hiding'),
-        'on_vacation': _('On Vacation'),
-        'praying': _('Praying'),
-        'scheduled_holiday': _('Scheduled Holiday'),
-        'sleeping': _('Sleeping'),
-        'thinking': _('Thinking')},
-    'relaxing': {
-        'category': _('Relaxing'),
-        'fishing': _('Fishing'),
-        'gaming': _('Gaming'),
-        'going_out': _('Going out'),
-        'partying': _('Partying'),
-        'reading': _('Reading'),
-        'rehearsing': _('Rehearsing'),
-        'shopping': _('Shopping'),
-        'smoking': _('Smoking'),
-        'socializing': _('Socializing'),
-        'sunbathing': _('Sunbathing'),
-        'watching_tv': _('Watching TV'),
-        'watching_a_movie': _('Watching a Movie')},
-    'talking': {
-        'category': _('Talking'),
-        'in_real_life': _('In Real Life'),
-        'on_the_phone': _('On the Phone'),
-        'on_video_phone': _('On Video Phone')},
-    'traveling': {
-        'category': _('Traveling'),
-        'commuting': _('Commuting'),
-        'cycling': _('Cycling'),
-        'driving': _('Driving'),
-        'in_a_car': _('In a Car'),
-        'on_a_bus': _('On a Bus'),
-        'on_a_plane': _('On a Plane'),
-        'on_a_train': _('On a Train'),
-        'on_a_trip': _('On a Trip'),
-        'walking': _('Walking')},
-    'working': {
-        'category': _('Working'),
-        'coding': _('Coding'),
-        'in_a_meeting': _('In a Meeting'),
-        'studying': _('Studying'),
-        'writing': _('Writing')}}
-
-MOODS = {
-    'afraid': _('Afraid'),
-    'amazed': _('Amazed'),
-    'amorous': _('Amorous'),
-    'angry': _('Angry'),
-    'annoyed': _('Annoyed'),
-    'anxious': _('Anxious'),
-    'aroused': _('Aroused'),
-    'ashamed': _('Ashamed'),
-    'bored': _('Bored'),
-    'brave': _('Brave'),
-    'calm': _('Calm'),
-    'cautious': _('Cautious'),
-    'cold': _('Cold'),
-    'confident': _('Confident'),
-    'confused': _('Confused'),
-    'contemplative': _('Contemplative'),
-    'contented': _('Contented'),
-    'cranky': _('Cranky'),
-    'crazy': _('Crazy'),
-    'creative': _('Creative'),
-    'curious': _('Curious'),
-    'dejected': _('Dejected'),
-    'depressed': _('Depressed'),
-    'disappointed': _('Disappointed'),
-    'disgusted': _('Disgusted'),
-    'dismayed': _('Dismayed'),
-    'distracted': _('Distracted'),
-    'embarrassed': _('Embarrassed'),
-    'envious': _('Envious'),
-    'excited': _('Excited'),
-    'flirtatious': _('Flirtatious'),
-    'frustrated': _('Frustrated'),
-    'grateful': _('Grateful'),
-    'grieving': _('Grieving'),
-    'grumpy': _('Grumpy'),
-    'guilty': _('Guilty'),
-    'happy': _('Happy'),
-    'hopeful': _('Hopeful'),
-    'hot': _('Hot'),
-    'humbled': _('Humbled'),
-    'humiliated': _('Humiliated'),
-    'hungry': _('Hungry'),
-    'hurt': _('Hurt'),
-    'impressed': _('Impressed'),
-    'in_awe': _('In Awe'),
-    'in_love': _('In Love'),
-    'indignant': _('Indignant'),
-    'interested': _('Interested'),
-    'intoxicated': _('Intoxicated'),
-    'invincible': _('Invincible'),
-    'jealous': _('Jealous'),
-    'lonely': _('Lonely'),
-    'lost': _('Lost'),
-    'lucky': _('Lucky'),
-    'mean': _('Mean'),
-    'moody': _('Moody'),
-    'nervous': _('Nervous'),
-    'neutral': _('Neutral'),
-    'offended': _('Offended'),
-    'outraged': _('Outraged'),
-    'playful': _('Playful'),
-    'proud': _('Proud'),
-    'relaxed': _('Relaxed'),
-    'relieved': _('Relieved'),
-    'remorseful': _('Remorseful'),
-    'restless': _('Restless'),
-    'sad': _('Sad'),
-    'sarcastic': _('Sarcastic'),
-    'satisfied': _('Satisfied'),
-    'serious': _('Serious'),
-    'shocked': _('Shocked'),
-    'shy': _('Shy'),
-    'sick': _('Sick'),
-    'sleepy': _('Sleepy'),
-    'spontaneous': _('Spontaneous'),
-    'stressed': _('Stressed'),
-    'strong': _('Strong'),
-    'surprised': _('Surprised'),
-    'thankful': _('Thankful'),
-    'thirsty': _('Thirsty'),
-    'tired': _('Tired'),
-    'undefined': _('Undefined'),
-    'weak': _('Weak'),
-    'worried': _('Worried')
-}
 
 LOCATION_DATA = {
     'accuracy': _('accuracy'),
@@ -902,6 +785,7 @@ GIO_TLS_ERRORS = {
 
 
 class FTState(Enum):
+    INIT = 'init'
     PREPARING = 'prepare'
     ENCRYPTING = 'encrypting'
     DECRYPTING = 'decrypting'
@@ -1000,6 +884,7 @@ COMMON_FEATURES = [
     Namespace.JINGLE_BYTESTREAM,
     Namespace.JINGLE_IBB,
     Namespace.AVATAR_METADATA + '+notify',
+    Namespace.MESSAGE_MODERATE
 ]
 
 
@@ -1014,6 +899,8 @@ SHOW_LIST = [
     'error'
 ]
 
+GAJIM_FAQ_URI = 'https://dev.gajim.org/gajim/gajim/wikis/help/gajimfaq'
+GAJIM_WIKI_URI = 'https://dev.gajim.org/gajim/gajim/wikis'
 
 URI_SCHEMES = {
     'aaa://',
@@ -1047,6 +934,7 @@ URI_SCHEMES = {
     'iris.xpcs:',
     'iris.lwz:',
     'ldap://',
+    'mailto:',
     'mid:',
     'modem:',
     'msrp://',
@@ -1079,6 +967,7 @@ URI_SCHEMES = {
     'vemmi://',
     'xmlrpc.beep://',
     'xmlrpc.beeps://',
+    'xmpp:',
     'z39.50r://',
     'z39.50s://',
     'about:',
@@ -1105,6 +994,189 @@ URI_SCHEMES = {
 }
 
 
+# This is an excerpt of Media Types from
+# https://www.iana.org/assignments/media-types/media-types.xhtml
+# plus some additions
+MIME_TYPES = (
+    # application/
+    'application/calendar+json',
+    'application/calendar+xml',
+    'application/epub+zip',
+    'application/json',
+    'application/mp4',
+    'application/msword',
+    'application/octet-stream',
+    'application/ogg',
+    'application/pdf',
+    'application/pgp-encrypted',
+    'application/pgp-signature',
+    'application/postscript',
+    'application/rtf',
+    'application/vcard+json',
+    'application/vcard+xml',
+    'application/vnd.amazon.mobi8-ebook',
+    'application/vnd.google-earth.kml+xml',
+    'application/vnd.google-earth.kmz',
+    # Start office
+    'application/vnd.ms-access',
+    'application/vnd.ms-excel',
+    'application/vnd.ms-excel.addin.macroEnabled.12',
+    'application/vnd.ms-excel.sheet.binary.macroEnabled.12',
+    'application/vnd.ms-excel.sheet.macroEnabled.12',
+    'application/vnd.ms-excel.template.macroEnabled.12',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.ms-powerpoint.addin.macroEnabled.12',
+    'application/vnd.ms-powerpoint.presentation.macroEnabled.12',
+    'application/vnd.ms-powerpoint.slideshow.macroEnabled.12',
+    'application/vnd.ms-powerpoint.template.macroEnabled.12',
+    'application/vnd.ms-word.document.macroEnabled.12',
+    'application/vnd.ms-word.template.macroEnabled.12',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
+    'application/vnd.openxmlformats-officedocument.presentationml.template',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.template',
+    'application/vnd.openxmlformats-officedocument.vmlDrawing',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.template',
+    # End office
+    'application/vnd.sqlite3',
+    'application/zip',
+    # audio/*
+    'audio/aac',
+    'audio/ac3',
+    'audio/flac',
+    'audio/mp4',
+    'audio/mpeg',
+    'audio/ogg',
+    'audio/opus',
+    'audio/wav',
+    'audio/x-flac',
+    'audio/x-m4a',
+    'audio/x-matroska',
+    # font/*
+    'font/ttf',
+    'font/woff',
+    'font/woff2',
+    # image/*
+    'image/webp',
+    'image/avif',
+    'image/jxl',
+    'image/bmp',
+    'image/x-bmp',
+    'image/x-ms-bmp',
+    'image/gif',
+    'image/heic',
+    'image/heif',
+    'image/jpeg',
+    'image/png',
+    'image/svg+xml',
+    'image/tiff',
+    'image/vnd.adobe.photoshop',
+    'image/vnd.dwg',
+    'image/vnd.dxf',
+    'image/vnd.microsoft.icon',
+    'image/x-icon',
+    'image/x-xcf',
+    # model/*
+    'model/mtl',
+    'model/obj',
+    'model/stl',
+    # text/*
+    'text/calendar',
+    'text/csv',
+    'text/markdown',
+    'text/rtf',
+    'text/vcard',
+    # video/*
+    'video/H264',
+    'video/H265',
+    'video/mp4',
+    'video/mpeg4-generic',
+    'video/ogg',
+    'video/quicktime',
+    'video/vc1',
+    'video/VP8',
+    'video/webm',
+    'video/x-matroska',
+    'video/x-msvideo',
+)
+
+
+FILE_CATEGORIES = {
+    'img': [
+        'jpg',
+        'jpeg',
+        'jpe',
+        'jif',
+        'jfif',
+        'jfi',
+        'png',
+        'gif',
+        'webp',
+        'tiff',
+        'tif',
+        'psd',
+        'raw',
+        'arw',
+        'cr2',
+        'nrw',
+        'k25',
+        'bmp',
+        'dib',
+        'heif',
+        'heic',
+        'ind',
+        'indd',
+        'indt',
+        'jp2',
+        'j2k',
+        'jpf',
+        'jpx',
+        'jpm',
+        'mj2',
+        'svg',
+        'svgz',
+        'ai'
+    ],
+    'video': [
+        'webm',
+        'mpg',
+        'mp2',
+        'mpeg',
+        'mpe',
+        'mpv',
+        'ogg',
+        'mp4',
+        'm4p',
+        'm4v',
+        'avi',
+        'wmv',
+        'mov',
+        'qt',
+        'flv',
+        'swf',
+        'avchd'
+    ],
+}
+
+
+TRUST_SYMBOL_DATA = {
+    Trust.UNTRUSTED: ('dialog-error-symbolic',
+                      _('Untrusted'),
+                      'error-color'),
+    Trust.UNDECIDED: ('security-low-symbolic',
+                      _('Trust Not Decided'),
+                      'warning-color'),
+    Trust.BLIND: ('security-medium-symbolic',
+                  _('Unverified'),
+                  'encrypted-color'),
+    Trust.VERIFIED: ('security-high-symbolic',
+                     _('Verified'),
+                     'encrypted-color')
+}
+
+
 THRESHOLD_OPTIONS = {
     -1: _('No Sync'),
     1: _('1 Day'),
@@ -1113,3 +1185,25 @@ THRESHOLD_OPTIONS = {
     30: _('1 Month'),
     0: _('No Threshold'),
 }
+
+
+@total_ordering
+class PresenceShowExt(Enum):
+
+    '''
+    This extends nbxmpp.const.PresenceShow for convenience
+    with an OFFLINE member
+    '''
+
+    OFFLINE = 'offline'
+
+    @property
+    def is_offline(self):
+        return self == PresenceShowExt.OFFLINE
+
+    def __lt__(self, other: Union[PresenceShowExt, PresenceShow]) -> bool:
+        if isinstance(other, PresenceShowExt):
+            return False
+        if not isinstance(other, PresenceShow):
+            return NotImplemented
+        return True

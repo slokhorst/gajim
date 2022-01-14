@@ -61,9 +61,9 @@ from gajim.common.const import StyleAttr
 from .adhoc import AdHocCommand
 from .dialogs import ErrorDialog
 from .search import Search
-from .service_registration import ServiceRegistration
 from .util import icon_exists
-from .util import get_builder
+from .builder import get_builder
+from .util import open_window
 
 LABELS = {
     1: _('This service has not yet responded with detailed information'),
@@ -775,7 +775,7 @@ class ServiceDiscoveryWindow:
             self.browser.update_actions()
 
     def _on_entry_key_press_event(self, widget, event):
-        if event.keyval == Gdk.KEY_Return or event.keyval == Gdk.KEY_KP_Enter:
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
             self._on_go_button_clicked(widget)
 
 
@@ -1345,7 +1345,8 @@ class ToplevelAgentBrowser(AgentBrowser):
             return
         jid = model[iter_][0]
         if jid:
-            ServiceRegistration(self.account, jid)
+            open_window(
+                'ServiceRegistration', account=self.account, address=jid)
 
     def _on_join_button_clicked(self, widget):
         """
@@ -1357,7 +1358,7 @@ class ToplevelAgentBrowser(AgentBrowser):
         if not iter_:
             return
         service = model[iter_][0]
-        app.interface.show_or_join_groupchat(self.account, service)
+        app.interface.show_add_join_groupchat(self.account, service)
 
     def update_actions(self):
         if self.execute_button:
@@ -1412,12 +1413,10 @@ class ToplevelAgentBrowser(AgentBrowser):
                 jid != self.jid):
             # We can register this agent
             registered_transports = []
-            jid_list = app.contacts.get_jid_list(self.account)
-            for jid_ in jid_list:
-                contact = app.contacts.get_first_contact_from_jid(
-                    self.account, jid_)
-                if _('Transports') in contact.groups:
-                    registered_transports.append(jid_)
+            client = app.get_client(self.account)
+            for contact in client.get_module('Roster').iter_contacts():
+                if contact.is_gateway:
+                    registered_transports.append(contact.jid)
             registered_transports.append(self.jid)
             if jid in registered_transports:
                 self.register_button.set_label(_('_Edit'))
@@ -1723,7 +1722,7 @@ class MucBrowser(AgentBrowser):
         if not iter_:
             return
         service = model[iter_][0]
-        app.interface.show_or_join_groupchat(self.account, service)
+        app.interface.show_add_join_groupchat(self.account, service)
 
     def update_actions(self):
         sens = \

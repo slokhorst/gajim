@@ -20,15 +20,23 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
+from typing import Optional
+
 import logging
+
 import keyring
 
 from gajim.common import app
 
-__all__ = ['get_password', 'save_password']
+__all__ = [
+    'get_password',
+    'save_password',
+    'delete_password'
+]
 
 log = logging.getLogger('gajim.password')
-
 
 backends = keyring.backend.get_all_keyring()
 for backend in backends:
@@ -37,8 +45,7 @@ for backend in backends:
 keyring_backend = keyring.get_keyring()
 log.info('Select %s backend', keyring_backend)
 
-KEYRING_AVAILABLE = any(keyring.core.recommended(backend)
-                        for backend in backends)
+KEYRING_AVAILABLE = keyring.core.recommended(keyring_backend)
 
 
 class SecretPasswordStorage:
@@ -47,7 +54,7 @@ class SecretPasswordStorage:
     """
 
     @staticmethod
-    def save_password(account_name, password):
+    def save_password(account_name: str, password: str) -> bool:
         if not KEYRING_AVAILABLE:
             log.warning('No recommended keyring backend available.'
                         'Passwords cannot be stored.')
@@ -61,7 +68,7 @@ class SecretPasswordStorage:
             return False
 
     @staticmethod
-    def get_password(account_name):
+    def get_password(account_name: str) -> Optional[str]:
         log.info('Request password from keyring')
         if not KEYRING_AVAILABLE:
             return
@@ -74,10 +81,11 @@ class SecretPasswordStorage:
             return
 
     @staticmethod
-    def delete_password(account_name):
+    def delete_password(account_name: str) -> None:
         log.info('Remove password from keyring')
         if not KEYRING_AVAILABLE:
             return
+
         try:
             return keyring_backend.delete_password('gajim', account_name)
         except keyring.errors.PasswordDeleteError as error:
@@ -92,27 +100,26 @@ class ConfigPasswordStorage:
     """
 
     @staticmethod
-    def get_password(account_name):
+    def get_password(account_name: str) -> str:
         return app.settings.get_account_setting(account_name, 'password')
 
     @staticmethod
-    def save_password(account_name, password):
+    def save_password(account_name: str, password: str) -> bool:
         app.settings.set_account_setting(account_name, 'password', password)
         return True
 
     @staticmethod
-    def delete_password(account_name):
+    def delete_password(account_name: str) -> None:
         app.settings.set_account_setting(account_name, 'password', '')
-        return True
 
 
-def get_password(account_name):
+def get_password(account_name: str) -> Optional[str]:
     if app.settings.get('use_keyring'):
         return SecretPasswordStorage.get_password(account_name)
     return ConfigPasswordStorage.get_password(account_name)
 
 
-def save_password(account_name, password):
+def save_password(account_name: str, password: str) -> bool:
     if account_name in app.connections:
         app.connections[account_name].password = password
 
@@ -124,7 +131,7 @@ def save_password(account_name, password):
     return ConfigPasswordStorage.save_password(account_name, password)
 
 
-def delete_password(account_name):
+def delete_password(account_name: str) -> None:
     if account_name in app.connections:
         app.connections[account_name].password = None
 

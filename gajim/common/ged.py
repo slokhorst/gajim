@@ -10,23 +10,21 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
+# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-'''
-Global Events Dispatcher module.
+from __future__ import annotations
 
-:author: Mateusz Biliński <mateusz@bilinski.it>
-:since: 8th August 2008
-:copyright: Copyright (2008) Mateusz Biliński <mateusz@bilinski.it>
-:copyright: Copyright (2011) Yann Leboulanger <asterix@lagaule.org>
-:license: GPL
-'''
+from typing import Any
+from typing import Callable
 
 import logging
 import traceback
 import inspect
 
 from nbxmpp import NodeProcessed
+
+from gajim.common import app
+from gajim.common.events import ApplicationEvent
 
 log = logging.getLogger('gajim.c.ged')
 
@@ -42,24 +40,21 @@ GUI2 = 90
 POSTGUI2 = 100
 POSTGUI = 110
 
-OUT_PREGUI = 10
-OUT_PREGUI1 = 20
-OUT_GUI1 = 30
-OUT_POSTGUI1 = 40
-OUT_PREGUI2 = 50
-OUT_GUI2 = 60
-OUT_POSTGUI2 = 70
-OUT_POSTGUI = 80
-OUT_PRECORE = 90
-OUT_CORE = 100
-OUT_POSTCORE = 110
+
+HandlerFuncT = Callable[[Any], Any]
+EventHandlerT = tuple[str, int, HandlerFuncT]
+
 
 class GlobalEventsDispatcher:
 
     def __init__(self):
-        self.handlers = {}
+        self.handlers: dict[str, list[tuple[int, HandlerFuncT]]] = {}
 
-    def register_event_handler(self, event_name, priority, handler):
+    def register_event_handler(self,
+                               event_name: str,
+                               priority: int,
+                               handler: HandlerFuncT) -> None:
+
         if event_name in self.handlers:
             handlers_list = self.handlers[event_name]
             i = 0
@@ -74,7 +69,11 @@ class GlobalEventsDispatcher:
         else:
             self.handlers[event_name] = [(priority, handler)]
 
-    def remove_event_handler(self, event_name, priority, handler):
+    def remove_event_handler(self,
+                             event_name: str,
+                             priority: int,
+                             handler: HandlerFuncT) -> None:
+
         if event_name in self.handlers:
             try:
                 self.handlers[event_name].remove((priority, handler))
@@ -84,7 +83,8 @@ class GlobalEventsDispatcher:
                     registered as handler of event "%s". Couldn\'t remove.
                     Error: %s''', handler, priority, event_name, error)
 
-    def raise_event(self, event_name, *args, **kwargs):
+    def raise_event(self, event_obj: ApplicationEvent) -> Any:
+        event_name = event_obj.name
         log.debug('Raise event: %s', event_name)
         if event_name in self.handlers:
             node_processed = False
@@ -98,7 +98,7 @@ class GlobalEventsDispatcher:
                                   handler.__self__)
                     else:
                         log.debug('Call handler %s', handler.__name__)
-                    if handler(*args, **kwargs):
+                    if handler(event_obj):
                         return True
                 except NodeProcessed:
                     node_processed = True
@@ -108,3 +108,34 @@ class GlobalEventsDispatcher:
                     traceback.print_exc()
             if node_processed:
                 raise NodeProcessed
+
+
+class EventHelper:
+    def __init__(self):
+        self.__event_handlers: list[EventHandlerT] = []
+
+    def register_event(self,
+                       event_name: str,
+                       priority: int,
+                       handler: HandlerFuncT) -> None:
+
+        self.__event_handlers.append((event_name, priority, handler))
+        app.ged.register_event_handler(event_name, priority, handler)
+
+    def register_events(self, events: list[EventHandlerT]) -> None:
+        for handler in events:
+            self.__event_handlers.append(handler)
+            app.ged.register_event_handler(*handler)
+
+    def unregister_event(self,
+                         event_name: str,
+                         priority: int,
+                         handler: HandlerFuncT) -> None:
+
+        self.__event_handlers.remove((event_name, priority, handler))
+        app.ged.register_event_handler(event_name, priority, handler)
+
+    def unregister_events(self) -> None:
+        for handler in self.__event_handlers:
+            app.ged.remove_event_handler(*handler)
+        self.__event_handlers.clear()

@@ -1,11 +1,3 @@
-# Copyright (C) 2006 Jean-Marie Traissard <jim AT lapin.org>
-#                    Nikos Kouremenos <kourem AT gmail.com>
-# Copyright (C) 2006-2014 Yann Leboulanger <asterix AT lagaule.org>
-# Copyright (C) 2007 Julien Pivotto <roidelapluie AT gmail.com>
-# Copyright (C) 2007-2008 Stephan Erb <steve-e AT h3c.de>
-# Copyright (C) 2008 Brendan Taylor <whateley AT gmail.com>
-#                    Jonathan Schleifer <js-gajim AT webkeks.org>
-#
 # This file is part of Gajim.
 #
 # Gajim is free software; you can redistribute it and/or modify
@@ -20,445 +12,721 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-import time
+from __future__ import annotations
+
+import typing
+from typing import Any
+from typing import Union
+from typing import Optional
+from typing import Callable
+
+from dataclasses import dataclass
+from dataclasses import field
+
+from nbxmpp.namespaces import Namespace
+from nbxmpp.protocol import JID
+from nbxmpp.structs import LocationData
+from nbxmpp.structs import RosterItem
+from nbxmpp.structs import TuneData
+from nbxmpp.const import InviteType
 
 from gajim.common import app
+from gajim.common.file_props import FileProp
+
+if typing.TYPE_CHECKING:
+    from gajim.common.helpers import AdditionalDataDict
+    from gajim.common.const import KindConstant
+    from gajim.common.client import Client
+    from gajim.common.jingle_session import JingleSession
 
 
-class Event:
-    """
-    Information concerning each event
-    """
+@dataclass
+class ApplicationEvent:
+    name: str
 
-    def __init__(self, time_=None, show_in_roster=False, show_in_systray=True):
-        """
-        type_ in chat, normal, file-request, file-error, file-completed,
-        file-request-error, file-send-error, file-stopped, gc_msg, pm,
-        printed_chat, printed_gc_msg, printed_marked_gc_msg, printed_pm,
-        gc-invitation, subscription_request, unsubscribedm jingle-incoming
 
-        parameters is (per type_):
-                chat, normal, pm: [message, subject, kind, time, encrypted, resource,
-                msg_log_id]
-                        where kind in error, incoming
-                file-*: file_props
-                gc_msg: None
-                printed_chat: [message, subject, control, msg_log_id]
-                printed_*: None
-                        messages that are already printed in chat, but not read
-                gc-invitation: [room_jid, reason, password, jid_from]
-                subscription_request: [text, nick]
-                unsubscribed: contact
-                jingle-incoming: (fulljid, sessionid, content_types)
-        """
-        if time_:
-            self.time_ = time_
-        else:
-            self.time_ = time.time()
-        self.show_in_roster = show_in_roster
-        self.show_in_systray = show_in_systray
-        # Set when adding the event
-        self.jid = None
-        self.account = None
+@dataclass
+class StyleChanged(ApplicationEvent):
+    name: str = field(init=False, default='style-changed')
 
-class ChatEvent(Event):
-    type_ = 'chat'
-    def __init__(self, message, subject, kind, time_, resource,
-    msg_log_id, correct_id=None, message_id=None, session=None,
-    displaymarking=None, sent_forwarded=False, show_in_roster=False,
-    show_in_systray=True, additional_data=None):
-        Event.__init__(self, time_, show_in_roster=show_in_roster,
-            show_in_systray=show_in_systray)
-        self.message = message
-        self.subject = subject
-        self.kind = kind
-        self.time = time_
-        self.resource = resource
-        self.msg_log_id = msg_log_id
-        self.message_id = message_id
-        self.correct_id = correct_id
-        self.session = session
-        self.displaymarking = displaymarking
-        self.sent_forwarded = sent_forwarded
-        if additional_data is None:
-            from gajim.common.helpers import AdditionalDataDict
-            additional_data = AdditionalDataDict()
-        self.additional_data = additional_data
 
-class PmEvent(ChatEvent):
-    type_ = 'pm'
+@dataclass
+class ThemeUpdate(ApplicationEvent):
+    name: str = field(init=False, default='theme-update')
 
-class PrintedChatEvent(Event):
-    type_ = 'printed_chat'
-    def __init__(self, message, subject, control, msg_log_id, time_=None,
-                 message_id=None, stanza_id=None, show_in_roster=False,
-                 show_in_systray=True):
-        Event.__init__(self, time_, show_in_roster=show_in_roster,
-                       show_in_systray=show_in_systray)
-        self.message = message
-        self.subject = subject
-        self.control = control
-        self.msg_log_id = msg_log_id
-        self.message_id = message_id
-        self.stanza_id = stanza_id
 
-class PrintedGcMsgEvent(PrintedChatEvent):
-    type_ = 'printed_gc_msg'
+@dataclass
+class ShowChanged(ApplicationEvent):
+    name: str = field(init=False, default='our-show')
+    account: str
+    show: str
 
-class PrintedMarkedGcMsgEvent(PrintedChatEvent):
-    type_ = 'printed_marked_gc_msg'
 
-class PrintedPmEvent(PrintedChatEvent):
-    type_ = 'printed_pm'
+@dataclass
+class AccountConnected(ApplicationEvent):
+    name: str = field(init=False, default='account-connected')
+    account: str
 
-class SubscriptionRequestEvent(Event):
-    type_ = 'subscription_request'
-    def __init__(self, text, nick, time_=None, show_in_roster=False,
-    show_in_systray=True):
-        Event.__init__(self, time_, show_in_roster=show_in_roster,
-            show_in_systray=show_in_systray)
-        self.text = text
-        self.nick = nick
 
-class UnsubscribedEvent(Event):
-    type_ = 'unsubscribed'
-    def __init__(self, contact, time_=None, show_in_roster=False,
-    show_in_systray=True):
-        Event.__init__(self, time_, show_in_roster=show_in_roster,
-            show_in_systray=show_in_systray)
-        self.contact = contact
+@dataclass
+class AccountDisonnected(ApplicationEvent):
+    name: str = field(init=False, default='account-disconnected')
+    account: str
 
-class GcInvitationtEvent(Event):
-    type_ = 'gc-invitation'
-    def __init__(self, event):
-        Event.__init__(self, None, show_in_roster=False, show_in_systray=True)
-        for key, value in vars(event).items():
-            setattr(self, key, value)
 
-    def get_inviter_name(self):
-        if self.from_.bare_match(self.muc):
-            return self.from_.resource
+@dataclass
+class PlainConnection(ApplicationEvent):
+    name: str = field(init=False, default='plain-connection')
+    account: str
+    connect: Callable[..., Any]
+    abort: Callable[..., Any]
 
-        contact = app.contacts.get_first_contact_from_jid(
-            self.account, self.from_.bare)
-        if contact is None:
-            return str(self.from_)
-        return contact.get_shown_name()
 
-class FileRequestEvent(Event):
-    type_ = 'file-request'
-    def __init__(self, file_props, time_=None, show_in_roster=False, show_in_systray=True):
-        Event.__init__(self, time_, show_in_roster=show_in_roster,
-            show_in_systray=show_in_systray)
-        self.file_props = file_props
+@dataclass
+class PasswordRequired(ApplicationEvent):
+    name: str = field(init=False, default='password-required')
+    conn: 'Client'
+    on_password: Callable[..., Any]
 
-class FileSendErrorEvent(FileRequestEvent):
-    type_ = 'file-send-error'
 
-class FileErrorEvent(FileRequestEvent):
-    type_ = 'file-error'
+@dataclass
+class Notification(ApplicationEvent):
+    name: str = field(init=False, default='notification')
+    account: str
+    type: str
+    title: str
+    text: str
+    jid: Optional[Union[JID, str]] = None
+    sub_type: Optional[str] = None
+    sound: Optional[str] = None
+    icon_name: Optional[str] = None
 
-class FileRequestErrorEvent(FileRequestEvent):
-    type_ = 'file-request-error'
 
-class FileCompletedEvent(FileRequestEvent):
-    type_ = 'file-completed'
+@dataclass
+class StanzaSent(ApplicationEvent):
+    name: str = field(init=False, default='stanza-sent')
+    account: str
+    stanza: Any
 
-class FileStoppedEvent(FileRequestEvent):
-    type_ = 'file-stopped'
 
-class FileHashErrorEvent(FileRequestEvent):
-    type_ = 'file-hash-error'
+@dataclass
+class StanzaReceived(ApplicationEvent):
+    name: str = field(init=False, default='stanza-received')
+    account: str
+    stanza: Any
 
-class JingleIncomingEvent(Event):
-    type_ = 'jingle-incoming'
-    def __init__(self, peerjid, sid, content_types, time_=None, show_in_roster=False, show_in_systray=True):
-        Event.__init__(self, time_, show_in_roster=show_in_roster,
-            show_in_systray=show_in_systray)
-        self.peerjid = peerjid
-        self.sid = sid
-        self.content_types = content_types
 
-class Events:
-    """
-    Information concerning all events
-    """
+@dataclass
+class SignedIn(ApplicationEvent):
+    name: str = field(init=False, default='signed-in')
+    account: str
+    conn: 'Client'
 
-    def __init__(self):
-        self._events = {} # list of events {acct: {jid1: [E1, E2]}, }
-        self._event_added_listeners = []
-        self._event_removed_listeners = []
 
-    def event_added_subscribe(self, listener):
-        """
-        Add a listener when an event is added to the queue
-        """
-        if not listener in self._event_added_listeners:
-            self._event_added_listeners.append(listener)
+@dataclass
+class MusicTrackChanged(ApplicationEvent):
+    name: str = field(init=False, default='music-track-changed')
+    info: Optional[TuneData]
 
-    def event_added_unsubscribe(self, listener):
-        """
-        Remove a listener when an event is added to the queue
-        """
-        if listener in self._event_added_listeners:
-            self._event_added_listeners.remove(listener)
 
-    def event_removed_subscribe(self, listener):
-        """
-        Add a listener when an event is removed from the queue
-        """
-        if not listener in self._event_removed_listeners:
-            self._event_removed_listeners.append(listener)
+@dataclass
+class MessageSent(ApplicationEvent):
+    name: str = field(init=False, default='message-sent')
+    account: str
+    jid: str
+    message: str
+    message_id: str
+    chatstate: Optional[str]
+    timestamp: float
+    additional_data: 'AdditionalDataDict'
+    label: Optional[str]
+    correct_id: Optional[str]
+    play_sound: bool
 
-    def event_removed_unsubscribe(self, listener):
-        """
-        Remove a listener when an event is removed from the queue
-        """
-        if listener in self._event_removed_listeners:
-            self._event_removed_listeners.remove(listener)
 
-    def fire_event_added(self, event):
-        for listener in self._event_added_listeners:
-            listener(event)
+@dataclass
+class MessageNotSent(ApplicationEvent):
+    name: str = field(init=False, default='message-not-sent')
+    client: 'Client'
+    jid: str
+    message: str
+    error: str
+    time: float
 
-    def fire_event_removed(self, event_list):
-        for listener in self._event_removed_listeners:
-            listener(event_list)
 
-    def add_account(self, account):
-        self._events[account] = {}
+@dataclass
+class AdHocCommandError(ApplicationEvent):
+    name: str = field(init=False, default='adhoc-command-error')
+    conn: 'Client'
+    error: str
 
-    def get_accounts(self):
-        return self._events.keys()
 
-    def remove_account(self, account):
-        del self._events[account]
+@dataclass
+class AdHocCommandActionResponse(ApplicationEvent):
+    name: str = field(init=False, default='adhoc-command-action-response')
+    conn: 'Client'
+    command: Any
 
-    def add_event(self, account, jid, event):
-        # No such account before ?
-        if account not in self._events:
-            self._events[account] = {jid: [event]}
-        # no such jid before ?
-        elif jid not in self._events[account]:
-            self._events[account][jid] = [event]
-        else:
-            self._events[account][jid].append(event)
-        event.jid = jid
-        event.account = account
-        self.fire_event_added(event)
 
-    def remove_events(self, account, jid, event=None, types=None):
-        """
-        If event is not specified, remove all events from this jid, optionally
-        only from given type return True if no such event found
-        """
-        if types is None:
-            types = []
-        if account not in self._events:
-            return True
-        if jid not in self._events[account]:
-            return True
-        if event: # remove only one event
-            if event in self._events[account][jid]:
-                if len(self._events[account][jid]) == 1:
-                    del self._events[account][jid]
-                else:
-                    self._events[account][jid].remove(event)
-                self.fire_event_removed([event])
-                return
-            return True
-        if types:
-            new_list = [] # list of events to keep
-            removed_list = [] # list of removed events
-            for ev in self._events[account][jid]:
-                if ev.type_ not in types:
-                    new_list.append(ev)
-                else:
-                    removed_list.append(ev)
-            if len(new_list) == len(self._events[account][jid]):
-                return True
-            if new_list:
-                self._events[account][jid] = new_list
-            else:
-                del self._events[account][jid]
-            self.fire_event_removed(removed_list)
+@dataclass
+class FileProgress(ApplicationEvent):
+    name: str = field(init=False, default='file-progress')
+    file_props: FileProp
+
+
+@dataclass
+class FileCompleted(ApplicationEvent):
+    name: str = field(init=False, default='file-completed')
+    account: str
+    file_props: FileProp
+    jid: str
+
+
+@dataclass
+class FileError(ApplicationEvent):
+    name: str = field(init=False, default='file-error')
+    account: str
+    file_props: FileProp
+    jid: str
+
+
+@dataclass
+class FileHashError(ApplicationEvent):
+    name: str = field(init=False, default='file-hash-error')
+    account: str
+    file_props: FileProp
+    jid: str
+
+
+@dataclass
+class FileRequestSent(ApplicationEvent):
+    name: str = field(init=False, default='file-request-sent')
+    account: str
+    file_props: FileProp
+    jid: str
+
+
+@dataclass
+class FileRequestError(ApplicationEvent):
+    name: str = field(init=False, default='file-request-error')
+    conn: 'Client'
+    file_props: FileProp
+    jid: str
+    error_msg: str = ''
+
+
+@dataclass
+class FileSendError(ApplicationEvent):
+    name: str = field(init=False, default='file-send-error')
+    account: str
+    file_props: FileProp
+    jid: str
+    error_msg: str = ''
+
+
+@dataclass
+class AccountEnabled(ApplicationEvent):
+    name: str = field(init=False, default='account-enabled')
+    account: str
+
+
+@dataclass
+class AccountDisabled(ApplicationEvent):
+    name: str = field(init=False, default='account-disabled')
+    account: str
+
+
+@dataclass
+class FeatureDiscovered(ApplicationEvent):
+    name: str = field(init=False, default='feature-discovered')
+    account: str
+    feature: str
+
+
+@dataclass
+class BookmarksReceived(ApplicationEvent):
+    name: str = field(init=False, default='bookmarks-received')
+    account: str
+
+
+@dataclass
+class BaseChatMarkerEvent(ApplicationEvent):
+    name: str
+    account: str
+    jid: JID
+    properties: Any
+    type: str
+    is_muc_pm: bool
+    marker_id: str
+
+
+@dataclass
+class ReadStateSync(BaseChatMarkerEvent):
+    name: str = field(init=False, default='read-state-sync')
+
+
+@dataclass
+class DisplayedReceived(BaseChatMarkerEvent):
+    name: str = field(init=False, default='displayed-received')
+
+
+@dataclass
+class IqErrorReceived(ApplicationEvent):
+    name: str = field(init=False, default='iq-error-received')
+    account: str
+    properties: Any
+
+
+@dataclass
+class HttpAuthReceived(ApplicationEvent):
+    name: str = field(init=False, default='http-auth-received')
+    conn: 'Client'
+    iq_id: str
+    method: str
+    url: str
+    msg: str
+    stanza: Any
+
+
+@dataclass
+class AgentRemoved(ApplicationEvent):
+    name: str = field(init=False, default='agent-removed')
+    conn: 'Client'
+    agent: str
+    jid_list: list[str]
+
+
+@dataclass
+class GatewayPromptReceived(ApplicationEvent):
+    name: str = field(init=False, default='gateway-prompt-received')
+    conn: 'Client'
+    fjid: str
+    jid: str
+    resource: str
+    desc: str
+    prompt: str
+    prompt_jid: str
+    stanza: Any
+
+
+@dataclass
+class ServerDiscoReceived(ApplicationEvent):
+    name: str = field(init=False, default='server-disco-received')
+
+
+@dataclass
+class MucDiscoUpdate(ApplicationEvent):
+    name: str = field(init=False, default='muc-disco-update')
+    account: str
+    jid: JID
+
+
+@dataclass
+class RawMessageReceived(ApplicationEvent):
+    name: str = field(init=False, default='raw-message-received')
+    account: str
+    stanza: Any
+    conn: 'Client'
+
+
+@dataclass
+class RawMamMessageReceived(ApplicationEvent):
+    name: str = field(init=False, default='raw-mam-message-received')
+    account: str
+    stanza: Any
+    properties: Any
+
+
+@dataclass
+class ArchivingIntervalFinished(ApplicationEvent):
+    name: str = field(init=False, default='archiving-interval-finished')
+    account: str
+    query_id: str
+
+
+@dataclass
+class MessageUpdated(ApplicationEvent):
+    name: str = field(init=False, default='message-updated')
+    account: str
+    jid: str
+    msgtxt: str
+    properties: Any
+    correct_id: str
+
+
+@dataclass
+class MamMessageReceived(ApplicationEvent):
+    name: str = field(init=False, default='mam-message-received')
+    account: str
+    jid: str
+    msgtxt: str
+    properties: Any
+    additional_data: 'AdditionalDataDict'
+    unique_id: str
+    stanza_id: str
+    archive_jid: str
+    kind: 'KindConstant'
+
+
+@dataclass
+class MessageReceived(ApplicationEvent):
+    name: str = field(init=False, default='message-received')
+    conn: 'Client'
+    stanza: Any
+    account: str
+    jid: str
+    msgtxt: str
+    properties: Any
+    additional_data: 'AdditionalDataDict'
+    unique_id: str
+    stanza_id: str
+    fjid: str
+    resource: str
+    session: Any
+    delayed: Optional[float]
+    msg_log_id: int
+    displaymarking: str
+
+
+@dataclass
+class GcMessageReceived(MessageReceived):
+    name: str = field(init=False, default='gc-message-received')
+    room_jid: str
+
+
+@dataclass
+class MessageError(ApplicationEvent):
+    name: str = field(init=False, default='message-error')
+    account: str
+    jid: str
+    room_jid: str
+    message_id: str
+    error: Any
+
+
+@dataclass
+class RosterItemExchangeEvent(ApplicationEvent):
+    name: str = field(init=False, default='roster-item-exchange-received')
+    conn: 'Client'
+    fjid: str
+    exchange_items_list: list[str]
+    action: str
+
+
+@dataclass
+class RosterReceived(ApplicationEvent):
+    name: str = field(init=False, default='roster-received')
+    account: str
+
+
+@dataclass
+class RosterPush(ApplicationEvent):
+    name: str = field(init=False, default='roster-push')
+    account: str
+    item: RosterItem
+
+
+@dataclass
+class PluginAdded(ApplicationEvent):
+    name: str = field(init=False, default='plugin-added')
+    plugin: Any
+
+
+@dataclass
+class PluginRemoved(ApplicationEvent):
+    name: str = field(init=False, default='plugin-removed')
+    plugin: Any
+
+
+@dataclass
+class TuneReceived(ApplicationEvent):
+    name: str = field(init=False, default='tune-received')
+    account: str
+    jid: str
+    tune: TuneData
+    is_self_message: bool
+
+
+@dataclass
+class LocationReceived(ApplicationEvent):
+    name: str = field(init=False, default='location-received')
+    account: str
+    jid: str
+    location: LocationData
+    is_self_message: bool
+
+
+@dataclass
+class SearchFormReceivedEvent(ApplicationEvent):
+    name: str = field(init=False, default='search-form-received')
+    conn: 'Client'
+    is_dataform: bool
+    data: Any
+
+
+@dataclass
+class SearchResultReceivedEvent(ApplicationEvent):
+    name: str = field(init=False, default='search-result-received')
+    conn: 'Client'
+    is_dataform: bool
+    data: Any
+
+
+@dataclass
+class ReceiptReceived(ApplicationEvent):
+    name: str = field(init=False, default='receipt-received')
+    account: str
+    jid: str
+    receipt_id: str
+
+
+@dataclass
+class JingleEvent(ApplicationEvent):
+    name: str
+    conn: 'Client'
+    account: str
+    fjid: str
+    jid: str
+    sid: str
+    resource: str
+    jingle_session: JingleSession
+
+
+@dataclass
+class JingleConnectedReceived(JingleEvent):
+    name: str = field(init=False, default='jingle-connected-received')
+    media: Any
+
+
+@dataclass
+class JingleDisconnectedReceived(JingleEvent):
+    name: str = field(init=False, default='jingle-disconnected-received')
+    media: Any
+    reason: str
+
+
+@dataclass
+class JingleRequestReceived(JingleEvent):
+    name: str = field(init=False, default='jingle-request-received')
+    contents: Any
+
+
+@dataclass
+class JingleFtCancelledReceived(JingleEvent):
+    name: str = field(init=False, default='jingle-ft-cancelled-received')
+    media: Any
+    reason: str
+
+
+@dataclass
+class JingleErrorReceived(JingleEvent):
+    name: str = field(init=False, default='jingle-error-received')
+    reason: str
+
+
+@dataclass
+class MucAdded(ApplicationEvent):
+    name: str = field(init=False, default='muc-added')
+    account: str
+    jid: str
+
+
+@dataclass
+class MucDecline(ApplicationEvent):
+    name: str = field(init=False, default='muc-decline')
+    account: str
+    muc: JID
+    from_: JID
+    reason: Optional[str]
+
+
+@dataclass
+class MucInvitation(ApplicationEvent):
+    name: str = field(init=False, default='muc-invitation')
+    account: str
+    info: Any
+    muc: JID
+    from_: JID
+    reason: Optional[str]
+    password: Optional[str]
+    type: InviteType
+    continued: bool
+    thread: Optional[str]
+
+
+@dataclass
+class PingSent(ApplicationEvent):
+    name: str = field(init=False, default='ping-sent')
+    account: str
+    contact: Any
+
+
+@dataclass
+class PingError(ApplicationEvent):
+    name: str = field(init=False, default='ping-error')
+    account: str
+    contact: Any
+    error: str
+
+
+@dataclass
+class PingReply(ApplicationEvent):
+    name: str = field(init=False, default='ping-reply')
+    account: str
+    contact: Any
+    seconds: int
+
+
+@dataclass
+class SecCatalogReceived(ApplicationEvent):
+    name: str = field(init=False, default='sec-catalog-received')
+    account: str
+    jid: str
+    catalog: dict[str, Any]
+
+
+@dataclass
+class RawPresenceReceived(ApplicationEvent):
+    name: str = field(init=False, default='raw-pres-received')
+    conn: 'Client'
+    stanza: Any
+
+
+@dataclass
+class PresenceReceived(ApplicationEvent):
+    name: str = field(init=False, default='presence-received')
+    account: str
+    conn: 'Client'
+    stanza: Any
+    prio: int
+    need_add_in_roster: bool
+    popup: bool
+    ptype: str
+    jid: str
+    resource: str
+    id_: str
+    fjid: str
+    timestamp: float
+    avatar_sha: Optional[str]
+    user_nick: Optional[str]
+    idle_time: Optional[float]
+    show: str
+    new_show: str
+    old_show: str
+    status: str
+    contact_list: list[str]
+    contact: Any
+
+
+@dataclass
+class SubscribePresenceReceived(ApplicationEvent):
+    name: str = field(init=False, default='subscribe-presence-received')
+    conn: 'Client'
+    account: str
+    jid: str
+    fjid: str
+    status: str
+    user_nick: str
+    is_transport: bool
+
+
+@dataclass
+class SubscribedPresenceReceived(ApplicationEvent):
+    name: str = field(init=False, default='subscribed-presence-received')
+    account: str
+    jid: str
+
+
+@dataclass
+class UnsubscribedPresenceReceived(ApplicationEvent):
+    name: str = field(init=False, default='unsubscribed-presence-received')
+    conn: 'Client'
+    account: str
+    jid: str
+
+
+@dataclass
+class FileRequestReceivedEvent(ApplicationEvent):
+    name: str = field(init=False, default='file-request-received')
+    conn: 'Client'
+    stanza: Any
+    jingle_content: Any
+    FT_content: Any
+    id_: str = field(init=False)
+    fjid: str = field(init=False)
+    account: str = field(init=False)
+    jid: str = field(init=False)
+    file_props: FileProp = field(init=False)
+
+    def __post_init__(self):
+        from gajim.common.jingle_transport import JingleTransportSocks5
+        from gajim.common.file_props import FilesProp
+        self.id_ = self.stanza.getID()
+        self.fjid = self.conn.get_module('Bytestream')._ft_get_from(
+            self.stanza)
+        self.account = self.conn.name
+        self.jid = app.get_jid_without_resource(self.fjid)
+        if not self.jingle_content:
             return
-        # No event nor type given, remove them all
-        removed_list = self._events[account][jid]
-        del self._events[account][jid]
-        self.fire_event_removed(removed_list)
-
-    def change_jid(self, account, old_jid, new_jid):
-        if account not in self._events:
-            return
-        if old_jid not in self._events[account]:
-            return
-        if new_jid in self._events[account]:
-            self._events[account][new_jid] += self._events[account][old_jid]
+        secu = self.jingle_content.getTag('security')
+        self.FT_content.use_security = bool(secu)
+        if secu:
+            fingerprint = secu.getTag('fingerprint')
+            if fingerprint:
+                self.FT_content.x509_fingerprint = fingerprint.getData()
+        if not self.FT_content.transport:
+            self.FT_content.transport = JingleTransportSocks5()
+            self.FT_content.transport.set_our_jid(
+                self.FT_content.session.ourjid)
+            self.FT_content.transport.set_connection(
+                self.FT_content.session.connection)
+        sid = self.stanza.getTag('jingle').getAttr('sid')
+        self.file_props = FilesProp.getNewFileProp(self.conn.name, sid)
+        self.file_props.transport_sid = self.FT_content.transport.sid
+        self.FT_content.file_props = self.file_props
+        self.FT_content.transport.set_file_props(self.file_props)
+        self.file_props.streamhosts.extend(
+            self.FT_content.transport.remote_candidates)
+        for host in self.file_props.streamhosts:
+            host['initiator'] = self.FT_content.session.initiator
+            host['target'] = self.FT_content.session.responder
+        self.file_props.session_type = 'jingle'
+        self.file_props.stream_methods = Namespace.BYTESTREAM
+        desc = self.jingle_content.getTag('description')
+        if self.jingle_content.getAttr('creator') == 'initiator':
+            file_tag = desc.getTag('file')
+            self.file_props.sender = self.fjid
+            self.file_props.receiver = self.conn.get_own_jid()
         else:
-            self._events[account][new_jid] = self._events[account][old_jid]
-        del self._events[account][old_jid]
-
-    def get_nb_events(self, types=None, account=None):
-        if types is None:
-            types = []
-        return self._get_nb_events(types=types, account=account)
-
-    def get_events(self, account, jid=None, types=None):
-        """
-        Return all events from the given account of the form {jid1: [], jid2:
-        []}. If jid is given, returns all events from the given jid in a list: []
-        optionally only from given type
-        """
-        if types is None:
-            types = []
-        if account not in self._events:
-            return []
-        if not jid:
-            events_list = {} # list of events
-            for jid_ in self._events[account]:
-                events = []
-                for ev in self._events[account][jid_]:
-                    if not types or ev.type_ in types:
-                        events.append(ev)
-                if events:
-                    events_list[jid_] = events
-            return events_list
-        if jid not in self._events[account]:
-            return []
-        events_list = [] # list of events
-        for ev in self._events[account][jid]:
-            if not types or ev.type_ in types:
-                events_list.append(ev)
-        return events_list
-
-    def get_all_events(self, types=None):
-        accounts = self._events.keys()
-        events = []
-        for account in accounts:
-            for jid in self._events[account]:
-                for event in self._events[account][jid]:
-                    if types is None or event.type_ in types:
-                        events.append(event)
-        return events
-
-    def get_first_event(self, account=None, jid=None, type_=None):
-        """
-        Return the first event of type type_ if given
-        """
-        if not account:
-            return self._get_first_event_with_attribute(self._events)
-        events_list = self.get_events(account, jid, type_)
-        # be sure it's bigger than latest event
-        first_event_time = time.time() + 1
-        first_event = None
-        for event in events_list:
-            if event.time_ < first_event_time:
-                first_event_time = event.time_
-                first_event = event
-        return first_event
-
-    def _get_nb_events(self, account=None, jid=None, attribute=None, types=None):
-        """
-        Return the number of pending events
-        """
-        if types is None:
-            types = []
-        nb = 0
-        if account:
-            accounts = [account]
-        else:
-            accounts = self._events.keys()
-        for acct in accounts:
-            if acct not in self._events:
+            file_tag = desc.getTag('file')
+            hash_ = file_tag.getTag('hash')
+            hash_ = hash_.getData() if hash_ else None
+            file_name = file_tag.getTag('name')
+            file_name = file_name.getData() if file_name else None
+            pjid = app.get_jid_without_resource(self.fjid)
+            file_info = self.conn.get_module('Jingle').get_file_info(
+                pjid, hash_=hash_, name=file_name, account=self.conn.name)
+            self.file_props.file_name = file_info['file-name']
+            self.file_props.sender = self.conn.get_own_jid()
+            self.file_props.receiver = self.fjid
+            self.file_props.type_ = 's'
+        for child in file_tag.getChildren():
+            name = child.getName()
+            val = child.getData()
+            if val is None:
                 continue
-            if jid:
-                jids = [jid]
-            else:
-                jids = self._events[acct].keys()
-            for j in jids:
-                if j not in self._events[acct]:
-                    continue
-                for event in self._events[acct][j]:
-                    if types and event.type_ not in types:
-                        continue
-                    if not attribute or \
-                    attribute == 'systray' and event.show_in_systray or \
-                    attribute == 'roster' and event.show_in_roster:
-                        nb += 1
-        return nb
+            if name == 'name':
+                self.file_props.name = val
+            if name == 'size':
+                self.file_props.size = int(val)
+            if name == 'hash':
+                self.file_props.algo = child.getAttr('algo')
+                self.file_props.hash_ = val
+            if name == 'date':
+                self.file_props.date = val
 
-    def _get_some_events(self, attribute):
-        """
-        Attribute in systray, roster
-        """
-        events = {}
-        for account in self._events:
-            events[account] = {}
-            for jid in self._events[account]:
-                events[account][jid] = []
-                for event in self._events[account][jid]:
-                    if attribute == 'systray' and event.show_in_systray or \
-                    attribute == 'roster' and event.show_in_roster:
-                        events[account][jid].append(event)
-                if not events[account][jid]:
-                    del events[account][jid]
-            if not events[account]:
-                del events[account]
-        return events
-
-    def _get_first_event_with_attribute(self, events):
-        """
-        Get the first event
-
-        events is in the form {account1: {jid1: [ev1, ev2], },. }
-        """
-        # be sure it's bigger than latest event
-        first_event_time = time.time() + 1
-        first_account = None
-        first_jid = None
-        first_event = None
-        for account in events:
-            for jid in events[account]:
-                for event in events[account][jid]:
-                    if event.time_ < first_event_time:
-                        first_event_time = event.time_
-                        first_account = account
-                        first_jid = jid
-                        first_event = event
-        return first_account, first_jid, first_event
-
-    def get_nb_systray_events(self, types=None):
-        """
-        Return the number of events displayed in roster
-        """
-        if types is None:
-            types = []
-        return self._get_nb_events(attribute='systray', types=types)
-
-    def get_systray_events(self):
-        """
-        Return all events that must be displayed in systray:
-                {account1: {jid1: [ev1, ev2], },. }
-        """
-        return self._get_some_events('systray')
-
-    def get_first_systray_event(self):
-        events = self.get_systray_events()
-        return self._get_first_event_with_attribute(events)
-
-    def get_nb_roster_events(self, account=None, jid=None, types=None):
-        """
-        Return the number of events displayed in roster
-        """
-        if types is None:
-            types = []
-        return self._get_nb_events(attribute='roster', account=account,
-                jid=jid, types=types)
-
-    def get_roster_events(self):
-        """
-        Return all events that must be displayed in roster:
-                {account1: {jid1: [ev1, ev2], },. }
-        """
-        return self._get_some_events('roster')
+        self.file_props.request_id = self.id_
+        file_desc_tag = file_tag.getTag('desc')
+        if file_desc_tag is not None:
+            self.file_props.desc = file_desc_tag.getData()
+        self.file_props.transfered_size = []

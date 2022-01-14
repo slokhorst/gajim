@@ -14,8 +14,6 @@
 
 # XEP-0199: XMPP Ping
 
-from typing import Any
-from typing import Tuple
 from typing import Generator
 
 import time
@@ -23,9 +21,10 @@ import time
 from nbxmpp.errors import is_error
 
 from gajim.common import app
-from gajim.common.nec import NetworkEvent
+from gajim.common.events import PingError
+from gajim.common.events import PingReply
+from gajim.common.events import PingSent
 from gajim.common.types import ConnectionT
-from gajim.common.types import ContactsT
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import as_task
 
@@ -43,26 +42,23 @@ class Ping(BaseModule):
         self.handlers = []
 
     @as_task
-    def send_ping(self, contact: ContactsT) -> Generator:
+    def send_ping(self, contact) -> Generator:
         _task = yield
 
         if not app.account_is_available(self._account):
             return
 
-        jid = contact.get_full_jid()
+        jid = contact.jid
 
-        self._log.info('Send ping to %s', jid)
+        self._log.info('Send ping to %s', str(jid))
 
-        app.nec.push_incoming_event(NetworkEvent('ping-sent',
-                                                 account=self._account,
-                                                 contact=contact))
+        app.ged.raise_event(PingSent(account=self._account, contact=contact))
 
         ping_time = time.time()
 
         response = yield self.ping(jid, timeout=10)
         if is_error(response):
-            app.nec.push_incoming_event(NetworkEvent(
-                'ping-error',
+            app.ged.raise_event(PingError(
                 account=self._account,
                 contact=contact,
                 error=str(response)))
@@ -72,11 +68,6 @@ class Ping(BaseModule):
         self._log.info('Received pong from %s after %s seconds',
                        response.jid, diff)
 
-        app.nec.push_incoming_event(NetworkEvent('ping-reply',
-                                                 account=self._account,
-                                                 contact=contact,
-                                                 seconds=diff))
-
-
-def get_instance(*args: Any, **kwargs: Any) -> Tuple[Ping, str]:
-    return Ping(*args, **kwargs), 'Ping'
+        app.ged.raise_event(PingReply(account=self._account,
+                                      contact=contact,
+                                      seconds=diff))

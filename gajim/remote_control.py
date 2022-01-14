@@ -33,7 +33,7 @@ from gajim.common import ged
 from gajim.common import helpers
 from gajim.common.structs import OutgoingMessage
 
-from gajim.gui.add_contact import AddNewContactWindow
+from gajim.gui.add_contact import AddContact
 
 
 log = logging.getLogger('gajim.remote_control')
@@ -204,7 +204,6 @@ class GajimRemote(Server):
                 <arg name='prio' type='s' />
                 <arg name='account' type='s' />
             </method>
-            <method name='show_next_pending_event' />
             <method name='show_roster' />
             <method name='start_chat'>
                 <arg name='jid' type='s' />
@@ -296,20 +295,8 @@ class GajimRemote(Server):
             self.on_account_created)
         app.ged.register_event_handler('vcard-received', ged.POSTGUI,
             self.on_vcard_received)
-        app.ged.register_event_handler('chatstate-received', ged.POSTGUI,
-            self.on_chatstate_received)
         app.ged.register_event_handler('message-sent', ged.POSTGUI,
             self.on_message_sent)
-
-    def on_chatstate_received(self, obj):
-        if obj.contact.is_gc_contact:
-            jid = obj.contact.get_full_jid()
-            chatstate = obj.contact.chatstate
-        else:
-            jid = obj.contact.jid
-            chatstate = app.contacts.get_combined_chatstate(
-                obj.account, obj.contact.jid)
-        self.raise_signal('ChatState', (obj.account, [jid, chatstate]))
 
     def on_message_sent(self, obj):
         try:
@@ -354,6 +341,7 @@ class GajimRemote(Server):
 
     def on_gc_message_received(self, obj):
         if not hasattr(obj, 'needs_highlight'):
+            # TODO:
             # event has not been handled at GUI level
             return
         self.raise_signal('GCMessage', (obj.conn.name, [obj.fjid, obj.msgtxt,
@@ -413,7 +401,7 @@ class GajimRemote(Server):
         """
         connected_account = None
         contact = None
-        accounts = app.contacts.get_accounts()
+        accounts = app.settings.get_active_accounts()
         # if there is only one account in roster, take it as default
         # if user did not ask for account
         if not account and len(accounts) == 1:
@@ -421,18 +409,16 @@ class GajimRemote(Server):
         if account:
             if app.account_is_available(account):  # account is connected
                 connected_account = account
-                contact = app.contacts.get_contact_with_highest_priority(
-                    account, jid)
+                client = app.get_client(account)
+                contact = client.get_module('Contacts').get_contact(jid)
         else:
             for account_ in accounts:
-                contact = app.contacts.get_contact_with_highest_priority(
-                    account, jid)
-                if contact and app.account_is_available(account_):
+                client = app.get_client(account_)
+                contact = client.get_module('Contacts').get_contact(jid)
+                if app.account_is_available(account_):
                     # account is connected
                     connected_account = account_
                     break
-        if not contact:
-            contact = jid
 
         return connected_account, contact
 
@@ -442,7 +428,7 @@ class GajimRemote(Server):
         or check if the given account is connected to the groupchat
         """
         connected_account = None
-        accounts = app.contacts.get_accounts()
+        accounts = app.settings.get_active_accounts()
         # if there is only one account in roster, take it as default
         # if user did not ask for account
         if not account and len(accounts) == 1:
@@ -498,19 +484,18 @@ class GajimRemote(Server):
         if not connected_account or contact is None:
             return False
 
-        connection = app.connections[connected_account]
-        ctrl = app.interface.msg_win_mgr.search_control(
-            jid, connected_account)
-        if ctrl:
-            ctrl.send_message(message)
+        client = app.get_client(connected_account)
+        control = app.window.get_control(connected_account, jid)
+        if control is not None:
+            control.send_message(message)
         else:
             message_ = OutgoingMessage(account=connected_account,
                                        contact=contact,
                                        message=message,
                                        type_=type_,
                                        subject=subject,
-                                       control=ctrl)
-            connection.send_message(message_)
+                                       control=control)
+            client.send_message(message_)
         return True
 
     def send_chat_message(self, jid, message, account):
@@ -538,24 +523,24 @@ class GajimRemote(Server):
         if not connected_account:
             return False
 
-        contact = app.contacts.get_groupchat_contact(connected_account,
-                                                     room_jid)
-        if contact is None:
+        client = app.get_client(connected_account)
+        contact = client.get_module('Contacts').get_contact(
+            connected_account, room_jid, groupchat=True)
+
+        if not contact.is_joined:
             return False
 
         message_ = OutgoingMessage(account=connected_account,
                                    contact=contact,
                                    message=message,
                                    type_='groupchat')
-        con = app.connections[connected_account]
-        con.send_message(message_)
+        client.send_message(message_)
         return True
-
 
     def open_chat(self, jid, account, message):
         """
-        Shows the tabbed window for new message to 'jid', using account (optional)
-        'account'
+        Shows the tabbed window for new message to 'jid', using account
+        'account' (optional)
         """
         if not jid:
             raise ValueError('jid is missing')
@@ -566,7 +551,6 @@ class GajimRemote(Server):
             # Jid is not conform, ignore it
             return False
 
-        minimized_control = None
         if account:
             accounts = [account]
         else:
@@ -577,14 +561,14 @@ class GajimRemote(Server):
         first_connected_acct = None
         for acct in accounts:
             if app.account_is_available(acct):  # account is  online
-                contact = app.contacts.get_first_contact_from_jid(acct, jid)
-                if app.interface.msg_win_mgr.has_window(jid, acct):
+                client = app.get_client(acct)
+                contact = client.get_module('Contacts').get_contact(jid)
+                control = app.window.get_control(acct, jid)
+                if control is not None:
                     connected_account = acct
                     break
                 # jid is in roster
-                if contact:
-                    minimized_control = \
-                        jid in app.interface.minimized_controls[acct]
+                if contact.is_in_roster:
                     connected_account = acct
                     break
                 # we send the message to jid not in roster, because account is
@@ -598,17 +582,11 @@ class GajimRemote(Server):
         if connected_account is None and first_connected_acct:
             connected_account = first_connected_acct
 
-        if minimized_control:
-            app.interface.roster.on_groupchat_maximized(
-                None, jid, connected_account)
-
         if connected_account:
-            app.interface.new_chat_from_jid(connected_account, jid, message)
+            app.interface.start_chat_from_jid(connected_account, jid, message)
             # preserve the 'steal focus preservation'
-            win = app.interface.msg_win_mgr.get_window(
-                jid, connected_account).window
-            if win.get_property('visible'):
-                win.window.present()
+            if app.window.get_property('visible'):
+                app.window.present()
             return True
         return False
 
@@ -624,11 +602,11 @@ class GajimRemote(Server):
                 if account not in app.connections:
                     return False
                 status = app.connections[account].status
-            GLib.idle_add(app.interface.roster.send_status, account, status,
+            GLib.idle_add(app.connections[account].change_status, status,
                           message)
         else:
             # account not specified, so change the status of all accounts
-            for acc in app.contacts.get_accounts():
+            for acc in app.settings.get_active_accounts():
                 if not app.settings.get_account_setting(
                         acc, 'sync_with_global_status'):
                     continue
@@ -638,7 +616,7 @@ class GajimRemote(Server):
                     if acc not in app.connections:
                         continue
                     status_ = app.connections[acc].status
-                GLib.idle_add(app.interface.roster.send_status, acc, status_,
+                GLib.idle_add(app.connections[acc].change_status, status_,
                               message)
         return False
 
@@ -654,7 +632,7 @@ class GajimRemote(Server):
             GLib.idle_add(app.connections[account].change_status, show, status)
         else:
             # account not specified, so change prio of all accounts
-            for acc in app.contacts.get_accounts():
+            for acc in app.settings.get_active_accounts():
                 if not app.account_is_available(acc):
                     continue
                 if not app.settings.get_account_setting(
@@ -665,21 +643,11 @@ class GajimRemote(Server):
                 status = app.connections[acc].status_message
                 GLib.idle_add(app.connections[acc].change_status, show, status)
 
-    def show_next_pending_event(self):
-        """
-        Show the window(s) with next pending event in tabbed/group chats
-        """
-        if app.events.get_nb_events():
-            account, jid, event = app.events.get_first_systray_event()
-            if not event:
-                return
-            app.interface.handle_event(account, jid, event.type_)
-
     def list_accounts(self):
         """
         List register accounts
         """
-        result = app.contacts.get_accounts()
+        result = app.settings.get_active_accounts()
         result_array = []
         if result:
             for account in result:
@@ -709,7 +677,7 @@ class GajimRemote(Server):
         then return the contacts for the specified account
         """
         result = []
-        accounts = app.contacts.get_accounts()
+        accounts = app.settings.get_active_accounts()
         if not accounts:
             return result
         if account:
@@ -718,9 +686,9 @@ class GajimRemote(Server):
             accounts_to_search = accounts
         for acct in accounts_to_search:
             if acct in accounts:
-                for jid in app.contacts.get_jid_list(acct):
-                    item = self._contacts_as_dbus_structure(
-                            app.contacts.get_contacts(acct, jid))
+                client = app.get_client(acct)
+                for contact in client.get_module('Roster').iter_contacts():
+                    item = self._contacts_as_dbus_structure(contact)
                     if item:
                         result.append(item)
         return result
@@ -729,30 +697,29 @@ class GajimRemote(Server):
         if account:
             if app.account_is_available(account):
                 # if given account is active, use it
-                AddNewContactWindow(account=account, contact_jid=jid)
+                AddContact(account=account, jid=jid)
             else:
                 # wrong account
                 return False
         else:
             # if account is not given, show account combobox
-            AddNewContactWindow(account=None, contact_jid=jid)
+            AddContact(account=None, jid=jid)
         return True
 
     def remove_contact(self, jid, account):
         jid = self._get_real_jid(jid, account)
-        accounts = app.contacts.get_accounts()
+        accounts = app.settings.get_active_accounts()
 
         # if there is only one account in roster, take it as default
         if account:
             accounts = [account]
         contact_exists = False
         for account_ in accounts:
-            contacts = app.contacts.get_contacts(account_, jid)
-            if contacts:
-                app.connections[account_].get_module('Presence').unsubscribe(jid)
-                for contact in contacts:
-                    app.interface.roster.remove_contact(contact, account_)
-                app.contacts.remove_jid(account_, jid)
+            client = app.get_client(account_)
+            contact = client.get_module('Contacts').get_contact(jid)
+            if contact.is_in_roster:
+                client.get_module('Presence').unsubscribe(jid)
+                client.get_module('Roster').delete_item(jid)
                 contact_exists = True
         return contact_exists
 
@@ -764,8 +731,8 @@ class GajimRemote(Server):
 
     def _get_real_jid(self, jid, account=None):
         """
-        Get the real jid from the given one: removes xmpp: or get jid from nick if
-        account is specified, search only in this account
+        Get the real jid from the given one: removes xmpp: or get jid from nick
+        if account is specified, search only in this account
         """
         if account:
             accounts = [account]
@@ -773,63 +740,45 @@ class GajimRemote(Server):
             accounts = app.connections.keys()
         if jid.startswith('xmpp:'):
             return jid[5:]  # len('xmpp:') = 5
-        nick_in_roster = None  # Is jid a nick ?
         for account_ in accounts:
             # Does jid exists in roster of one account ?
-            if app.contacts.get_contacts(account_, jid):
-                return jid
-            if not nick_in_roster:
-                # look in all contact if one has jid as nick
-                for jid_ in app.contacts.get_jid_list(account_):
-                    c = app.contacts.get_contacts(account_, jid_)
-                    if c[0].name == jid:
-                        nick_in_roster = jid_
-                        break
-        if nick_in_roster:
-            # We have not found jid in roster, but we found is as a nick
-            return nick_in_roster
-        # We have not found it as jid nor as nick, probably a not in roster jid
-        return jid
+            client = app.get_client(account_)
+            contact = client.get_module('Contacts').get_contact(jid)
+            if contact.is_pm_contact:
+                return contact.real_jid
+            return jid
 
-    def _contacts_as_dbus_structure(self, contacts):
+    def _contacts_as_dbus_structure(self, bare_contact):
         """
         Get info from list of Contact objects and create dbus dict
         """
-        if not contacts:
-            return None
         prim_contact = None  # primary contact
-        for contact in contacts:
-            if prim_contact is None or contact.priority > prim_contact.priority:
-                prim_contact = contact
+        for res_contact in bare_contact:
+            if (prim_contact is None or
+                    res_contact.priority > prim_contact.priority):
+                prim_contact = res_contact
         contact_dict = {}
-        name = prim_contact.name if prim_contact.name is not None else ''
+        name = bare_contact.name
         contact_dict['name'] = GLib.Variant('s', name)
         contact_dict['show'] = GLib.Variant('s', prim_contact.show)
         contact_dict['jid'] = GLib.Variant('s', prim_contact.jid)
 
         resources = GLib.VariantBuilder(GLib.VariantType('a(sis)'))
-        for contact in contacts:
-            resource_props = (contact.resource, int(contact.priority),
-                              contact.status)
+        for res_contact in bare_contact:
+            resource_props = (res_contact.jid.resource,
+                              int(res_contact.priority),
+                              res_contact.status)
             resources.add_value(GLib.Variant('(sis)', resource_props))
         contact_dict['resources'] = resources.end()
 
         groups = GLib.VariantBuilder(GLib.VariantType('as'))
-        for group in prim_contact.groups:
+        for group in bare_contact.groups:
             groups.add_value(GLib.Variant('s', group))
         contact_dict['groups'] = groups.end()
         return contact_dict
 
     def get_unread_msgs_number(self):
-        unread = app.events.get_nb_events()
-        for event in app.events.get_all_events(['printed_gc_msg']):
-            contact = app.contacts.get_groupchat_contact(event.account,
-                                                         event.jid)
-            if contact is None or not contact.can_notify():
-                unread -= 1
-                continue
-
-        return str(unread)
+        return str(app.window.get_total_unread_count())
 
     def start_chat(self, jid=''):
         app.app.activate_action('start-chat', GLib.Variant('s', jid))
@@ -839,7 +788,7 @@ class GajimRemote(Server):
         if account:
             app.connections[account].send_stanza(str(xml))
         else:
-            for acc in app.contacts.get_accounts():
+            for acc in app.settings.get_active_accounts():
                 app.connections[acc].send_stanza(str(xml))
 
     def join_room(self, room_jid, password, account):
@@ -858,9 +807,9 @@ class GajimRemote(Server):
             # zeroconf not support groupchats
             return
 
-        app.interface.show_or_join_groupchat(account,
-                                             room_jid,
-                                             password=password)
+        app.interface.show_add_join_groupchat(account,
+                                              room_jid,
+                                              password=password)
 
     def Introspect(self):
         return self.__doc__

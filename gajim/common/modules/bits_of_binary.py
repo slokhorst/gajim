@@ -59,6 +59,7 @@ class BitsOfBinary(BaseModule):
         if cid not in self.awaiting_cids:
             return
 
+        # pylint: disable=cell-var-from-loop
         if result.getType() == 'result':
             data = result.getTags('data', namespace=Namespace.BOB)
             if data.getAttr('cid') == cid:
@@ -198,7 +199,3 @@ def store_bob_data(bob_data):
 
     log.info('BoB data stored: %s', algo_hash)
     return filepath
-
-
-def get_instance(*args, **kwargs):
-    return BitsOfBinary(*args, **kwargs), 'BitsOfBinary'

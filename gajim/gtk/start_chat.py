@@ -20,14 +20,15 @@ from gi.repository import Gtk
 from gi.repository import GLib
 from gi.repository import Pango
 
+from nbxmpp import JID
 from nbxmpp.errors import is_error
 from nbxmpp.errors import StanzaError
+from nbxmpp.errors import TimeoutStanzaError
 from nbxmpp.errors import CancelledError
 
 from gajim.common import app
 from gajim.common.helpers import validate_jid
 from gajim.common.helpers import to_user_string
-from gajim.common.helpers import get_groupchat_name
 from gajim.common.helpers import get_group_chat_nick
 from gajim.common.i18n import _
 from gajim.common.i18n import get_rfc5646_lang
@@ -35,11 +36,13 @@ from gajim.common.const import AvatarSize
 from gajim.common.const import MUC_DISCO_ERRORS
 from gajim.common.modules.util import as_task
 
+from .menus import get_start_chat_row_menu
+from .chat_filter import ChatFilter
 from .groupchat_info import GroupChatInfoScrolled
 from .groupchat_nick import NickChooser
-from .util import get_builder
+from .builder import get_builder
 from .util import get_icon_name
-from .util import generate_account_badge
+from .util import AccountBadge
 
 
 class Search(IntEnum):
@@ -71,9 +74,11 @@ class StartChatDialog(Gtk.ApplicationWindow):
         self._nick_chooser = NickChooser()
         self._ui.join_box.pack_start(self._nick_chooser, True, False, 0)
 
+        # Helper for the case where we don't receive a disco info
+        self._new_chat_row = None
+
         self.new_contact_row_visible = False
         self.new_contact_rows = {}
-        self.new_groupchat_rows = {}
         self._accounts = app.get_enabled_accounts_with_labels()
 
         rows = []
@@ -104,6 +109,12 @@ class StartChatDialog(Gtk.ApplicationWindow):
 
         self._ui.infobar.set_revealed(app.settings.get('show_help_start_chat'))
 
+        self._current_filter = 'all'
+        self._chat_filter = ChatFilter()
+        self._chat_filter.connect(
+            'filter-changed', self._on_chat_filter_changed)
+        self._ui.filter_bar_revealer.add(self._chat_filter)
+
         self.connect('key-press-event', self._on_key_press)
         self.connect('destroy', self._destroy)
 
@@ -117,6 +128,12 @@ class StartChatDialog(Gtk.ApplicationWindow):
     def set_search_text(self, text):
         self._ui.search_entry.set_text(text)
 
+    def remove_row(self, account: str, jid: str) -> None:
+        for row in self._ui.listbox.get_children():
+            if row.account == account and row.jid == jid:
+                row.destroy()
+                return
+
     def _global_search_active(self):
         return self._ui.global_search_toggle.get_active()
 
@@ -128,24 +145,35 @@ class StartChatDialog(Gtk.ApplicationWindow):
         show_account = len(self._accounts) > 1
         for account, _label in self._accounts:
             self.new_contact_rows[account] = None
-            for jid in app.contacts.get_jid_list(account):
-                contact = app.contacts.get_contact_with_highest_priority(
-                    account, jid)
-                if contact.is_groupchat:
-                    continue
-                rows.append(ContactRow(account, contact, jid,
-                                       contact.get_shown_name(), show_account))
+            client = app.get_client(account)
+            for jid, _data in client.get_module('Roster').iter():
+                contact = client.get_module('Contacts').get_contact(jid)
+                rows.append(ContactRow(account,
+                                       contact,
+                                       jid,
+                                       contact.name,
+                                       show_account))
+            self_contact = client.get_module('Contacts').get_contact(
+                client.get_own_jid().bare)
+            rows.append(ContactRow(account,
+                                   self_contact,
+                                   self_contact.jid,
+                                   _('Note to myself'),
+                                   show_account))
 
     def _add_groupchats(self, rows):
         show_account = len(self._accounts) > 1
         for account, _label in self._accounts:
-            self.new_groupchat_rows[account] = None
-            con = app.connections[account]
-            bookmarks = con.get_module('Bookmarks').bookmarks
+            client = app.get_client(account)
+            bookmarks = client.get_module('Bookmarks').bookmarks
             for bookmark in bookmarks:
-                jid = str(bookmark.jid)
-                name = get_groupchat_name(con, jid)
-                rows.append(ContactRow(account, None, jid, name, show_account,
+                contact = client.get_module('Contacts').get_contact(
+                    bookmark.jid, groupchat=True)
+                rows.append(ContactRow(account,
+                                       contact,
+                                       bookmark.jid,
+                                       contact.name,
+                                       show_account,
                                        groupchat=True))
 
     def _load_contacts(self, rows):
@@ -272,6 +300,14 @@ class StartChatDialog(Gtk.ApplicationWindow):
             self._ui.infobar.set_revealed(False)
             app.settings.set('show_help_start_chat', False)
 
+    def _on_filter_bar_toggled(self, toggle_button):
+        active = toggle_button.get_active()
+        self._ui.filter_bar_revealer.set_reveal_child(active)
+
+    def _on_chat_filter_changed(self, _filter, name):
+        self._current_filter = name
+        self._ui.listbox.invalidate_filter()
+
     def _start_new_chat(self, row):
         if row.new:
             try:
@@ -280,6 +316,10 @@ class StartChatDialog(Gtk.ApplicationWindow):
                 self._show_error_page(error)
                 return
 
+            self._disco_info(row)
+            return
+
+        jid = JID.from_string(row.jid)
         if row.groupchat:
             if not app.account_is_available(row.account):
                 self._show_error_page(_('You can not join a group chat '
@@ -287,28 +327,87 @@ class StartChatDialog(Gtk.ApplicationWindow):
                 return
 
             self.ready_to_destroy = True
-            if app.interface.show_groupchat(row.account, row.jid):
+            if app.window.chat_exists(row.account, jid):
+                app.window.select_chat(row.account, jid)
+                self.destroy()
                 return
 
             self.ready_to_destroy = False
             self._redirected = False
-            self._disco_muc(row.account, row.jid, request_vcard=row.new)
+            self._disco_muc(row.account, jid, request_vcard=row.new)
 
         else:
-            app.interface.new_chat_from_jid(row.account, row.jid)
+            app.window.add_chat(
+                row.account,
+                jid,
+                'contact',
+                select=True,
+                workspace='current')
             self.ready_to_destroy = True
+            self.destroy()
+
+    def _disco_info(self, row):
+        if not app.account_is_available(row.account):
+            # Account is disconnected: offer to open 1:1 chat anyway
+            self._new_chat_row = row
+            self._ui.stack.set_visible_child_name('no-disco')
+            return
+
+        self._ui.stack.set_visible_child_name('progress')
+        client = app.get_client(row.account)
+        client.get_module('Discovery').disco_info(
+            row.jid,
+            callback=self._disco_info_received,
+            user_data=row,
+            timeout=10)
+
+    def _disco_info_received(self, task):
+        row = task.get_user_data()
+        try:
+            result = task.finish()
+        except StanzaError as error:
+            contact_conditions = [
+                'service-unavailable',  # Prosody
+                'subscription-required'  # ejabberd
+            ]
+            if error.condition in contact_conditions:
+                # These error conditions are the result of
+                # querying contacts without subscription
+                row.update_chat_type()
+                self._start_new_chat(row)
+                return
+
+            # Handle other possible errors
+            self._show_error_page(error.get_text())
+            return
+        except TimeoutStanzaError:
+            # We reached the 10s timeout, but we should
+            # offer to open a chat anyway
+            self._new_chat_row = row
+            self._ui.stack.set_visible_child_name('no-disco')
+            return
+
+        if result.is_muc:
+            row.update_chat_type(groupchat=True)
+        else:
+            row.update_chat_type()
+        self._start_new_chat(row)
+
+    def _on_no_disco_continue(self, _button):
+        self._new_chat_row.update_chat_type()
+        self._start_new_chat(self._new_chat_row)
 
     def _disco_muc(self, account, jid, request_vcard):
         self._ui.stack.set_visible_child_name('progress')
-        con = app.connections[account]
-        con.get_module('Discovery').disco_muc(
+        client = app.get_client(account)
+        client.get_module('Discovery').disco_muc(
             jid,
             request_vcard=request_vcard,
             allow_redirect=True,
-            callback=self._disco_info_received,
+            callback=self._muc_disco_info_received,
             user_data=account)
 
-    def _disco_info_received(self, task):
+    def _muc_disco_info_received(self, task):
         try:
             result = task.finish()
         except StanzaError as error:
@@ -346,9 +445,11 @@ class StartChatDialog(Gtk.ApplicationWindow):
         account = self._muc_info_box.get_account()
         jid = self._muc_info_box.get_jid()
         nickname = self._nick_chooser.get_text()
-        app.interface.show_or_join_groupchat(
-            account, str(jid), nick=nickname)
+
+        app.interface.show_add_join_groupchat(account, jid, nickname=nickname)
+
         self.ready_to_destroy = True
+        self.destroy()
 
     def _on_back_clicked(self, _button=None):
         self._ui.stack.set_visible_child_name('search')
@@ -392,6 +493,8 @@ class StartChatDialog(Gtk.ApplicationWindow):
         self._ui.search_entry.grab_focus()
         image_style_context = button.get_children()[0].get_style_context()
         if button.get_active():
+            self._ui.filter_bar_toggle.set_active(False)
+            self._ui.filter_bar_toggle.set_sensitive(False)
             image_style_context.add_class('selected-color')
             self._set_listbox(self._global_search_listbox)
             if self._ui.search_entry.get_text():
@@ -399,6 +502,7 @@ class StartChatDialog(Gtk.ApplicationWindow):
             self._remove_new_jid_row()
             self._ui.listbox.invalidate_filter()
         else:
+            self._ui.filter_bar_toggle.set_sensitive(True)
             self._ui.search_entry.set_text('')
             image_style_context.remove_class('selected-color')
             self._set_listbox(self._ui.listbox)
@@ -423,28 +527,21 @@ class StartChatDialog(Gtk.ApplicationWindow):
             show_account = len(self._accounts) > 1
             row = ContactRow(account, None, '', None, show_account)
             self.new_contact_rows[account] = row
-            group_row = ContactRow(account, None, '', None, show_account,
-                                   groupchat=True)
-            self.new_groupchat_rows[account] = group_row
             self._ui.listbox.add(row)
-            self._ui.listbox.add(group_row)
             row.get_parent().show_all()
         self.new_contact_row_visible = True
 
     def _remove_new_jid_row(self):
         if not self.new_contact_row_visible:
             return
-        for account in self.new_contact_rows:
-            self._ui.listbox.remove(
-                self.new_contact_rows[account])
-            self._ui.listbox.remove(
-                self.new_groupchat_rows[account])
+
+        for row in self.new_contact_rows.values():
+            self._ui.listbox.remove(row)
         self.new_contact_row_visible = False
 
     def _update_new_jid_rows(self, search_text):
-        for account in self.new_contact_rows:
-            self.new_contact_rows[account].update_jid(search_text)
-            self.new_groupchat_rows[account].update_jid(search_text)
+        for row in self.new_contact_rows.values():
+            row.update_jid(search_text)
 
     def _select_new_match(self, _entry, direction):
         selected_row = self._ui.listbox.get_selected_row()
@@ -482,6 +579,13 @@ class StartChatDialog(Gtk.ApplicationWindow):
         search_text = self._ui.search_entry.get_text().lower()
         search_text_list = search_text.split()
         row_text = row.get_search_text().lower()
+
+        if self._current_filter == 'chats' and row.groupchat:
+            return False
+
+        if self._current_filter == 'group_chats' and not row.groupchat:
+            return False
+
         for text in search_text_list:
             if text not in row_text:
                 GLib.timeout_add(50, self.select_first_row)
@@ -616,13 +720,11 @@ class ContactRow(Gtk.ListBoxRow):
         self.groupchat = groupchat
         self.new = jid == ''
 
-        show = contact.show if contact else 'offline'
-
         grid = Gtk.Grid()
         grid.set_column_spacing(12)
         grid.set_size_request(260, -1)
 
-        image = self._get_avatar_image(account, jid, show)
+        image = self._get_avatar_image(contact)
         image.set_size_request(AvatarSize.CHAT, AvatarSize.CHAT)
         grid.add(image)
 
@@ -630,10 +732,7 @@ class ContactRow(Gtk.ListBoxRow):
         box.set_hexpand(True)
 
         if self.name is None:
-            if self.groupchat:
-                self.name = _('Join Group Chat')
-            else:
-                self.name = _('Start Chat')
+            self.name = _('Start New Chat')
 
         self.name_label = Gtk.Label(label=self.name)
         self.name_label.set_ellipsize(Pango.EllipsizeMode.END)
@@ -644,17 +743,15 @@ class ContactRow(Gtk.ListBoxRow):
         name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         name_box.add(self.name_label)
         if show_account:
-            account_badge = generate_account_badge(account)
-            account_badge.set_tooltip_text(
-                _('Account: %s') % self.account_label)
+            account_badge = AccountBadge(account)
             account_badge.set_halign(Gtk.Align.END)
             account_badge.set_valign(Gtk.Align.START)
             account_badge.set_hexpand(True)
             name_box.add(account_badge)
         box.add(name_box)
 
-        self.jid_label = Gtk.Label(label=jid)
-        self.jid_label.set_tooltip_text(jid)
+        self.jid_label = Gtk.Label(label=str(jid))
+        self.jid_label.set_tooltip_text(str(jid))
         self.jid_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.jid_label.set_xalign(0)
         self.jid_label.set_width_chars(22)
@@ -664,10 +761,33 @@ class ContactRow(Gtk.ListBoxRow):
 
         grid.add(box)
 
-        self.add(grid)
+        eventbox = Gtk.EventBox()
+        eventbox.connect('button-press-event', self._popup_menu)
+        eventbox.add(grid)
+        self.add(eventbox)
         self.show_all()
 
-    def _get_avatar_image(self, account, jid, show):
+    def _popup_menu(self, _widget, event):
+        if not self.groupchat:
+            return
+
+        if event.button != 3:  # right click
+            return
+
+        menu = get_start_chat_row_menu(self.account, self.jid)
+
+        rectangle = Gdk.Rectangle()
+        rectangle.x = event.x
+        rectangle.y = event.y
+        rectangle.width = rectangle.height = 1
+
+        popover = Gtk.Popover.new_from_model(self, menu)
+        popover.set_relative_to(self)
+        popover.set_position(Gtk.PositionType.RIGHT)
+        popover.set_pointing_to(rectangle)
+        popover.popup()
+
+    def _get_avatar_image(self, contact):
         if self.new:
             icon_name = 'avatar-default'
             if self.groupchat:
@@ -675,22 +795,20 @@ class ContactRow(Gtk.ListBoxRow):
             return Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.DND)
 
         scale = self.get_scale_factor()
-        if self.groupchat:
-            surface = app.interface.avatar_storage.get_muc_surface(
-                account, jid, AvatarSize.CHAT, scale)
-            return Gtk.Image.new_from_surface(surface)
-
-        avatar = app.contacts.get_avatar(
-            account, jid, AvatarSize.CHAT, scale, show)
-        return Gtk.Image.new_from_surface(avatar)
+        surface = contact.get_avatar(AvatarSize.CHAT, scale)
+        return Gtk.Image.new_from_surface(surface)
 
     def update_jid(self, jid):
         self.jid = jid
         self.jid_label.set_text(jid)
 
+    def update_chat_type(self, groupchat=False):
+        self.new = False
+        self.groupchat = groupchat
+
     def get_search_text(self):
         if self.contact is None and not self.groupchat:
-            return self.jid
+            return str(self.jid)
         if self.show_account:
             return '%s %s %s' % (self.name, self.jid, self.account_label)
         return '%s %s' % (self.name, self.jid)

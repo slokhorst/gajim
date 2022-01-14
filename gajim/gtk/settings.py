@@ -24,8 +24,6 @@ from gajim.common import passwords
 from gajim.common.i18n import _
 from gajim.common.i18n import Q_
 
-from gajim import gtkgui_helpers
-
 from .util import get_image_button
 from .util import MaxWidthComboBoxText
 from .util import open_window
@@ -106,6 +104,13 @@ class SettingsBox(Gtk.ListBox):
                 self.map[setting] = callback
 
         self.connect('row-activated', self.on_row_activated)
+        self.connect('destroy', self.__on_destroy)
+
+    @staticmethod
+    def __on_destroy(widget):
+        app.check_finalize(widget)
+        for row in widget.get_children():
+            app.check_finalize(row)
 
     @staticmethod
     def on_row_activated(_listbox, row):
@@ -417,7 +422,20 @@ class EntrySetting(GenericSetting):
 
         self.setting_box.pack_end(self.entry, True, True, 0)
 
+        app.settings.connect_signal(self.value,
+                                    self._on_setting_changed,
+                                    account=self.account,
+                                    jid=self.jid)
+
+        self.connect('destroy', self._on_destroy)
+
         self.show_all()
+
+    def _on_setting_changed(self, value, *args):
+        self.entry.set_text(value)
+
+    def _on_destroy(self, *args):
+        app.settings.disconnect_signals(self)
 
     def on_text_change(self, *args):
         text = self.entry.get_text()
@@ -441,7 +459,22 @@ class ColorSetting(GenericSetting):
 
         self.setting_box.pack_end(self.color_button, True, True, 0)
 
+        app.settings.connect_signal(self.value,
+                                    self._on_setting_changed,
+                                    account=self.account,
+                                    jid=self.jid)
+
+        self.connect('destroy', self._on_destroy)
+
         self.show_all()
+
+    def _on_setting_changed(self, value, *args):
+        rgba = Gdk.RGBA()
+        rgba.parse(value)
+        self.color_button.set_rgba(rgba)
+
+    def _on_destroy(self, *args):
+        app.settings.disconnect_signals(self)
 
     def on_color_set(self, button):
         rgba = button.get_rgba()
@@ -497,7 +530,7 @@ class SpinSetting(GenericSetting):
         self.spin.set_numeric(True)
         self.spin.set_update_policy(Gtk.SpinButtonUpdatePolicy.IF_VALID)
         self.spin.set_value(self.setting_value)
-        self.spin.set_halign(Gtk.Align.END)
+        self.spin.set_halign(Gtk.Align.FILL)
         self.spin.set_valign(Gtk.Align.CENTER)
         self.spin.connect('notify::value', self.on_value_change)
 
@@ -572,12 +605,17 @@ class ActionSetting(GenericSetting):
     def __init__(self, *args, account):
         GenericSetting.__init__(self, *args)
         action_name = '%s%s' % (account, self.value)
-        self.action = gtkgui_helpers.get_action(action_name)
+        self.action = app.app.lookup_action(action_name)
         self.variant = GLib.Variant.new_string(account)
         self.on_enable()
 
         self.show_all()
-        self.action.connect('notify::enabled', self.on_enable)
+        self._handler_id = self.action.connect(
+            'notify::enabled', self.on_enable)
+        self.connect('destroy', self._on_destroy)
+
+    def _on_destroy(self, *args):
+        self.action.disconnect(self._handler_id)
 
     def on_enable(self, *args):
         self.set_sensitive(self.action.get_enabled())
@@ -589,7 +627,6 @@ class ActionSetting(GenericSetting):
 class LoginSetting(DialogSetting):
     def __init__(self, *args, **kwargs):
         DialogSetting.__init__(self, *args, **kwargs)
-        self.setting_value.set_selectable(True)
 
     def get_setting_value(self):
         jid = app.get_jid_from_account(self.account)
@@ -692,6 +729,7 @@ class PopoverSetting(GenericSetting):
         self._add_menu_entries()
 
     def _on_destroy(self, *args):
+        self._popover.destroy()
         app.settings.disconnect_signals(self)
 
 

@@ -21,8 +21,8 @@ import os
 import time
 import logging
 from functools import partial
-from pathlib import Path
-from enum import IntEnum, unique
+from enum import IntEnum
+from enum import unique
 from datetime import datetime
 
 from gi.repository import Gtk
@@ -30,26 +30,33 @@ from gi.repository import Gdk
 from gi.repository import GLib
 from gi.repository import Pango
 
-from gajim import gtkgui_helpers
+from nbxmpp.protocol import JID
 
 from gajim.common import app
+from gajim.common import ged
 from gajim.common import helpers
+from gajim.common.events import FileRequestSent
+from gajim.common.events import Notification
+from gajim.common.const import KindConstant
 from gajim.common.i18n import _
 from gajim.common.file_props import FilesProp
+from gajim.common.file_props import FileProp
 from gajim.common.helpers import open_file
-from gajim.common.modules.bytestream import (is_transfer_active,
-                                             is_transfer_paused,
-                                             is_transfer_stopped)
+from gajim.common.helpers import file_is_locked
+from gajim.common.helpers import AdditionalDataDict
+from gajim.common.modules.bytestream import is_transfer_active
+from gajim.common.modules.bytestream import is_transfer_paused
+from gajim.common.modules.bytestream import is_transfer_stopped
+from gajim.common.modules.contacts import BareContact
 
 from .dialogs import DialogButton
 from .dialogs import ConfirmationDialog
-from .dialogs import HigDialog
-from .dialogs import InformationDialog
 from .dialogs import ErrorDialog
 from .filechoosers import FileSaveDialog
-from .filechoosers import FileChooserDialog
+from .file_transfer_send import SendFileDialog
 from .tooltips import FileTransfersTooltip
-from .util import get_builder
+from .builder import get_builder
+from .util import format_eta
 
 log = logging.getLogger('gajim.gui.filetransfer')
 
@@ -71,10 +78,12 @@ class FileTransfersWindow:
         self.files_props = {'r': {}, 's': {}}
         self.height_diff = 0
 
+        self._last_progress_update = 0
+
         self._ui = get_builder('filetransfers.ui')
         self.window = self._ui.file_transfers_window
-        show_notification = app.settings.get('notify_on_file_complete')
-        self._ui.notify_ft_complete.set_active(show_notification)
+        self._ui.notify_ft_complete.set_active(
+            app.settings.get('notify_on_file_complete'))
         self.model = Gtk.ListStore(str, str, str, str, str, int, int, str)
         self._ui.transfers_list.set_model(self.model)
         col = Gtk.TreeViewColumn()
@@ -159,6 +168,125 @@ class FileTransfersWindow:
 
         self._ui.connect_signals(self)
 
+        # pylint: disable=line-too-long
+        app.ged.register_event_handler('file-completed', ged.GUI1, self._file_completed)
+        app.ged.register_event_handler('file-hash-error', ged.GUI1, self._file_hash_error)
+        app.ged.register_event_handler('file-send-error', ged.GUI1, self._file_send_error)
+        app.ged.register_event_handler('file-request-error', ged.GUI1, self._file_request_error)
+        app.ged.register_event_handler('file-request-received', ged.GUI1, self._file_request_received)
+        app.ged.register_event_handler('file-progress', ged.GUI1, self._file_progress)
+        app.ged.register_event_handler('file-error', ged.GUI1, self._file_error)
+        app.ged.register_event_handler('jingle-ft-cancelled-received', ged.GUI1, self._file_transfer_cancelled)
+        # pylint: enable=line-too-long
+
+    def _file_completed(self, event):
+        self.set_status(event.file_props, 'ok')
+        self.set_progress(
+            event.file_props.type_,
+            event.file_props.sid,
+            event.file_props.received_len)
+
+        if not app.settings.get('notify_on_file_complete'):
+            return
+
+        app.ged.raise_event(
+            Notification(account=event.account,
+                         jid=event.jid,
+                         type='file-transfer',
+                         sub_type='file-completed',
+                         title=_('File Transfer Completed'),
+                         text=_('File: %s') % event.file_props.name))
+
+    def _file_error(self, event):
+        self.set_status(event.file_props, 'stop')
+
+    def _file_hash_error(self, event):
+        self.set_status(event.file_props, 'hash_error')
+        if self.window.get_property('visible'):
+            self.show_hash_error(event.jid, event.file_props, event.account)
+
+    def _file_send_error(self, event):
+        self.set_status(event.file_props, 'stop')
+
+        if app.window.is_chat_active(event.account, event.jid):
+            return
+
+        app.ged.raise_event(
+            Notification(account=event.account,
+                         jid=event.jid,
+                         type='file-transfer',
+                         sub_type='file-send-error',
+                         title=_('File Transfer Failed'),
+                         text=_('File: %s') % event.file_props.name))
+
+    def _file_request_error(self, event):
+        self.set_status(event.file_props, 'stop')
+        errno = event.file_props.error
+        account = event.conn.name
+
+        if self.window.get_property('visible'):
+            if errno in (-4, -5):
+                self.show_stopped(event.jid, event.file_props, event.error_msg)
+            return
+
+        if errno in (-4, -5):
+            sub_type = 'file-error'
+        else:
+            sub_type = 'file-request-error'
+
+        if app.window.is_chat_active(account, event.jid):
+            return
+
+        text = _('File: %s') % event.file_props.name
+        app.ged.raise_event(
+            Notification(account=account,
+                         jid=event.jid,
+                         type='file-transfer',
+                         sub_type=sub_type,
+                         title=_('File Transfer Failed'),
+                         text=text))
+
+    def _file_request_received(self, event):
+        account = event.conn.name
+        client = app.get_client(account)
+        contact = client.get_module('Contacts').get_contact(event.jid)
+
+        if event.file_props.session_type == 'jingle':
+            jingle = event.stanza.getTag('jingle')
+            content = jingle.getTag('content')
+            description = content.getTag('description')
+            request = description.getTag('request')
+            if request:
+                # If we get a request instead
+                self.add_transfer(account, contact, event.file_props)
+                return
+
+        if app.window.is_chat_active(event.account, event.jid):
+            return
+
+        text = _('%s wants to send you a file') % contact.name
+        app.ged.raise_event(
+            Notification(account=account,
+                         jid=event.jid,
+                         type='file-transfer',
+                         sub_type='file-request-received',
+                         title=_('File Offered'),
+                         text=text))
+
+    def _file_transfer_cancelled(self, event):
+        file_props = None
+        # get the file_props of our session
+        file_props = FilesProp.getFileProp(event.conn.name, event.sid)
+        if not file_props:
+            return
+
+        self.set_status(file_props, 'stop')
+        file_props.error = -4  # is it the right error code?
+        if self.window.get_property('visible'):
+            self.show_stopped(event.jid,
+                              file_props,
+                              'Peer cancelled the transfer')
+
     def _query_tooltip(self, widget, x_pos, y_pos, keyboard_mode, tooltip):
         try:
             x_pos, y_pos = widget.convert_widget_to_bin_window_coords(
@@ -207,84 +335,6 @@ class FileTransfersWindow:
                 raise Exception('file_props has no type')
         return active_transfers
 
-    def show_completed(self, jid, file_props):
-        """
-        Show a dialog saying that file (file_props) has been transferred
-        """
-        def on_open(widget, file_props):
-            dialog.destroy()
-            if not file_props.file_name:
-                return
-            path = os.path.split(file_props.file_name)[0]
-            if os.path.exists(path) and os.path.isdir(path):
-                open_file(path)
-            self._ui.transfers_list.get_selection().unselect_all()
-
-        if file_props.type_ == 'r':
-            # file path is used below in 'Save in'
-            (file_path, file_name) = os.path.split(file_props.file_name)
-        else:
-            file_name = file_props.name
-        sectext = _('File name: %s') % GLib.markup_escape_text(file_name)
-        sectext += '\n' + _('Size: %s') % GLib.format_size_full(
-            file_props.size, self.units)
-        if file_props.type_ == 'r':
-            jid = file_props.sender.split('/')[0]
-            sender_name = app.contacts.get_first_contact_from_jid(
-                file_props.tt_account, jid).get_shown_name()
-            sender = sender_name
-        else:
-            # You is a reply of who sent a file
-            sender = _('You')
-        sectext += '\n' + _('Sender: %s') % sender
-        sectext += '\n' + _('Recipient: ')
-        if file_props.type_ == 's':
-            jid = file_props.receiver.split('/')[0]
-            receiver_name = app.contacts.get_first_contact_from_jid(
-                file_props.tt_account, jid).get_shown_name()
-            recipient = receiver_name
-        else:
-            # You is a reply of who received a file
-            recipient = _('You')
-        sectext += recipient
-        if file_props.type_ == 'r':
-            sectext += '\n' + _('Saved in: %s') % file_path
-
-        dialog = HigDialog(app.interface.roster.window,
-                           Gtk.MessageType.INFO,
-                           Gtk.ButtonsType.NONE,
-                           _('File transfer completed'),
-                           sectext)
-        if file_props.type_ == 'r':
-            button = Gtk.Button.new_with_mnemonic(_('Open _Folder'))
-            button.connect('clicked', on_open, file_props)
-            dialog.action_area.pack_start(button, True, True, 0)
-        ok_button = dialog.add_button(Gtk.STOCK_OK, Gtk.ResponseType.OK)
-
-        def on_ok(widget):
-            dialog.destroy()
-        ok_button.connect('clicked', on_ok)
-        dialog.show_all()
-
-    def show_request_error(self, file_props):
-        """
-        Show error dialog to the recipient saying that
-        transfer has been canceled
-        """
-        InformationDialog(
-            _('File transfer cancelled'),
-            _('Connection with peer could not be established.'))
-        self._ui.transfers_list.get_selection().unselect_all()
-
-    def show_send_error(self, file_props):
-        """
-        Show error dialog to the sender saying that transfer has been canceled
-        """
-        InformationDialog(
-            _('File transfer cancelled'),
-            _('Connection with peer could not be established.'))
-        self._ui.transfers_list.get_selection().unselect_all()
-
     def show_stopped(self, jid, file_props, error_msg=''):
         if file_props.type_ == 'r':
             file_name = os.path.basename(file_props.file_name)
@@ -297,18 +347,15 @@ class FileTransfersWindow:
         ErrorDialog(_('File transfer stopped'), sectext)
         self._ui.transfers_list.get_selection().unselect_all()
 
-    def show_hash_error(self, jid, file_props, account):
-
-        def on_yes(dummy, fjid, file_props, account):
+    def show_hash_error(self,
+                        jid: JID,
+                        file_props: FileProp,
+                        account: str
+                        ) -> None:
+        def _on_yes():
             # Delete old file
             os.remove(file_props.file_name)
-            jid, resource = app.get_room_and_nick_from_fjid(fjid)
-            if resource:
-                contact = app.contacts.get_contact(account, jid, resource)
-            else:
-                contact = app.contacts.get_contact_with_highest_priority(
-                    account, jid)
-                fjid = contact.get_full_jid()
+
             # Request the file to the sender
             sid = helpers.get_random_string()
             new_file_props = FilesProp.getNewFileProp(account, sid)
@@ -319,11 +366,14 @@ class FileTransfersWindow:
             new_file_props.date = file_props.date
             new_file_props.hash_ = file_props.hash_
             new_file_props.type_ = 'r'
-            tsid = app.connections[account].get_module(
-                'Jingle').start_file_transfer(fjid, new_file_props, True)
+            tsid = client.get_module('Jingle').start_file_transfer(
+                jid, new_file_props, True)
 
             new_file_props.transport_sid = tsid
             self.add_transfer(account, contact, new_file_props)
+
+        client = app.get_client(account)
+        contact = client.get_module('Contacts').get_contact(jid)
 
         if file_props.type_ == 'r':
             file_name = os.path.basename(file_props.file_name)
@@ -339,39 +389,47 @@ class FileTransfersWindow:
                                text=_('_No')),
              DialogButton.make('Accept',
                                text=_('_Download Again'),
-                               callback=on_yes,
-                               args=[jid,
-                                     file_props,
-                                     account])]).show()
+                               callback=_on_yes)]).show()
 
     def show_file_send_request(self, account, contact):
         send_callback = partial(self.send_file, account, contact)
-        SendFileDialog(send_callback, self.window)
+        SendFileDialog(contact, send_callback, self.window)
 
-    def send_file(self, account, contact, file_path, file_desc=''):
+    def send_file(self, account, contact, resource_jid, file_path,
+                  file_desc=''):
         """
         Start the real transfer(upload) of the file
         """
-        if gtkgui_helpers.file_is_locked(file_path):
+        if file_is_locked(file_path):
             pritext = _('Gajim can not read this file')
             sextext = _('Another process is using this file.')
             ErrorDialog(pritext, sextext)
             return
 
-        if isinstance(contact, str):
-            if contact.find('/') == -1:
-                return
-            (jid, resource) = contact.split('/', 1)
-            contact = app.contacts.create_contact(jid=jid, account=account,
-                                                  resource=resource)
         file_name = os.path.split(file_path)[1]
         file_props = self.get_send_file_props(account, contact, file_path,
                                               file_name, file_desc)
         if file_props is None:
             return False
 
-        app.connections[account].get_module('Jingle').start_file_transfer(
-            contact.get_full_jid(), file_props)
+        # Insert file request into DB
+        additional_data = AdditionalDataDict()
+        additional_data.set_value('gajim', 'type', 'jingle')
+        additional_data.set_value('gajim', 'sid', file_props.sid)
+        app.storage.archive.insert_into_logs(
+            account,
+            contact.jid.bare,
+            time.time(),
+            KindConstant.FILE_TRANSFER_OUTGOING,
+            additional_data=additional_data)
+
+        client = app.get_client(account)
+        client.get_module('Jingle').start_file_transfer(
+            str(resource_jid), file_props)
+        app.ged.raise_event(
+            FileRequestSent(file_props=file_props,
+                            account=account,
+                            jid=contact.jid))
         self.add_transfer(account, contact, file_props)
 
         return True
@@ -383,10 +441,14 @@ class FileTransfersWindow:
         file_props.file_name = file_path
         file_props.type_ = 'r'
         self.add_transfer(account, contact, file_props)
-        app.connections[account].get_module('Bytestream').send_file_approval(
-            file_props)
+        client = app.get_client(account)
+        client.get_module('Bytestream').send_file_approval(file_props)
 
-    def on_file_request_accepted(self, account, contact, file_props):
+    def on_file_request_accepted(self,
+                                 account: str,
+                                 contact: BareContact,
+                                 file_props: FileProp
+                                 ) -> None:
         def _on_accepted(account, contact, file_props, file_path):
             if os.path.exists(file_path):
                 app.settings.set('last_save_dir', os.path.dirname(file_path))
@@ -400,38 +462,6 @@ class FileTransfersWindow:
                         _('A file with this name already exists and you do '
                           'not have permission to overwrite it.'))
                     return
-
-                stat = os.stat(file_path)
-                dl_size = stat.st_size
-                file_size = file_props.size
-                dl_finished = dl_size >= file_size
-
-                def _on_resume():
-                    if not dl_finished:
-                        file_props.offset = dl_size
-                    self._start_receive(
-                        file_path, account, contact, file_props)
-
-                def _on_replace():
-                    self._start_receive(
-                        file_path, account, contact, file_props)
-
-                def _on_cancel():
-                    con.get_module('Bytestream').send_file_rejection(
-                        file_props)
-
-                ConfirmationDialog(
-                    _('File Transfer Conflict'),
-                    _('File already exists'),
-                    _('Resume download or replace file?'),
-                    [DialogButton.make('Cancel',
-                                       callback=_on_cancel),
-                     DialogButton.make('OK',
-                                       text=_('Resume _Download'),
-                                       callback=_on_resume),
-                     DialogButton.make('Accept',
-                                       text=_('Replace _File'),
-                                       callback=_on_replace)]).show()
 
             # File does not exist yet
             dirname = os.path.dirname(file_path)
@@ -447,48 +477,14 @@ class FileTransfersWindow:
             self._start_receive(file_path, account, contact, file_props)
 
         # Show file save as dialog
-        con = app.connections[account]
+        client = app.get_client(account)
         accept_cb = partial(_on_accepted, account, contact, file_props)
-        cancel_cb = partial(con.get_module('Bytestream').send_file_rejection,
-                            file_props)
+        cancel_cb = partial(
+            client.get_module('Bytestream').send_file_rejection, file_props)
         FileSaveDialog(accept_cb,
                        cancel_cb,
                        path=app.settings.get('last_save_dir'),
                        file_name=file_props.name)
-
-    def show_file_request(self, account, contact, file_props):
-        """
-        Show dialog asking for comfirmation and store location of new file
-        requested by a contact
-        """
-        if not file_props or not file_props.name:
-            return
-
-        sectext = _('File: %s') % GLib.markup_escape_text(
-            file_props.name)
-        if file_props.size:
-            sectext += '\n' + _('Size: %s') % GLib.format_size_full(
-                file_props.size, self.units)
-        if file_props.mime_type:
-            sectext += '\n' + _('Type: %s') % file_props.mime_type
-        if file_props.desc:
-            sectext += '\n' + _('Description: %s') % file_props.desc
-
-        def _on_ok():
-            self.on_file_request_accepted(account, contact, file_props)
-
-        def _on_cancel():
-            app.connections[account].get_module(
-                'Bytestream').send_file_rejection(file_props)
-
-        ConfirmationDialog(
-            _('File Transfer Request'),
-            _('%s wants to send you a file') % contact.get_shown_name(),
-            sectext,
-            [DialogButton.make('Cancel',
-                               callback=_on_cancel),
-             DialogButton.make('Accept',
-                               callback=_on_ok)]).show()
 
     def set_status(self, file_props, status):
         """
@@ -518,13 +514,13 @@ class FileTransfersWindow:
             text += received_size + '/' + full_size
             self.model.set(iter_, Column.PROGRESS, text)
 
-            def pulse():
-                p = self.model.get(iter_, Column.PULSE)[0]
-                if p == GLib.MAXINT32:
+            def _pulse():
+                pulse_value = self.model.get(iter_, Column.PULSE)[0]
+                if pulse_value == GLib.MAXINT32:
                     return False
-                self.model.set(iter_, Column.PULSE, p + 1)
+                self.model.set(iter_, Column.PULSE, pulse_value + 1)
                 return True
-            GLib.timeout_add(100, pulse)
+            GLib.timeout_add(100, _pulse)
         elif status == 'hash_error':
             text = _('File error') + '\n'
             received_size = GLib.format_size_full(
@@ -550,23 +546,11 @@ class FileTransfersWindow:
         _str += str(percent) + '%          \n'
         return _str
 
-    def _format_time(self, _time):
-        times = {'hours': 0, 'minutes': 0, 'seconds': 0}
-        _time = int(_time)
-        times['seconds'] = _time % 60
-        if _time >= 60:
-            _time /= 60
-            times['minutes'] = _time % 60
-            if _time >= 60:
-                times['hours'] = _time / 60
-
-        # Print remaining time in format 00:00:00
-        # You can change the places of (hours), (minutes), (seconds) -
-        # they are not translatable.
-        return _('%(hours)02.d:%(minutes)02.d:%(seconds)02.d') % times
-
     def _get_eta_and_speed(self, full_size, transfered_size, file_props):
         if not file_props.transfered_size:
+            return 0., 0.
+
+        if file_props.elapsed_time == 0:
             return 0., 0.
 
         if len(file_props.transfered_size) == 1:
@@ -595,32 +579,31 @@ class FileTransfersWindow:
             account = file_props.tt_account
             if account in app.connections:
                 # there is a connection to the account
-                app.connections[account].get_module(
-                    'Bytestream').remove_transfer(file_props)
-            if file_props.type_ == 'r':  # we receive a file
-                other = file_props.sender
-            else:  # we send a file
-                other = file_props.receiver
-            if isinstance(other, str):
-                jid = app.get_jid_without_resource(other)
-            else:  # It's a Contact instance
-                jid = other.jid
-            for ev_type in ('file-error', 'file-completed',
-                            'file-request-error', 'file-send-error',
-                            'file-stopped'):
-                for event in app.events.get_events(account, jid, [ev_type]):
-                    if event.file_props.sid == file_props.sid:
-                        app.events.remove_events(account, jid, event)
-                        app.interface.roster.draw_contact(jid, account)
-                        app.interface.roster.show_title()
+                client = app.get_client(account)
+                client.get_module('Bytestream').remove_transfer(file_props)
+
         FilesProp.deleteFileProp(file_props)
         del file_props
+
+    def _file_progress(self, event):
+        self.set_progress(
+            event.file_props.type_,
+            event.file_props.sid,
+            event.file_props.received_len)
 
     def set_progress(self, typ, sid, transfered_size, iter_=None):
         """
         Change the progress of a transfer with new transfered size
         """
+        if time.time() - self._last_progress_update < 0.5:
+            # Update window every 500ms only
+            return
+        self._last_progress_update = time.time()
+
         file_props = FilesProp.getFilePropByType(typ, sid)
+        if file_props is None:
+            return
+
         full_size = file_props.size
         if full_size == 0:
             percent = 0
@@ -655,7 +638,7 @@ class FileTransfersWindow:
 
             self.model.set(iter_, Column.PROGRESS, text)
             self.model.set(iter_, Column.PERCENT, int(percent))
-            text = self._format_time(eta)
+            text = format_eta(eta)
             text += '\n'
             # This should make the string KB/s,
             # where 'KB' part is taken from %s.
@@ -678,8 +661,9 @@ class FileTransfersWindow:
             self.model.set(iter_, 0, self.icons[status])
             if transfered_size == full_size:
                 # If we are receiver and this is a jingle session
-                if file_props.type_ == 'r' and  \
-                file_props.session_type == 'jingle' and file_props.hash_:
+                if (file_props.type_ == 'r' and
+                        file_props.session_type == 'jingle' and
+                        file_props.hash_):
                     # Show that we are computing the hash
                     self.set_status(file_props, 'computing')
                 else:
@@ -741,6 +725,7 @@ class FileTransfersWindow:
         """
         if file_props is None:
             return
+
         file_props.elapsed_time = 0
         iter_ = self.model.prepend()
         if file_props.type_ == 'r':
@@ -753,7 +738,7 @@ class FileTransfersWindow:
         else:
             file_name = file_props.name
         text_props = GLib.markup_escape_text(file_name) + '\n'
-        text_props += contact.get_shown_name()
+        text_props += contact.name
         self.model.set(iter_,
                        1,
                        text_labels,
@@ -773,7 +758,6 @@ class FileTransfersWindow:
         file_props.tt_account = account
         self.set_status(file_props, status)
         self._set_cleanup_sensitivity()
-        self.window.show_all()
 
     def _on_transfers_list_row_activated(self, widget, path, col):
         # try to open the containing folder
@@ -913,14 +897,18 @@ class FileTransfersWindow:
         s_iter = selected[1]
         sid = self.model[s_iter][Column.SID]
         file_props = FilesProp.getFilePropByType(sid[0], sid[1:])
+        self.cancel_transfer(file_props)
+
+    def cancel_transfer(self, file_props: FileProp) -> None:
+        # TODO: does not cancel transfer somehow
         account = file_props.tt_account
-        if account not in app.connections:
+        if account is None or account not in app.connections:
             return
-        con = app.connections[account]
+        client = app.get_client(account)
         # Check if we are in a IBB transfer
         if file_props.direction:
-            con.get_module('IBB').send_close(file_props)
-        con.get_module('Bytestream').disconnect_transfer(file_props)
+            client.get_module('IBB').send_close(file_props)
+        client.get_module('Bytestream').disconnect_transfer(file_props)
         self.set_status(file_props, 'stop')
 
     def _on_notify_ft_complete_toggled(self, widget, *args):
@@ -936,7 +924,11 @@ class FileTransfersWindow:
             path = self.model.get_path(iter_)
             self._set_buttons_sensitive(path, True)
 
-        event_button = gtkgui_helpers.get_possible_button_event(event)
+        if event.type == Gdk.EventType.KEY_PRESS:
+            event_button = 0
+        else:
+            event_button = event.button
+
         self._ui.file_transfers_menu.show_all()
         self._ui.file_transfers_menu.popup(
             None,
@@ -1028,70 +1020,3 @@ class FileTransfersWindow:
     def _on_file_transfers_window_key_press_event(self, widget, event):
         if event.keyval == Gdk.KEY_Escape:  # ESCAPE
             self.window.hide()
-
-
-class SendFileDialog(Gtk.ApplicationWindow):
-    def __init__(self, send_callback, transient_for):
-        Gtk.ApplicationWindow.__init__(self)
-        self.set_name('SendFileDialog')
-        self.set_application(app.app)
-        self.set_show_menubar(False)
-        self.set_resizable(True)
-        self.set_default_size(500, 350)
-        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
-        self.set_transient_for(transient_for)
-        self.set_title(_('Choose a File to Send…'))
-        self.set_destroy_with_parent(True)
-
-        self._send_callback = send_callback
-
-        self._ui = get_builder('filetransfers_send_file_dialog.ui')
-        self.add(self._ui.send_file_grid)
-        self.connect('key-press-event', self._key_press_event)
-        self._ui.connect_signals(self)
-        self.show_all()
-
-    def _send(self, button):
-        for file in self._ui.listbox.get_children():
-            self._send_callback(str(file.path), self._get_description())
-        self.destroy()
-
-    def _select_files(self, button):
-        FileChooserDialog(self._set_files,
-                          select_multiple=True,
-                          transient_for=self,
-                          path=app.settings.get('last_send_dir'))
-
-    def _remove_files(self, button):
-        selected = self._ui.listbox.get_selected_rows()
-        for item in selected:
-            self._ui.listbox.remove(item)
-
-    def _set_files(self, filenames):
-        for file in filenames:
-            row = FileRow(file)
-            if row.path.is_dir():
-                continue
-            last_dir = row.path.parent
-            self._ui.listbox.add(row)
-        self._ui.listbox.show_all()
-        app.settings.set('last_send_dir', str(last_dir))
-
-    def _get_description(self):
-        buffer_ = self._ui.description.get_buffer()
-        start, end = buffer_.get_bounds()
-        return buffer_.get_text(start, end, False)
-
-    def _key_press_event(self, widget, event):
-        if event.keyval == Gdk.KEY_Escape:
-            self.destroy()
-
-
-class FileRow(Gtk.ListBoxRow):
-    def __init__(self, path):
-        Gtk.ListBoxRow.__init__(self)
-        self.path = Path(path)
-        label = Gtk.Label(label=self.path.name)
-        label.set_ellipsize(Pango.EllipsizeMode.END)
-        label.set_xalign(0)
-        self.add(label)

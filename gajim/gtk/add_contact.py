@@ -12,498 +12,484 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import Gdk
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Tuple
+from typing import Union
+
+import logging
+
 from gi.repository import Gtk
 
-from gajim import vcard
+from nbxmpp import JID
+from nbxmpp import Namespace
+from nbxmpp.errors import is_error
+from nbxmpp.errors import StanzaError
+from nbxmpp.structs import DiscoInfo
+
 from gajim.common import app
-from gajim.common import ged
-from gajim.common import helpers
+from gajim.common import types
+from gajim.common.helpers import get_subscription_request_msg
+from gajim.common.helpers import validate_jid
 from gajim.common.i18n import _
+from gajim.common.modules.util import as_task
 
-from .dialogs import ErrorDialog
-from .util import get_builder
-from .util import EventHelper
+from .adhoc import AdHocCommand
+from .assistant import Assistant
+from .assistant import Page
+from .assistant import ErrorPage
+from .groupchat_info import GroupChatInfoScrolled
+from .builder import get_builder
+from .util import open_window
+
+log = logging.getLogger('gajim.gui.add_contact')
 
 
-class AddNewContactWindow(Gtk.ApplicationWindow, EventHelper):
-
-    uid_labels = {'jabber': _('XMPP Address'),
-                  'gadu-gadu': _('GG Number'),
-                  'icq': _('ICQ Number')}
-
-    def __init__(self, account=None, contact_jid=None, user_nick=None, group=None):
-        Gtk.ApplicationWindow.__init__(self)
-        EventHelper.__init__(self)
-        self.set_application(app.app)
-        self.set_position(Gtk.WindowPosition.CENTER)
-        self.set_show_menubar(False)
-        self.set_resizable(False)
-        self.set_title(_('Add Contact'))
-
-        self.connect_after('key-press-event', self._on_key_press)
-
+class AddContact(Assistant):
+    def __init__(self,
+                 account: Optional[str] = None,
+                 jid: Optional[JID] = None,
+                 nick: Optional[str] = None):
+        Assistant.__init__(self)
         self.account = account
-        self.adding_jid = False
+        self.jid = jid
+        self._nick = nick
 
-        if contact_jid is not None:
-            contact_jid = app.get_jid_without_resource(contact_jid)
+        self._result: Union[DiscoInfo, StanzaError, None] = None
 
-        # fill accounts with active accounts
-        accounts = app.get_enabled_accounts_with_labels()
+        self.add_button('next', _('Next'), complete=True,
+                        css_class='suggested-action')
+        self.add_button('back', _('Back'))
+        self.add_button('add', _('Add Contact'),
+                        css_class='suggested-action')
+        self.add_button('join', _('Join…'),
+                        css_class='suggested-action')
 
-        if not accounts:
-            return
+        self.add_pages({
+            'address': Address(account, jid),
+            'error': Error(),
+            'contact': Contact(),
+            'groupchat': GroupChat(),
+            'gateway': Gateway(),
+        })
 
-        if not account:
-            self.account = accounts[0][0]
+        progress = self.add_default_page('progress')
+        progress.set_title(_('Gathering information…'))
+        progress.set_text(_('Trying to gather information on this address…'))
 
-        self.xml = get_builder('add_new_contact_window.ui')
-        self.add(self.xml.get_object('add_contact_box'))
-        self.xml.connect_signals(self)
+        self.connect('button-clicked', self._on_button_clicked)
+        self.connect('destroy', self._on_destroy)
 
-        for w in ('account_combobox', 'account_label', 'prompt_label',
-                  'uid_label', 'uid_entry', 'show_contact_info_button',
-                  'protocol_combobox', 'protocol_jid_combobox',
-                  'protocol_label', 'nickname_entry',
-                  'message_scrolledwindow', 'save_message_checkbutton',
-                  'register_hbox', 'add_button', 'message_textview',
-                  'connected_label', 'group_comboboxentry',
-                  'auto_authorize_checkbutton', 'save_message_revealer',
-                  'nickname_label', 'group_label'):
-            self.__dict__[w] = self.xml.get_object(w)
-
-        self.subscription_table = [self.uid_label, self.uid_entry,
-                                   self.show_contact_info_button,
-                                   self.nickname_label, self.nickname_entry,
-                                   self.group_label, self.group_comboboxentry]
-
-        self.add_button.grab_default()
-
-        self.agents = {'jabber': []}
-        self.gateway_prompt = {}
-        # types to which we are not subscribed but account has an agent for it
-        self.available_types = []
-        for acct in accounts:
-            for j in app.contacts.get_jid_list(acct[0]):
-                if app.jid_is_transport(j):
-                    type_ = app.get_transport_name_from_jid(j, False)
-                    if not type_:
-                        continue
-                    if type_ in self.agents:
-                        self.agents[type_].append(j)
-                    else:
-                        self.agents[type_] = [j]
-                    self.gateway_prompt[j] = {'desc': None, 'prompt': None}
-        # Now add the one to which we can register
-        for acct in accounts:
-            for type_ in app.connections[acct[0]].available_transports:
-                if type_ in self.agents:
-                    continue
-                self.agents[type_] = []
-                for jid_ in app.connections[acct[0]].available_transports[type_]:
-                    if jid_ not in self.agents[type_]:
-                        self.agents[type_].append(jid_)
-                        self.gateway_prompt[jid_] = {'desc': None,
-                                                     'prompt': None}
-                self.available_types.append(type_)
-
-        uf_type = {'jabber': 'XMPP', 'gadu-gadu': 'Gadu Gadu', 'icq': 'ICQ'}
-        # Jabber as first
-        liststore = self.protocol_combobox.get_model()
-        liststore.append(['XMPP', 'xmpp', 'jabber'])
-        for type_ in self.agents:
-            if type_ == 'jabber':
-                continue
-            if type_ in uf_type:
-                liststore.append([uf_type[type_], type_ + '-online', type_])
-            else:
-                liststore.append([type_, type_ + '-online', type_])
-
-            if account:
-                for service in self.agents[type_]:
-                    con = app.connections[account]
-                    con.get_module('Gateway').request_gateway_prompt(service)
-        self.protocol_combobox.set_active(0)
-        self.auto_authorize_checkbutton.show()
-
-        if contact_jid:
-            self.jid_escaped = True
-            type_ = app.get_transport_name_from_jid(contact_jid)
-            if not type_:
-                type_ = 'jabber'
-            if type_ == 'jabber':
-                self.uid_entry.set_text(contact_jid)
-                transport = None
-            else:
-                uid, transport = app.get_name_and_server_from_jid(contact_jid)
-                self.uid_entry.set_text(uid.replace('%', '@', 1))
-
-            self.show_contact_info_button.set_sensitive(True)
-
-            # set protocol_combobox
-            model = self.protocol_combobox.get_model()
-            iter_ = model.get_iter_first()
-            i = 0
-            while iter_:
-                if model[iter_][2] == type_:
-                    self.protocol_combobox.set_active(i)
-                    break
-                iter_ = model.iter_next(iter_)
-                i += 1
-
-            # set protocol_jid_combobox
-            self.protocol_jid_combobox.set_active(0)
-            model = self.protocol_jid_combobox.get_model()
-            iter_ = model.get_iter_first()
-            i = 0
-            while iter_:
-                if model[iter_][0] == transport:
-                    self.protocol_jid_combobox.set_active(i)
-                    break
-                iter_ = model.iter_next(iter_)
-                i += 1
-            if user_nick:
-                self.nickname_entry.set_text(user_nick)
-            self.nickname_entry.grab_focus()
-        else:
-            self.jid_escaped = False
-            self.uid_entry.grab_focus()
-        group_names = []
-        for acct in accounts:
-            for g in app.groups[acct[0]].keys():
-                if g not in helpers.special_groups and g not in group_names:
-                    group_names.append(g)
-        group_names.sort()
-        i = 0
-        for g in group_names:
-            self.group_comboboxentry.append_text(g)
-            if group == g:
-                self.group_comboboxentry.set_active(i)
-            i += 1
-
-        if len(accounts) > 1:
-            liststore = self.account_combobox.get_model()
-            for acc in accounts:
-                liststore.append(acc)
-
-            self.account_combobox.set_active_id(self.account)
-            self.account_label.show()
-            self.account_combobox.show()
-
-        if len(self.agents) > 1:
-            self.protocol_label.show()
-            self.protocol_combobox.show()
-
-        if self.account:
-            message_buffer = self.message_textview.get_buffer()
-            msg = helpers.from_one_line(helpers.get_subscription_request_msg(
-                self.account))
-            message_buffer.set_text(msg)
-
-        self.uid_entry.connect('changed', self.on_uid_entry_changed)
         self.show_all()
 
-        self.register_events([
-            ('gateway-prompt-received', ged.GUI1, self._nec_gateway_prompt_received),
-            ('presence-received', ged.GUI1, self._nec_presence_received),
-        ])
+    def _on_destroy(self, *args: Any) -> None:
+        app.check_finalize(self)
 
-    def on_uid_entry_changed(self, widget):
-        is_empty = bool(not self.uid_entry.get_text() == '')
-        self.show_contact_info_button.set_sensitive(is_empty)
+    def _on_button_clicked(self,
+                           _assistant: Assistant,
+                           button_name: str
+                           ) -> None:
+        page = self.get_current_page()
+        account, _ = self.get_page('address').get_account_and_jid()
+        assert account is not None
 
-    def on_show_contact_info_button_clicked(self, widget):
-        """
-        Ask for vCard
-        """
-        jid = self.uid_entry.get_text().strip()
+        if button_name == 'next':
+            self._start_disco()
+            return
 
-        if jid in app.interface.instances[self.account]['infos']:
-            app.interface.instances[self.account]['infos'][jid].window.present()
-        else:
-            contact = app.contacts.create_contact(jid=jid, account=self.account)
-            app.interface.instances[self.account]['infos'][jid] = \
-                     vcard.VcardWindow(contact, self.account)
-            # Remove xmpp page
-            app.interface.instances[self.account]['infos'][jid].xml.\
-                     get_object('information_notebook').remove_page(0)
+        if button_name == 'back':
+            self.show_page('address',
+                           Gtk.StackTransitionType.SLIDE_RIGHT)
+            self.get_page('address').focus()
+            return
 
-    def on_register_button_clicked(self, widget):
-        model = self.protocol_jid_combobox.get_model()
-        row = self.protocol_jid_combobox.get_active()
-        jid = model[row][0]
-        from .service_registration import ServiceRegistration
-        ServiceRegistration(self.account, jid)
+        if button_name == 'add':
+            client = app.get_client(account)
+            if page == 'contact':
+                data = self.get_page('contact').get_subscription_data()
+                client.get_module('Presence').subscribe(
+                    self._result.jid,
+                    msg=data['message'],
+                    groups=data['groups'],
+                    auto_auth=data['auto_auth'])
+            else:
+                client.get_module('Presence').subscribe(
+                    self._result.jid,
+                    name=self._result.gateway_name,
+                    auto_auth=True)
+            app.window.show_account_page(account)
+            self.destroy()
+            return
 
-    def _on_key_press(self, widget, event):
-        if event.keyval == Gdk.KEY_Escape:
+        if button_name == 'join':
+            _, jid = self.get_page('address').get_account_and_jid()
+            open_window('GroupchatJoin', account=account, jid=jid)
             self.destroy()
 
-    def on_cancel_button_clicked(self, widget):
-        """
-        When Cancel button is clicked
-        """
-        self.destroy()
+    def _start_disco(self) -> None:
+        self._result = None
+        self.show_page('progress', Gtk.StackTransitionType.SLIDE_LEFT)
 
-    def on_message_textbuffer_changed(self, widget):
-        self.save_message_revealer.show()
-        self.save_message_revealer.set_reveal_child(True)
+        account, jid = self.get_page('address').get_account_and_jid()
+        assert account is not None
+        self._disco_info(account, jid)
 
-    def on_add_button_clicked(self, widget):
-        """
-        When Subscribe button is clicked
-        """
-        jid = self.uid_entry.get_text().strip()
-        if not jid:
-            ErrorDialog(
-                _('%s Missing') % self.uid_label.get_text(),
-                (_('You must supply the %s of the new contact.') %
-                    self.uid_label.get_text())
-            )
-            return
+    @as_task
+    def _disco_info(self, account: str, address: str) -> None:
+        _task = yield
 
-        model = self.protocol_combobox.get_model()
-        row = self.protocol_combobox.get_active_iter()
-        type_ = model[row][2]
-        if type_ != 'jabber':
-            model = self.protocol_jid_combobox.get_model()
-            row = self.protocol_jid_combobox.get_active()
-            transport = model[row][0]
-            if self.account and not self.jid_escaped:
-                self.adding_jid = (jid, transport, type_)
-                con = app.connections[self.account]
-                con.get_module('Gateway').request_gateway_prompt(transport, jid)
-            else:
-                jid = jid.replace('@', '%') + '@' + transport
-                self._add_jid(jid, type_)
+        client = app.get_client(account)
+
+        result = yield client.get_module('Discovery').disco_info(address)
+        if is_error(result):
+            self._process_error(account, result)
+            raise result
+
+        log.info('Disco Info received: %s', address)
+        self._process_info(account, result)
+
+    def _process_error(self, account: str, result: StanzaError) -> None:
+        log.debug('Error received: %s', result)
+        self._result = result
+
+        contact_conditions = [
+            'service-unavailable',  # Prosody
+            'subscription-required'  # ejabberd
+        ]
+        if result.condition in contact_conditions:
+            # It seems to be a contact
+            self.get_page('contact').prepare(account, result)
+            self.show_page('contact', Gtk.StackTransitionType.SLIDE_LEFT)
         else:
-            self._add_jid(jid, type_)
+            self.get_page('error').set_text(result.get_text())
+            self.show_page('error', Gtk.StackTransitionType.SLIDE_LEFT)
 
-    def _add_jid(self, jid, type_):
-        # check if jid is conform to RFC and stringprep it
-        try:
-            jid = helpers.parse_jid(jid)
-        except helpers.InvalidFormat as s:
-            pritext = _('Invalid User ID')
-            ErrorDialog(pritext, str(s))
-            return
+    def _process_info(self, account: str, result: DiscoInfo) -> None:
+        log.debug('Info received: %s', result)
+        self._result = result
 
-        # No resource in jid
-        if jid.find('/') >= 0:
-            pritext = _('Invalid User ID')
-            ErrorDialog(pritext, _('The user ID must not contain a resource.'))
-            return
-
-        if jid == app.get_jid_from_account(self.account):
-            pritext = _('Invalid User ID')
-            ErrorDialog(pritext, _('You cannot add yourself to your contact list.'))
-            return
-
-        if not app.account_is_available(self.account):
-            ErrorDialog(
-                _('Account Offline'),
-                _('Your account must be online to add new contacts.')
-            )
-            return
-
-        nickname = self.nickname_entry.get_text() or ''
-        # get value of account combobox, if account was not specified
-        if not self.account:
-            model = self.account_combobox.get_model()
-            index = self.account_combobox.get_active()
-            self.account = model[index][1]
-
-        # Check if jid is already in roster
-        if jid in app.contacts.get_jid_list(self.account):
-            c = app.contacts.get_first_contact_from_jid(self.account, jid)
-            if _('Not in contact list') not in c.groups and c.sub in ('both', 'to'):
-                ErrorDialog(
-                    _('Contact Already in Contact List'),
-                    _('This contact is already in your contact list.'))
-                return
-
-        if type_ == 'jabber':
-            message_buffer = self.message_textview.get_buffer()
-            start_iter = message_buffer.get_start_iter()
-            end_iter = message_buffer.get_end_iter()
-            message = message_buffer.get_text(start_iter, end_iter, True)
-            if self.save_message_checkbutton.get_active():
-                msg = helpers.to_one_line(message)
-                app.settings.set_account_setting(self.account,
-                                                 'subscription_request_msg',
-                                                 msg)
-        else:
-            message = ''
-        group = self.group_comboboxentry.get_child().get_text()
-        groups = []
-        if group:
-            groups = [group]
-        auto_auth = self.auto_authorize_checkbutton.get_active()
-        app.interface.roster.req_sub(
-            self, jid, message, self.account,
-            groups=groups, nickname=nickname, auto_auth=auto_auth)
-        self.destroy()
-
-    def on_account_combobox_changed(self, widget):
-        account = widget.get_active_id()
-        message_buffer = self.message_textview.get_buffer()
-        message_buffer.set_text(helpers.get_subscription_request_msg(account))
-        self.account = account
-
-    def on_protocol_jid_combobox_changed(self, widget):
-        model = widget.get_model()
-        iter_ = widget.get_active_iter()
-        if not iter_:
-            return
-        jid_ = model[iter_][0]
-        model = self.protocol_combobox.get_model()
-        iter_ = self.protocol_combobox.get_active_iter()
-        type_ = model[iter_][2]
-
-        desc = None
-        if self.agents[type_] and jid_ in self.gateway_prompt:
-            desc = self.gateway_prompt[jid_]['desc']
-
-        if desc:
-            self.prompt_label.set_markup(desc)
-            self.prompt_label.show()
-        else:
-            self.prompt_label.hide()
-
-        prompt = None
-        if self.agents[type_] and jid_ in self.gateway_prompt:
-            prompt = self.gateway_prompt[jid_]['prompt']
-        if not prompt:
-            if type_ in self.uid_labels:
-                prompt = self.uid_labels[type_]
-            else:
-                prompt = _('User ID:')
-        self.uid_label.set_text(prompt)
-
-    def on_protocol_combobox_changed(self, widget):
-        model = widget.get_model()
-        iter_ = widget.get_active_iter()
-        type_ = model[iter_][2]
-        model = self.protocol_jid_combobox.get_model()
-        model.clear()
-        if self.agents[type_]:
-            for jid_ in self.agents[type_]:
-                model.append([jid_])
-            self.protocol_jid_combobox.set_active(0)
-        desc = None
-        if self.agents[type_]:
-            jid_ = self.agents[type_][0]
-            if jid_ in self.gateway_prompt:
-                desc = self.gateway_prompt[jid_]['desc']
-
-        if desc:
-            self.prompt_label.set_markup(desc)
-            self.prompt_label.show()
-        else:
-            self.prompt_label.hide()
-
-        if len(self.agents[type_]) > 1:
-            self.protocol_jid_combobox.show()
-        else:
-            self.protocol_jid_combobox.hide()
-        prompt = None
-        if self.agents[type_]:
-            jid_ = self.agents[type_][0]
-            if jid_ in self.gateway_prompt:
-                prompt = self.gateway_prompt[jid_]['prompt']
-        if not prompt:
-            if type_ in self.uid_labels:
-                prompt = self.uid_labels[type_]
-            else:
-                prompt = _('User ID:')
-        self.uid_label.set_text(prompt)
-
-        if type_ == 'jabber':
-            self.message_scrolledwindow.show()
-            self.save_message_checkbutton.show()
-        else:
-            self.message_scrolledwindow.hide()
-            self.save_message_checkbutton.hide()
-        if type_ in self.available_types:
-            self.register_hbox.show()
-            self.auto_authorize_checkbutton.hide()
-            self.connected_label.hide()
-            self._subscription_table_hide()
-            self.add_button.set_sensitive(False)
-        else:
-            self.register_hbox.hide()
-            if type_ != 'jabber':
-                model = self.protocol_jid_combobox.get_model()
-                row = self.protocol_jid_combobox.get_active()
-                jid = model[row][0]
-                contact = app.contacts.get_first_contact_from_jid(
-                    self.account, jid)
-                if contact is None or contact.show in ('offline', 'error'):
-                    self._subscription_table_hide()
-                    self.connected_label.show()
-                    self.add_button.set_sensitive(False)
-                    self.auto_authorize_checkbutton.hide()
+        if result.is_muc:
+            for identity in result.identities:
+                if identity.type == 'text' and result.jid.is_domain:
+                    # It's a group chat component advertising
+                    # category 'conference'
+                    self.get_page('error').set_text(
+                        _('This address does not seem to offer any gateway '
+                          'service.'))
+                    self.show_page('error')
                     return
-            self._subscription_table_show()
-            self.auto_authorize_checkbutton.show()
-            self.connected_label.hide()
-            self.add_button.set_sensitive(True)
 
-    def transport_signed_in(self, jid):
-        model = self.protocol_jid_combobox.get_model()
-        row = self.protocol_jid_combobox.get_active()
-        _jid = model[row][0]
-        if _jid == jid:
-            self.register_hbox.hide()
-            self.connected_label.hide()
-            self._subscription_table_show()
-            self.auto_authorize_checkbutton.show()
-            self.add_button.set_sensitive(True)
+                if identity.type == 'irc' and result.jid.is_domain:
+                    # It's an IRC gateway advertising category 'conference'
+                    self.get_page('gateway').prepare(account, result)
+                    self.show_page(
+                        'gateway', Gtk.StackTransitionType.SLIDE_LEFT)
+                    return
 
-    def transport_signed_out(self, jid):
-        model = self.protocol_jid_combobox.get_model()
-        row = self.protocol_jid_combobox.get_active()
-        _jid = model[row][0]
-        if _jid == jid:
-            self._subscription_table_hide()
-            self.auto_authorize_checkbutton.hide()
-            self.connected_label.show()
-            self.add_button.set_sensitive(False)
+            self.get_page('groupchat').prepare(account, result)
+            self.show_page('groupchat', Gtk.StackTransitionType.SLIDE_LEFT)
+            return
 
-    def _nec_presence_received(self, obj):
-        if app.jid_is_transport(obj.jid):
-            if obj.old_show == 0 and obj.new_show > 1:
-                self.transport_signed_in(obj.jid)
-            elif obj.old_show > 1 and obj.new_show == 0:
-                self.transport_signed_out(obj.jid)
+        if result.is_gateway:
+            self.get_page('gateway').prepare(account, result)
+            self.show_page('gateway', Gtk.StackTransitionType.SLIDE_LEFT)
+            return
 
-    def _nec_gateway_prompt_received(self, obj):
-        if self.adding_jid:
-            jid, transport, type_ = self.adding_jid
-            if obj.stanza.getError():
-                ErrorDialog(
-                    _('Error while adding transport contact'),
-                    _('This error occurred while adding a contact for transport '
-                      '%(transport)s:\n\n%(error)s') % {
-                        'transport': transport,
-                        'error': obj.stanza.getErrorMsg()})
-                return
-            if obj.prompt_jid:
-                self._add_jid(obj.prompt_jid, type_)
+        self.get_page('contact').prepare(account, result)
+        self.show_page('contact', Gtk.StackTransitionType.SLIDE_LEFT)
+
+
+class Address(Page):
+    def __init__(self, account: Optional[str], jid: Optional[JID]) -> None:
+        Page.__init__(self)
+        self.title = _('Add Contact')
+
+        self._account = account
+        self._jid = jid
+
+        self._ui = get_builder('add_contact.ui')
+        self.add(self._ui.address_box)
+
+        self._ui.account_combo.connect('changed', self._on_account_changed)
+        self._ui.address_entry.connect('changed', self._set_complete)
+
+        accounts = app.get_enabled_accounts_with_labels(connected_only=True)
+        liststore = self._ui.account_combo.get_model()
+        for acc in accounts:
+            liststore.append(acc)
+
+        if len(accounts) > 1:
+            self._ui.account_box.show()
+
+            if account is not None:
+                self._ui.account_combo.set_active_id(account)
             else:
-                jid = jid.replace('@', '%') + '@' + transport
-                self._add_jid(jid, type_)
-        elif obj.jid in self.gateway_prompt:
-            if obj.desc:
-                self.gateway_prompt[obj.jid]['desc'] = obj.desc
-            if obj.prompt:
-                self.gateway_prompt[obj.jid]['prompt'] = obj.prompt
+                self._ui.account_combo.set_active(0)
+        else:
+            # Set to first (and only) item; sets self._account automatically
+            self._ui.account_combo.set_active(0)
 
-    def _subscription_table_hide(self):
-        for widget in self.subscription_table:
-            widget.hide()
+        if jid is not None:
+            self._ui.address_entry.set_text(str(jid))
 
-    def _subscription_table_show(self):
-        for widget in self.subscription_table:
-            widget.show()
+        self._set_complete()
+
+        self.show_all()
+
+    def get_visible_buttons(self) -> List[str]:
+        return ['next']
+
+    def get_default_button(self) -> str:
+        return 'next'
+
+    def get_account_and_jid(self) -> Tuple[str, str]:
+        return self._account, self._ui.address_entry.get_text()
+
+    def focus(self) -> None:
+        self._ui.address_entry.grab_focus()
+
+    def _on_account_changed(self, combobox: Gtk.ComboBox) -> None:
+        account = combobox.get_active_id()
+        self._account = account
+        self._set_complete()
+
+    def _show_icon(self, show: bool) -> None:
+        icon = 'dialog-warning-symbolic' if show else None
+        self._ui.address_entry.set_icon_from_icon_name(
+            Gtk.EntryIconPosition.SECONDARY, icon)
+
+    def _set_complete(self, *args: Any) -> None:
+        if self._account is None:
+            self.complete = False
+            self.update_page_complete()
+            return
+
+        address = self._ui.address_entry.get_text()
+        is_self = bool(address == app.get_jid_from_account(self._account))
+        if is_self:
+            self._show_icon(True)
+            self._ui.address_entry.set_icon_tooltip_text(
+                Gtk.EntryIconPosition.SECONDARY,
+                _('You cannot add yourself to your contact list.'))
+            self.complete = False
+            self.update_page_complete()
+            return
+
+        client = app.get_client(self._account)
+        for contact in client.get_module('Roster').iter_contacts():
+            if address == str(contact.jid):
+                self._show_icon(True)
+                self._ui.address_entry.set_icon_tooltip_text(
+                    Gtk.EntryIconPosition.SECONDARY,
+                    _('%s is already in your contact list') % address)
+                self.complete = False
+                self.update_page_complete()
+                return
+
+        self.complete = self._validate_address(address)
+        self.update_page_complete()
+
+    def _validate_address(self, address: str) -> bool:
+        if not address:
+            self._show_icon(False)
+            return False
+
+        try:
+            jid = validate_jid(address)
+            if jid.resource:
+                raise ValueError
+        except ValueError:
+            self._show_icon(True)
+            self._ui.address_entry.set_icon_tooltip_text(
+                Gtk.EntryIconPosition.SECONDARY, _('Invalid Address'))
+            return False
+
+        self._show_icon(False)
+        return True
+
+
+class Error(ErrorPage):
+    def __init__(self) -> None:
+        ErrorPage.__init__(self)
+        self.set_title(_('Add Contact'))
+        self.set_heading(_('An Error Occurred'))
+
+    def get_visible_buttons(self) -> List[str]:
+        return ['back']
+
+    def get_default_button(self) -> str:
+        return 'back'
+
+
+class Contact(Page):
+    def __init__(self) -> None:
+        Page.__init__(self)
+        self.title = _('Add Contact')
+
+        self._result: Union[DiscoInfo, StanzaError, None] = None
+        self._account: Optional[str] = None
+        self._contact: Optional[types.BareContact] = None
+
+        self._ui = get_builder('add_contact.ui')
+        self.add(self._ui.contact_grid)
+
+        self._ui.contact_info_button.connect('clicked', self._on_info_clicked)
+
+        self.show_all()
+
+    def get_visible_buttons(self) -> List[str]:
+        return ['back', 'add']
+
+    def get_default_button(self) -> str:
+        return 'add'
+
+    def prepare(self, account: str, result: Union[DiscoInfo, StanzaError]):
+        self._result = result
+        self._account = account
+
+        client = app.get_client(account)
+        self._contact = client.get_module('Contacts').get_contact(result.jid)
+
+        self._update_groups(account)
+        self._ui.message_entry.set_text(get_subscription_request_msg(account))
+        self._ui.contact_grid.set_sensitive(True)
+
+    def _update_groups(self, account: str) -> None:
+        self._ui.group_combo.get_model().clear()
+        client = app.get_client(account)
+        for group in client.get_module('Roster').get_groups():
+            self._ui.group_combo.append_text(group)
+
+    def _on_info_clicked(self, _button: Gtk.Button) -> None:
+        open_window(
+            'ContactInfo', account=self._account, contact=self._contact)
+
+    def get_subscription_data(self) -> Dict[str, Union[str, List[str], bool]]:
+        group = self._ui.group_combo.get_child().get_text()
+        groups = [group] if group else []
+        return {
+            'message': self._ui.message_entry.get_text(),
+            'groups': groups,
+            'auto_auth': self._ui.status_switch.get_active(),
+        }
+
+
+class Gateway(Page):
+    def __init__(self) -> None:
+        Page.__init__(self)
+        self.title = _('Service Gateway')
+
+        self._account: Optional[str] = None
+        self._result: Optional[DiscoInfo] = None
+
+        self._ui = get_builder('add_contact.ui')
+        self.add(self._ui.gateway_box)
+
+        self._ui.register_button.connect('clicked', self._on_register_clicked)
+        self._ui.commands_button.connect('clicked', self._on_command_clicked)
+
+        self.show_all()
+
+    def get_visible_buttons(self) -> List[str]:
+        return ['back', 'add']
+
+    def get_default_button(self) -> str:
+        return 'add'
+
+    def prepare(self, account: str, result: DiscoInfo) -> None:
+        self._account = account
+        self._result = result
+
+        icon_name = None
+        if result.is_gateway:
+            if result.gateway_type == 'sms':
+                icon_name = 'gajim-agent-sms'
+            if result.gateway_type == 'irc':
+                icon_name = 'gajim-agent-irc'
+            self._ui.gateway_image.set_from_icon_name(
+                icon_name, Gtk.IconSize.DIALOG)
+            gateway_name = result.gateway_name or self._result.jid
+            if not result.gateway_type:
+                self._ui.gateway_label.set_text(gateway_name)
+            else:
+                self._ui.gateway_label.set_text(
+                    f'{gateway_name} ({result.gateway_type.upper()})')
+        else:
+            identity_name = ''
+            identity_type = ''
+            for identity in result.identities:
+                if identity.type == 'sms':
+                    icon_name = 'gajim-agent-sms'
+                    identity_name = identity.name or self._result.jid
+                    identity_type = identity.type
+                if identity.type == 'irc':
+                    icon_name = 'gajim-agent-irc'
+                    identity_name = identity.name or self._result.jid
+                    identity_type = identity.type
+            self._ui.gateway_image.set_from_icon_name(
+                icon_name, Gtk.IconSize.DIALOG)
+            if not identity_type:
+                self._ui.gateway_label.set_text(identity_name)
+            else:
+                self._ui.gateway_label.set_text(
+                    f'{identity_name} ({identity_type.upper()})')
+
+        if result.supports(Namespace.REGISTER):
+            self._ui.register_button.set_sensitive(True)
+            self._ui.register_button.set_tooltip_text('')
+        else:
+            self._ui.register_button.set_sensitive(False)
+            self._ui.register_button.set_tooltip_text(
+                _('This gateway does not support direct registering.'))
+
+        if result.supports(Namespace.COMMANDS):
+            self._ui.commands_button.set_sensitive(True)
+            self._ui.commands_button.set_tooltip_text('')
+        else:
+            self._ui.commands_button.set_sensitive(False)
+            self._ui.commands_button.set_tooltip_text(
+                _('This gateway does not support Ad-Hoc Commands.'))
+
+    def _on_register_clicked(self, _button: Gtk.Button) -> None:
+        open_window(
+            'ServiceRegistration',
+            account=self._account,
+            address=self._result.jid)
+
+    def _on_command_clicked(self, _button: Gtk.Button) -> None:
+        AdHocCommand(self._account, self._result.jid)
+
+
+class GroupChat(Page):
+    def __init__(self) -> None:
+        Page.__init__(self)
+        self.title = _('Join Group Chat?')
+
+        self._result: Optional[DiscoInfo] = None
+
+        heading = Gtk.Label(label=_('Join Group Chat?'))
+        heading.get_style_context().add_class('large-header')
+        heading.set_max_width_chars(30)
+        heading.set_line_wrap(True)
+        heading.set_halign(Gtk.Align.CENTER)
+        heading.set_justify(Gtk.Justification.CENTER)
+        self.pack_start(heading, False, True, 0)
+
+        self._info_box = GroupChatInfoScrolled(minimal=True)
+        self.pack_start(self._info_box, True, True, 0)
+
+        self.show_all()
+
+    def get_visible_buttons(self) -> List[str]:
+        return ['back', 'join']
+
+    def get_default_button(self) -> str:
+        return 'join'
+
+    def prepare(self, account: str, result: DiscoInfo) -> None:
+        self._result = result
+
+        self._info_box.set_account(account)
+        self._info_box.set_from_disco_info(result)

@@ -23,7 +23,7 @@ from gajim.common import app
 from gajim.common.i18n import _
 from gajim.common.helpers import to_user_string
 
-from .util import get_builder
+from .builder import get_builder
 from .dialogs import HigDialog
 
 log = logging.getLogger('gajim.gui.blocking_list')
@@ -75,8 +75,9 @@ class BlockingList(Gtk.ApplicationWindow):
 
         self._prev_blocked_jids = set(blocking_list)
         self._ui.blocking_store.clear()
-        for item in blocking_list:
-            self._ui.blocking_store.append((str(item),))
+
+        for jid in blocking_list:
+            self._ui.blocking_store.append((str(jid),))
 
         self._set_grid_state(True)
         self._disable_spinner()

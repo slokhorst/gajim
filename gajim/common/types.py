@@ -14,6 +14,7 @@
 
 # Types for typechecking
 
+from typing import Any
 from typing import Callable
 from typing import Dict
 from typing import List
@@ -22,44 +23,50 @@ from typing import Tuple
 from typing import Union
 from typing import TYPE_CHECKING
 
-from pathlib import Path
-import nbxmpp
+import weakref
 
-from gajim.common.const import PathType, PathLocation
+from gi.repository import GdkPixbuf
+
+import nbxmpp
+from nbxmpp.protocol import JID
+from nbxmpp.structs import BookmarkData
 
 if TYPE_CHECKING:
     # pylint: disable=unused-import
     from gajim.common.client import Client
+    from nbxmpp.client import Client as xmppClient
     from gajim.common.zeroconf.connection_zeroconf import ConnectionZeroconf
-    from gajim.common.contacts import Contact
-    from gajim.common.contacts import GC_Contact
-    from gajim.common.contacts import LegacyContactsAPI
-    from gajim.common.nec import NetworkEvent
-    from gajim.common.nec import NetworkEventsController
+    from gajim.common.modules.contacts import CommonContact
+    from gajim.common.modules.contacts import BareContact
+    from gajim.common.modules.contacts import ResourceContact
+    from gajim.common.modules.contacts import GroupchatContact
+    from gajim.common.modules.contacts import GroupchatParticipant
+
+    ChatContacts = Union[BareContact, GroupchatContact, GroupchatParticipant]
 
     from gajim.gui_interface import Interface
     from gajim.common.settings import Settings
+    from gajim.gtk.css_config import CSSConfig
 
 
-NetworkEventsControllerT = Union['NetworkEventsController']
 InterfaceT = Union['Interface']
 
 ConnectionT = Union['Client', 'ConnectionZeroconf']
-ContactsT = Union['Contact', 'GC_Contact']
-ContactT = Union['Contact']
-LegacyContactsAPIT = Union['LegacyContactsAPI']
+CSSConfigT = Union['CSSConfig']
 
 # PEP
 PEPNotifyCallback = Callable[[nbxmpp.JID, nbxmpp.Node], None]
 PEPHandlersDict = Dict[str, List[PEPNotifyCallback]]
 
-# Configpaths
-PathTuple = Tuple[Optional[PathLocation], Path, Optional[PathType]]
-
 # Plugins
 PluginExtensionPoints = Dict[str, Tuple[Optional[Callable[..., None]],
                                         Optional[Callable[..., None]]]]
-EventHandlersDict = Dict[str, Tuple[int, Callable[['NetworkEvent'], Optional[bool]]]]
-PluginEvents = List['NetworkEvent']
 
 SettingsT = Union['Settings']
+
+BookmarksDict = Dict[JID, BookmarkData]
+
+GdkPixbufType = Union[GdkPixbuf.Pixbuf, GdkPixbuf.PixbufAnimation]
+
+AnyCallableT = Callable[..., Any]
+ObservableCbDict = dict[str, list[weakref.WeakMethod[AnyCallableT]]]

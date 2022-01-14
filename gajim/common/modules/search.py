@@ -18,7 +18,9 @@ import nbxmpp
 from nbxmpp.namespaces import Namespace
 
 from gajim.common import app
-from gajim.common.nec import NetworkIncomingEvent
+from gajim.common.events import SearchFormReceivedEvent
+from gajim.common.events import SearchResultReceivedEvent
+
 from gajim.common.modules.base import BaseModule
 
 
@@ -47,13 +49,14 @@ class Search(BaseModule):
                 is_dataform = True
             else:
                 data = {}
-                for i in stanza.getQueryPayload():
+                query = stanza.getQuery()
+                for i in query.getChildren():
                     data[i.getName()] = i.getData()
         else:
             self._log.info('Error: %s', stanza.getError())
 
-        app.nec.push_incoming_event(
-            SearchFormReceivedEvent(None, conn=self._con,
+        app.ged.raise_event(
+            SearchFormReceivedEvent(conn=self._con,
                                     is_dataform=is_dataform,
                                     data=data))
 
@@ -87,25 +90,13 @@ class Search(BaseModule):
                 for item in tag.getTags('item'):
                     # We also show attributes. jid is there
                     field = item.attrs
-                    for i in item.getPayload():
+                    for i in item.getChildren():
                         field[i.getName()] = i.getData()
                     data.append(field)
         else:
             self._log.info('Error: %s', stanza.getError())
 
-        app.nec.push_incoming_event(
-            SearchResultReceivedEvent(None, conn=self._con,
+        app.ged.raise_event(
+            SearchResultReceivedEvent(conn=self._con,
                                       is_dataform=is_dataform,
                                       data=data))
-
-
-class SearchFormReceivedEvent(NetworkIncomingEvent):
-    name = 'search-form-received'
-
-
-class SearchResultReceivedEvent(NetworkIncomingEvent):
-    name = 'search-result-received'
-
-
-def get_instance(*args, **kwargs):
-    return Search(*args, **kwargs), 'Search'

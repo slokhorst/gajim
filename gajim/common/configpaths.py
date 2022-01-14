@@ -19,30 +19,35 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
-from typing import Dict  # pylint: disable=unused-import
-from typing import List
+from __future__ import annotations
+
 from typing import Generator
-from typing import Optional  # pylint: disable=unused-import
-from typing import Tuple
+from typing import Optional
+from typing import Union
+from typing import cast
 
 import os
 import sys
 import tempfile
+import importlib.resources
 from pathlib import Path
 
 from gi.repository import GLib
 
 import gajim
 from gajim.common.i18n import _
-from gajim.common.const import PathType, PathLocation
-from gajim.common.types import PathTuple
+from gajim.common.const import PathType
+from gajim.common.const import PathLocation
+
+
+PathTupleT = tuple[Optional[PathLocation], Path, Optional[PathType]]
 
 
 def get(key: str) -> Path:
     return _paths[key]
 
 
-def get_plugin_dirs() -> List[Path]:
+def get_plugin_dirs() -> list[Path]:
     if gajim.IS_FLATPAK:
         return [Path(_paths['PLUGINS_BASE']),
                 Path('/app/plugins')]
@@ -51,15 +56,12 @@ def get_plugin_dirs() -> List[Path]:
 
 
 def get_paths(type_: PathType) -> Generator[Path, None, None]:
+    # pylint: disable=unnecessary-dict-index-lookup
     for key, value in _paths.items():
         path_type = value[2]
         if type_ != path_type:
             continue
         yield _paths[key]
-
-
-def override_path(*args, **kwargs):
-    _paths.add(*args, **kwargs)
 
 
 def set_separation(active: bool) -> None:
@@ -99,10 +101,10 @@ def create_paths() -> None:
 
 class ConfigPaths:
     def __init__(self) -> None:
-        self._paths = {}  # type: Dict[str, PathTuple]
+        self._paths: dict[str, PathTupleT] = {}
         self.profile = ''
         self.profile_separation = False
-        self.custom_config_root = None  # type: Optional[Path]
+        self.custom_config_root: Optional[Path] = None
 
         if os.name == 'nt':
             if gajim.IS_PORTABLE:
@@ -118,8 +120,7 @@ class ConfigPaths:
             self.cache_root = Path(GLib.get_user_cache_dir()) / 'gajim'
             self.data_root = Path(GLib.get_user_data_dir()) / 'gajim'
 
-        import pkg_resources
-        basedir = Path(pkg_resources.resource_filename("gajim", "."))
+        basedir = cast(Path, importlib.resources.files('gajim'))
 
         source_paths = [
             ('DATA', basedir / 'data'),
@@ -144,7 +145,7 @@ class ConfigPaths:
             return self.data_root / path
         return path
 
-    def items(self) -> Generator[Tuple[str, PathTuple], None, None]:
+    def items(self) -> Generator[tuple[str, PathTupleT], None, None]:
         for key, value in self._paths.items():
             yield (key, value)
 
@@ -158,10 +159,13 @@ class ConfigPaths:
 
     def add(self,
             name: str,
-            path: Path,
-            location: PathLocation = None,
-            path_type: PathType = None,
+            path: Union[Path, str],
+            location: Optional[PathLocation] = None,
+            path_type: Optional[PathType] = None,
             unique: bool = False) -> None:
+
+        path = Path(path)
+
         if location is not None:
             path = self._prepare(path, unique)
         self._paths[name] = (location, path, path_type)
@@ -172,7 +176,7 @@ class ConfigPaths:
             self.cache_root = self.data_root = self.custom_config_root
 
         user_dir_paths = [
-            ('TMP', Path(tempfile.gettempdir())),
+            ('TMP', Path(tempfile.gettempdir()), None, None),
             ('MY_CONFIG', Path(), PathLocation.CONFIG, PathType.FOLDER),
             ('MY_CACHE', Path(), PathLocation.CACHE, PathType.FOLDER),
             ('MY_DATA', Path(), PathLocation.DATA, PathType.FOLDER),
@@ -196,6 +200,7 @@ class ConfigPaths:
             ('PLUGINS_CONFIG_DIR',
              'pluginsconfig', PathLocation.CONFIG, PathType.FOLDER),
             ('MY_CERT', 'localcerts', PathLocation.CONFIG, PathType.FOLDER),
+            ('MY_SHORTCUTS', 'shortcuts.json', PathLocation.CONFIG, PathType.FILE),
         ]
 
         for path in unique_profile_paths:
@@ -206,7 +211,6 @@ class ConfigPaths:
         paths = [
             # Data paths
             ('LOG_DB', 'logs.db', PathLocation.DATA, PathType.FILE),
-            ('MY_CACERTS', 'cacerts.pem', PathLocation.DATA, PathType.FILE),
             ('PLUGINS_DOWNLOAD', 'plugins_download', PathLocation.CACHE, PathType.FOLDER),
             ('PLUGINS_USER', 'plugins', PathLocation.DATA, PathType.FOLDER),
             ('MY_EMOTS',

@@ -27,23 +27,43 @@ Handles Jingle sessions (XEP 0166)
 #   - Tie-breaking
 # * timeout
 
+from __future__ import annotations
+
+from typing import Optional
+
+import time
 import logging
 from enum import Enum, unique
 
 import nbxmpp
+from nbxmpp import JID
 from nbxmpp.namespaces import Namespace
 from nbxmpp.util import generate_id
 
 from gajim.common import app
+from gajim.common import events
+from gajim.common.client import Client
+from gajim.common.const import KindConstant
+from gajim.common.helpers import AdditionalDataDict
 from gajim.common.jingle_transport import get_jingle_transport
 from gajim.common.jingle_transport import JingleTransportIBB
 from gajim.common.jingle_content import get_jingle_content
+from gajim.common.jingle_content import JingleContent
 from gajim.common.jingle_content import JingleContentSetupException
 from gajim.common.jingle_ft import State
-from gajim.common.connection_handlers_events import FilesProp
-from gajim.common.nec import NetworkEvent
+from gajim.common.file_props import FilesProp
+
 
 log = logging.getLogger("app.c.jingle_session")
+
+
+JINGLE_EVENTS = {
+    'jingle-connected-received': events.JingleConnectedReceived,
+    'jingle-disconnected-received': events.JingleDisconnectedReceived,
+    'jingle-request-received': events.JingleRequestReceived,
+    'jingle-ft-cancelled-received': events.JingleFtCancelledReceived,
+    'jingle-error-received': events.JingleErrorReceived
+}
 
 # FIXME: Move it to JingleSession.States?
 @unique
@@ -79,14 +99,21 @@ class JingleSession:
     negotiated between an initiator and a responder.
     """
 
-    def __init__(self, con, weinitiate, jid, iq_id=None, sid=None,
-                 werequest=False):
+    def __init__(self,
+                 con: Client,
+                 weinitiate: bool,
+                 jid: str,
+                 iq_id: Optional[str] = None,
+                 sid: Optional[str] = None,
+                 werequest: bool = False
+                 ) -> None:
         """
         con -- connection object,
         weinitiate -- boolean, are we the initiator?
         jid - jid of the other entity
         """
-        self.contents = {} # negotiated contents
+        # negotiated contents
+        self.contents: dict[tuple[str, str], JingleContent] = {}
         self.connection = con # connection to use
         # our full jid
         self.ourjid = str(self.connection.get_own_jid())
@@ -174,13 +201,13 @@ class JingleSession:
         reason.addChild('cancel')
         self._session_terminate(reason)
 
-    def approve_content(self, media, name=None):
+    def approve_content(self, media: str, name: Optional[str] = None) -> None:
         content = self.get_content(media, name)
         if content:
             content.accepted = True
             self.on_session_state_changed(content)
 
-    def reject_content(self, media, name=None):
+    def reject_content(self, media: str, name: Optional[str] = None) -> None:
         content = self.get_content(media, name)
         if content:
             if self.state == JingleStates.ACTIVE:
@@ -199,15 +226,23 @@ class JingleSession:
             reason.addChild('cancel')
         self._session_terminate(reason)
 
-    def get_content(self, media=None, name=None):
+    def get_content(self,
+                    media: Optional[str] = None,
+                    name: Optional[str] = None
+                    ) -> Optional[JingleContent]:
         if media is None:
-            return
+            return None
         for content in self.contents.values():
             if content.media == media:
                 if name is None or content.name == name:
                     return content
+        return None
 
-    def add_content(self, name, content, creator='we'):
+    def add_content(self,
+                    name: str,
+                    content: JingleContent,
+                    creator: str = 'we'
+                    ) -> None:
         """
         Add new content to session. If the session is active, this will send
         proper stanza to update session
@@ -254,7 +289,9 @@ class JingleSession:
         content.sent = False
         content.accepted = True
 
-    def on_session_state_changed(self, content=None):
+    def on_session_state_changed(self,
+                                 content: Optional[JingleContent] = None
+                                 ) -> None:
         if self.state == JingleStates.ENDED:
             # Session not yet started, only one action possible: session-initiate
             if self.is_ready() and self.weinitiate:
@@ -439,13 +476,13 @@ class JingleSession:
 
     def __on_session_info(self, stanza, jingle, error, action):
         # TODO: active, (un)hold, (un)mute
-        payload = jingle.getPayload()
-        if payload[0].getName() == 'ringing':
+        ringing = jingle.getTag('ringing')
+        if ringing is not None:
             # ignore ringing
             raise nbxmpp.NodeProcessed
         if self.state != JingleStates.ACTIVE:
             raise OutOfOrder
-        for child in payload:
+        for child in jingle.getChildren():
             if child.getName() == 'checksum':
                 hash_ = child.getTag('file').getTag(name='hash',
                                                     namespace=Namespace.HASHES_2)
@@ -516,7 +553,17 @@ class JingleSession:
         """
         if self.state != JingleStates.ENDED:
             raise OutOfOrder
-        self.initiator = jingle['initiator']
+
+        # In "session-initiate", the <jingle/> element SHOULD possess an
+        # 'initiator' attribute. If it differs from the JID 'from', jingle
+        # 'initiator' SHOULD be ignored.
+        if jingle['initiator'] is None:
+            self.initiator = stanza['from']
+        elif jingle['initiator'] != stanza['from']:
+            self.initiator = stanza['from']
+        else:
+            self.initiator = jingle['initiator']
+
         self.responder = self.ourjid
         self.peerjid = self.initiator
         self.accepted = False   # user did not accept this session yet
@@ -570,6 +617,25 @@ class JingleSession:
         self.state = JingleStates.PENDING
         # Send event about starting a session
         self._raise_event('jingle-request-received', contents=contents)
+
+        # Check if it's an A/V call and add it to the archive
+        content_types = []
+        for item in contents:
+            content_types.append(item.media)
+        if not any(item in ('audio', 'video') for item in content_types):
+            return
+
+        account = self.connection.name
+        jid = JID.from_string(self.peerjid)
+        timestamp = time.time()
+        additional_data = AdditionalDataDict()
+        additional_data.set_value('gajim', 'sid', self.sid)
+        app.storage.archive.insert_into_logs(
+            account,
+            jid.bare,
+            timestamp,
+            KindConstant.CALL_INCOMING,
+            additional_data=additional_data)
 
     def __broadcast(self, stanza, jingle, error, action):
         """
@@ -782,7 +848,7 @@ class JingleSession:
                           media=None,
                           reason=text)
 
-    def __content_add(self, content):
+    def __content_add(self, content: JingleContent) -> None:
         # TODO: test
         assert self.state != JingleStates.ENDED
         stanza, jingle = self.__make_jingle('content-add')
@@ -791,7 +857,7 @@ class JingleSession:
         id_ = self.connection.connection.send(stanza)
         self.collect_iq_id(id_)
 
-    def __content_accept(self, content):
+    def __content_accept(self, content: JingleContent) -> None:
         # TODO: test
         assert self.state != JingleStates.ENDED
         stanza, jingle = self.__make_jingle('content-accept')
@@ -800,7 +866,7 @@ class JingleSession:
         id_ = self.connection.connection.send(stanza)
         self.collect_iq_id(id_)
 
-    def __content_reject(self, content):
+    def __content_reject(self, content: JingleContent) -> None:
         assert self.state != JingleStates.ENDED
         stanza, jingle = self.__make_jingle('content-reject')
         self.__append_content(jingle, content)
@@ -809,9 +875,6 @@ class JingleSession:
         self._raise_event('jingle-disconnected-received',
                           media=content.media,
                           reason='rejected')
-
-    def __content_modify(self):
-        assert self.state != JingleStates.ENDED
 
     def __content_remove(self, content, reason=None):
         assert self.state != JingleStates.ENDED
@@ -836,14 +899,18 @@ class JingleSession:
         self.collect_iq_id(stanza.getID())
         self.state = JingleStates.ACTIVE
 
-    def _raise_event(self, name, **kwargs):
-        jid, resource = app.get_room_and_nick_from_fjid(self.peerjid)
-        app.nec.push_incoming_event(
-            NetworkEvent(name,
-                         conn=self.connection,
-                         fjid=self.peerjid,
-                         jid=jid,
-                         sid=self.sid,
-                         resource=resource,
-                         jingle_session=self,
-                         **kwargs))
+    def _raise_event(self, name: str, **kwargs):
+        jid, resource = app.get_room_and_nick_from_fjid(
+            str(self.peerjid))
+
+        event_class = JINGLE_EVENTS[name]
+
+        app.ged.raise_event(
+            event_class(conn=self.connection,
+                        account=self.connection.name,
+                        fjid=self.peerjid,
+                        jid=jid,
+                        sid=self.sid,
+                        resource=resource,
+                        jingle_session=self,
+                        **kwargs))

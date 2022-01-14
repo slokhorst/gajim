@@ -1,24 +1,17 @@
 /* Gajim Application CSS File */
 
-.chatcontrol-actionbar-button { 
+.chatcontrol-actionbar-button {
 	padding: 0px 5px 0px 5px;
 	background-color: @theme_base_color; 
 	border: none;
-	}
+}
 
+.no-border { border: none; }
 .scrolled-no-border { border: none; }
 .no-scroll-indicator undershoot.top, undershoot.bottom { background-image: none; }
 .scrollbar-style scrollbar trough {background-color:@theme_base_color; }
 .scrollbar-style scrollbar {border:none; }
 .one-line-scrollbar scrollbar.vertical slider { min-height: 20px; }
-
-.actionbar-no-border box { border: none; }
-.actionbar-no-border button { 
-	padding: 0px;
-	background-color: @theme_base_color; 
-	border: none;
-	background-image: none;
-	}
 
 .dialog-margin > box { margin: 18px;}
 
@@ -39,11 +32,401 @@
     border-radius: 4px;
 }
 
+row:backdrop { transition: none; }
+
+.conversation-row:hover button {
+    opacity: 1;
+}
+
+.conversation-row {
+    padding: 10px 3px 4px 6px;
+    border-radius: 4px;
+}
+
+.merged { padding-top: 1px;}
+
+.conversation-row grid textview:not(.sourceview) {
+	background: transparent;
+}
+.conversation-row grid textview:not(.sourceview) text {
+	background: transparent;
+}
+.retracted-message {
+    opacity: 0.4;
+}
+@keyframes highlight {
+    from { background: rgb(140, 160, 180); }
+    to { background: transparent; }
+}
+.conversation-search-highlight {
+    animation-duration: 3s;
+    animation-timing-function: ease-out;
+    animation-iteration-count: 1;
+    animation-name: highlight;
+}
+.conversation-system-row {
+    padding: 18px;
+}
+.conversation-date-row {
+    padding: 12px;
+}
+.conversation-command-row label {
+    border-radius: 6px;
+    padding: 12px;
+    font-size: small;
+}
+.conversation-subject-box,
+.conversation-call-box {
+    border-radius: 6px;
+    padding: 12px;
+}
+.conversation-call-box label {
+    font-size: small;
+}
+.conversation-meta {
+    color: @insensitive_fg_color;
+    font-size: small;
+}
+.conversation-read-marker {
+    color: @insensitive_fg_color;
+    font-size: small;
+    font-style: italic;
+}
+.conversation-nickname {
+    font-size: small;
+    font-weight: bold;
+}
+.code-widget {
+    border: 1px solid @borders;
+    border-radius: 4px;
+    margin-top: 6px;
+    margin-bottom: 6px;
+}
+.code-widget-header {
+    background-color: alpha(@insensitive_fg_color, 0.4);
+    padding: 0 6px;
+    border-top-left-radius: 3px;
+    border-top-right-radius: 3px;
+}
+.code-widget-header label {
+    font-size: small;
+}
+.code-widget-header button {
+    padding: 0;
+}
+
+.file-transfer {
+    padding: 10px;
+    margin: 5px;
+    background-color: @theme_unfocused_base_color;
+    border: 1px solid @borders;
+    border-radius: 5px;
+}
+
+.preview-box {
+    border: 1px solid;
+    border-color: @borders;
+    border-radius: 4px;
+    padding: 10px;
+    background-color: @theme_unfocused_base_color;
+}
+.preview-image-button,
+.preview-image-button:hover {
+    padding: 0px;
+    border: none;
+    transition: none;
+    -gtk-icon-effect: none;
+    -gtk-icon-shadow: none;
+    background-image: none;
+    text-shadow: none;
+    box-shadow: none;
+}
+.preview-button {
+    border: 1px solid @borders;
+}
+
 .link-button { min-height: 0px; }
 
-/* VCardWindow */
-.VCard-GtkLinkButton { padding-left: 5px; border-left: none; }
+/* Main Window */
+.mainwindow-grid {
+    background: @theme_base_color;
+}
 
+/* Generic elements */
+.account-identifier-bar {
+	border-radius: 6px;
+}
+.selection-bar {
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+}
+.small-label {
+    font-size: small;
+}
+
+/* ChatList with Workspace and Account sidebars */
+.chatlist-left-grid {
+    border-right: 1px solid @unfocused_borders;
+    background: @theme_bg_color;
+}
+
+.app-sidebar-image {
+    background: @unfocused_borders;
+    padding: 4px;
+}
+.app-page-box {
+    margin-top: 6px;
+}
+.app-page-box > separator {
+    background-color: darker(@theme_bg_color);
+    margin-left: 12px;
+    margin-right: 12px;
+}
+.app-page {
+    padding: 18px;
+}
+.app-message-listbox row {
+    border: 1px solid @borders;
+}
+
+/* Workspace sidebar */
+.workspace-scrolled {
+    background: transparent;
+}
+.workspace-sidebar {
+	background: transparent;
+	margin-right: 6px;
+}
+.workspace-sidebar-item {
+	padding-top: 0px;
+	padding-bottom: 0px;
+}
+.workspace-sidebar-item:selected,
+.workspace-sidebar-item:hover,
+.workspace-sidebar-item:focus {
+	background: transparent;
+	box-shadow: none;
+	outline: none;
+}
+.workspace-sidebar-item .selection-bar {
+    margin-top: 6px;
+    margin-bottom: 6px;
+}
+.workspace-sidebar-item:selected .selection-bar {
+    background-color: lighter(@theme_selected_bg_color);
+}
+.workspace-sidebar-item:hover .selection-bar {
+    background-color: @theme_selected_bg_color;
+}
+.workspace-sidebar-item image {
+	border-radius: 9px;
+	margin: 6px;
+}
+.workspace-add:hover,
+.workspace-add:focus {
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+}
+.workspace-add button {
+    margin: 6px 8px 6px 14px;
+}
+
+/* Account sidebar */
+.account-sidebar {
+    background: transparent;
+    margin-bottom: 6px;
+}
+.account-sidebar-item {
+    padding-top: 3px;
+    padding-bottom: 3px;
+}
+.account-sidebar-item:hover,
+.account-sidebar-item:selected,
+.account-sidebar-item:focus {
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+}
+.account-sidebar-item .selection-bar {
+    margin-top: 3px;
+    margin-bottom: 3px;
+}
+.account-sidebar-item:selected .selection-bar {
+    background-color: lighter(@theme_selected_bg_color);
+}
+.account-sidebar-item:hover .selection-bar {
+    background-color: @theme_selected_bg_color;
+}
+.account-sidebar-item image {
+    border-radius: 9px;
+    padding: 3px;
+}
+.account-sidebar-item .account-identifier-bar {
+	padding: 0 3px;
+    margin: 3px 0;
+}
+.account-box {
+    background-color: mix(@theme_base_color, @theme_fg_color, 0.15);
+}
+.account-box > separator {
+    background-color: darker(@theme_bg_color);
+}
+
+/* Account Page */
+.account-page {
+    background: transparent;
+}
+.account-page-roster {
+	padding: 12px;
+}
+.account-page-box {
+    padding: 18px;
+}
+/* Roster */
+.roster treeview {
+	padding: 0 3px;
+}
+/* Notification listbox */
+.notification-listbox {
+    background: transparent;
+}
+.notification-listbox row {
+    padding: 12px;
+    border: 1px solid @borders;
+    border-bottom: 0px;
+}
+.notification-listbox row:nth-last-child(2) {
+    border-bottom: 1px solid @borders;
+}
+
+/*Middle Grid*/
+.middle-grid > scrolledwindow { background: transparent; }
+
+.chatlist-top-bar {
+	padding: 12px;
+	background: transparent;
+}
+.chat-filter-icons {
+    background: transparent;
+}
+.chat-filter-icons button {
+    color: @insensitive_fg_color;
+}
+
+.chatlist {
+    background: transparent;
+}
+.chatlist-row {
+    transition: none;
+    padding: 0px;
+    margin-left: 12px;
+    margin-right: 12px;
+    margin-bottom: 3px;
+    border-radius: 6px;
+}
+.chatlist-row:active,
+.chatlist-row:selected:active {
+    box-shadow: none;
+}
+.chatlist-row:selected {
+    background-color: mix(@theme_base_color, @theme_fg_color, 0.1);
+    outline: none;
+}
+.chatlist-row:selected label:not(.unread-counter){
+    color: @theme_text_color;
+}
+.chatlist-row button {
+    padding: 3px;
+}
+.chatlist-row:selected button {
+	color: @theme_fg_color;
+    border-color: @borders;
+}
+.chatlist-row:selected image {
+	color: @theme_fg_color;
+}
+.chatlist-row overlay > box {
+	padding: 6px;
+}
+@keyframes composing {
+    0%  {
+	    -gtk-icon-transform: translate(0px, 2px);
+	}
+    10% {
+	    -gtk-icon-transform: translate(0px, -1px) rotate(20deg);
+	}
+    30% {
+	    -gtk-icon-transform: translate(0px, -1px) rotate(-20deg);
+	}
+    40% {
+	    -gtk-icon-transform: translate(0px, 2px);
+	}
+    100% {
+        -gtk-icon-transform: translate(0px, 2px);
+    }
+}
+.chatstate-icon {
+    animation-name: composing;
+    animation-duration: 2.0s;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+}
+.unread-counter {
+    background-color: rgb(22, 100, 169);
+    color: rgb(242, 242, 242);
+    font-weight: bold;
+    font-size: 80%;
+    padding-left: 6px;
+    padding-right: 6px;
+    border-radius: 10px;
+}
+.unread-counter-silent {
+    background-color: rgb(95, 95, 95);
+}
+.header-box label {
+	padding: 12px 18px 6px 18px;
+	font-weight: bold;
+	color: @insensitive_fg_color;
+	font-size: small;
+}
+.header-box-first label {
+	padding: 0px 18px 6px 18px;
+}
+
+/* Search view */
+.search-view {
+    padding: 12px;
+    border-left: 1px solid @borders;
+    background-color: @theme_base_color;
+}
+.search-view-row-grid textview {
+	background: transparent;
+}
+.search-view-row-grid textview text {
+	background: transparent;
+}
+.search-view-row-grid label {
+    font-size: small;
+}
+.search-view-counter label {
+    font-style: italic;
+    color: @insensitive_fg_color;
+}
+.search-view-header {
+    padding: 12px 6px 6px 6px;
+}
+.search-view-header label {
+    font-size: small;
+    color: @insensitive_fg_color;
+}
+
+.resource-selector list row {
+    padding: 6px;
+    border-bottom: 1px solid @borders;
+}
+
+/*  Profile window */
 #NicknameEntry:disabled {
     font-size: 28px;
     font-weight: bold;
@@ -65,11 +448,37 @@
 #ProfileWindow actionbar button {
    margin-top: 12px;
 }
-
 .profile-scrolled {
-    border: 1px solid;
+    border: 1px solid @borders;
     border-radius: 4px;
+}
+.profile-scrolled-read textview {
+    background: transparent;
+}
+.profile-scrolled-read textview text {
+    background: transparent;
+    color: @theme_text_color;
+}
+
+/* Contact Info Window */
+.stack-border {
+    border: 1px solid;
     border-color: @borders;
+}
+.stack-header {
+    background-color: @insensitive_bg_color;
+    border-width: 0 1px 0 1px;
+    border-style: none solid none solid;
+    border-color: @borders;
+    padding: 9px 9px;
+}
+#ContactNameEntry:disabled {
+    font-size: 24px;
+    font-weight: bold;
+    border: none;
+    padding: 0px 0px 0px 0px;
+    background-color: @insensitive_bg_color;
+    color: @theme_fg_color;
 }
 
 /* Emoticon Popover */
@@ -226,6 +635,20 @@ infobar.error > revealer > box {
 .start-chat-row:not(.activatable) label { color: @insensitive_fg_color; }
 .start-chat-row:focus { outline: none; }
 
+/* ContactFlowBox */
+.contact-flowbox-item {
+    background-color: alpha(@borders, 0.4);
+    border-radius: 12px;
+    padding: 6px;
+}
+.contact-flowbox-item button {
+    background: none;
+    border: 1px solid alpha(@borders, 0.4);
+}
+.contact-flowbox-item button:hover {
+    border: 1px solid @borders;
+}
+
 /* GroupChatRoster */
 .groupchat-roster { border-left: 1px solid;
                     border-color: @borders; }
@@ -239,6 +662,18 @@ infobar.error > revealer > box {
     border-color: @borders;
 }
 #GroupchatConfig treeview { padding: 5px; }
+
+.groupchat-state box {
+    background-color: alpha(rgb(70, 70, 70), 0.9);
+    padding: 12px;
+    border-radius: 6px;
+}
+.groupchat-state box > label {
+    color: rgb(230, 230, 230);
+}
+.groupchat-state box > spinner {
+    color: rgb(230, 230, 230);
+}
 
 /* Popover Treeview */
 .popover_treeview { border-radius: 3px; background-color: @theme_bg_color; }
@@ -430,3 +865,40 @@ popover.combo scrollbar.vertical {
 }
 
 messagedialog.confirmation-dialog > box { margin-top: 18px; }
+
+.conversation-quote {
+    padding-bottom: 6px;
+}
+.conversation-quote textview text,
+.conversation-quote label {
+    color: alpha(@theme_text_color, 0.6);
+}
+.conversation-quote-bar {
+    background-color: alpha(@theme_text_color, 0.2);
+}
+.conversation-more-button {
+    padding-top: 0px;
+    padding-bottom:0px;
+    min-height: 16px;
+    opacity: 0;
+    transition: none;
+    border: none;}
+
+.conversation-more-button:checked {
+    opacity: 1;
+    background-image: none;
+}
+
+.conversation-more-button:active {
+    background-image: none;
+}
+
+.conversation-more-button:hover {
+    border: none;
+    transition: none;
+    -gtk-icon-effect: none;
+    -gtk-icon-shadow: none;
+    background-image: none;
+    text-shadow: none;
+    box-shadow: none;
+}

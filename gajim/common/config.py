@@ -91,7 +91,6 @@ class Config:
         'use_speller': [opt_bool, False, ],
         'show_xhtml': [opt_bool, True, ],
         'speller_language': [opt_str, '', _('Language used for spell checking.')],
-        'print_time': [opt_str, 'always', _('\'always\' - print time for every message.\n\'sometimes\' - print time every print_ichat_every_foo_minutes minute.\n\'never\' - never print time.')],
         'emoticons_theme': [opt_str, 'noto-emoticons', '', True],
         'ascii_formatting': [opt_bool, True,
                 _('Treat * / _ pairs as possible formatting characters.'), True],
@@ -104,39 +103,15 @@ class Config:
         'msgwin-y-position': [opt_int, -1], # Default is to let the window manager decide
         'msgwin-width': [opt_int, 500],
         'msgwin-height': [opt_int, 440],
-        'chat-msgwin-x-position': [opt_int, -1], # Default is to let the window manager decide
-        'chat-msgwin-y-position': [opt_int, -1], # Default is to let the window manager decide
-        'chat-msgwin-width': [opt_int, 480],
-        'chat-msgwin-height': [opt_int, 440],
-        'gc-msgwin-x-position': [opt_int, -1], # Default is to let the window manager decide
-        'gc-msgwin-y-position': [opt_int, -1], # Default is to let the window manager decide
-        'gc-msgwin-width': [opt_int, 600],
-        'gc-msgwin-height': [opt_int, 440],
-        'pm-msgwin-x-position': [opt_int, -1], # Default is to let the window manager decide
-        'pm-msgwin-y-position': [opt_int, -1], # Default is to let the window manager decide
-        'pm-msgwin-width': [opt_int, 480],
-        'pm-msgwin-height': [opt_int, 440],
-        'single-msg-x-position': [opt_int, 0],
-        'single-msg-y-position': [opt_int, 0],
-        'single-msg-width': [opt_int, 400],
-        'single-msg-height': [opt_int, 280],
         'save-roster-position': [opt_bool, True, _('If enabled, Gajim will save the contact list window position when hiding it, and restore it when showing the contact list window again.')],
         'roster_x-position': [opt_int, 0],
         'roster_y-position': [opt_int, 0],
         'roster_width': [opt_int, 200],
         'roster_height': [opt_int, 400],
-        'roster_hpaned_position': [opt_int, 200],
         'roster_on_the_right': [opt_bool, False, _('Place the contact list on the right in single window mode'), True],
-        'history_window_width': [opt_int, -1],
-        'history_window_height': [opt_int, 450],
-        'history_window_x-position': [opt_int, 0],
-        'history_window_y-position': [opt_int, 0],
         'latest_disco_addresses': [opt_str, ''],
         'time_stamp': [opt_str, '%x | %X  ', _('This option lets you customize the timestamp that is printed in conversation. For example \'[%H:%M] \' will show \'[hour:minute] \'. See python doc on strftime for full documentation (https://docs.python.org/3/library/time.html#time.strftime).')],
-        'before_nickname': [opt_str, '', _('Characters that are printed before the nickname in conversations.')],
-        'after_nickname': [opt_str, ':', _('Characters that are printed after the nickname in conversations.')],
         'change_roster_title': [opt_bool, True, _('If enabled, Gajim will add * and [n] in contact list window title.')],
-        'restore_lines': [opt_int, 10, _('Number of messages from chat history to be restored when a chat tab/window is reopened.')],
         'restore_timeout': [opt_int, -1, _('How far back in time (minutes) chat history is restored. -1 means no limit.')],
         'send_on_ctrl_enter': [opt_bool, False, _('Send message on Ctrl+Enter and make a new line with Enter.')],
         'last_roster_visible': [opt_bool, True],
@@ -147,10 +122,9 @@ class Config:
         'always_english_wikipedia': [opt_bool, False],
         'always_english_wiktionary': [opt_bool, True],
         'remote_control': [opt_bool, False, _('If checked, Gajim can be controlled remotely using gajim-remote.'), True],
-        'print_ichat_every_foo_minutes': [opt_int, 5, _('When not printing time for every message (\'print_time\'==sometimes), print it every x minutes.')],
         'confirm_paste_image': [opt_bool, True, _('Ask before pasting an image.')],
         'confirm_close_muc': [opt_bool, True, _('Ask before closing a group chat tab/window.')],
-        'confirm_close_multiple_tabs': [opt_bool, True, _('Ask before closing tabbed chat window if there are chats that can lose data (chat, private chat, group chat that will not be minimized).')],
+        'confirm_close_multiple_tabs': [opt_bool, True, _('Ask before closing tabbed chat window if there are chats that can lose data (chat, private chat).')],
         'notify_on_file_complete': [opt_bool, True],
         'file_transfers_port': [opt_int, 28011],
         'ft_add_hosts_to_send': [opt_str, '', _('List of send hosts (comma separated) in addition to local interfaces for file transfers (in case of address translation/port forwarding).')],
@@ -193,13 +167,10 @@ class Config:
         'hide_chat_banner': [opt_bool, False, _('Hides the banner in a 1:1 chat window.')],
         'hide_groupchat_occupants_list': [opt_bool, False, _('Hides the group chat participants list in a group chat window.')],
         'chat_merge_consecutive_nickname': [opt_bool, False, _('In a chat, show the nickname at the beginning of a line only when it\'s not the same person talking as in the previous message.')],
-        'chat_merge_consecutive_nickname_indent': [opt_str, '  ', _('Indentation when using merge consecutive nickname.')],
         'ctrl_tab_go_to_next_composing': [opt_bool, True, _('Ctrl+Tab switches to the next composing tab when there are no tabs with messages pending.')],
-        'confirm_metacontacts': [opt_str, '', _('Show a confirmation dialog to create metacontacts? Empty string means never show the dialog.')],
         'confirm_block': [opt_str, '', _('Show a confirmation dialog to block a contact? Empty string means never show the dialog.')],
         'enable_negative_priority': [opt_bool, False, _('If enabled, you will be able to set a negative priority to your account in the Accounts window. BE CAREFUL, when you are logged in with a negative priority, you will NOT receive any message from your server.')],
         'show_contacts_number': [opt_bool, True, _('If enabled, Gajim will show both the number of online and total contacts in account rows as well as in group rows.')],
-        'scroll_roster_to_last_message': [opt_bool, True, _('If enabled, Gajim will scroll and select the contact who sent you the last message, if the chat window is not already opened.')],
         'change_status_window_timeout': [opt_int, 15, _('Time of inactivity needed before the change status window closes down.')],
         'max_conversation_lines': [opt_int, 500, _('Maximum number of lines that are printed in conversations. Oldest lines are cleared.')],
         'uri_schemes': [opt_str, 'aaa:// aaas:// acap:// cap:// cid: crid:// data: dav: dict:// dns: fax: file:/ ftp:// geo: go: gopher:// h323: http:// https:// iax: icap:// im: imap:// info: ipp:// iris: iris.beep: iris.xpc: iris.xpcs: iris.lwz: ldap:// mid: modem: msrp:// msrps:// mtqp:// mupdate:// news: nfs:// nntp:// opaquelocktoken: pop:// pres: prospero:// rtsp:// service: sip: sips: sms: snmp:// soap.beep:// soap.beeps:// tag: tel: telnet:// tftp:// thismessage:/ tip:// tv: urn:// vemmi:// xmlrpc.beep:// xmlrpc.beeps:// z39.50r:// z39.50s:// about: apt: cvs:// daap:// ed2k:// feed: fish:// git:// iax2: irc:// ircs:// ldaps:// magnet: mms:// rsync:// ssh:// svn:// sftp:// smb:// webcal:// aesgcm://', _('Valid URI schemes. Only schemes in this list will be accepted as \'real\' URI (mailto and xmpp are handled separately).'), True],
@@ -229,7 +200,7 @@ class Config:
         'show_chatstate_in_banner': [opt_bool, True, _('Shows a text in the banner that describes the current chat state of the contact.')],
         'send_chatstate_default': [opt_str, 'composing_only', _('Chat state notifications that are sent to contacts. Possible values: all, composing_only, disabled')],
         'send_chatstate_muc_default': [opt_str, 'composing_only', _('Chat state notifications that are sent to the group chat. Possible values: \'all\', \'composing_only\', \'disabled\'')],
-        'muclumbus_api_jid': [opt_str, 'rodrigo.de.mucobedo@dreckshal.de'],
+        'muclumbus_api_jid': [opt_str, 'api@search.jabber.network'],
         'muclumbus_api_http_uri': [opt_str, 'https://search.jabber.network/api/1.0/search'],
         'muclumbus_api_pref': [opt_str, 'http', _('API Preferences. Possible values: \'http\', \'iq\'')],
         'command_system_execute': [opt_bool, False, _('If enabled, Gajim will execute commands (/show, /sh, /execute, /exec).')],
@@ -341,8 +312,6 @@ class Config:
             'notify_on_all_messages': [opt_bool, False, _('If enabled, a notification is created for every message in this group chat.')],
             'print_status': [opt_bool, False, _('Show a status message for all status changes (away, dnd, etc.) of users in a group chat.')],
             'print_join_left': [opt_bool, False, _('Show a status message for every join or leave in a group chat.')],
-            'minimize_on_autojoin': [opt_bool, True, _('If enabled, the group chat is minimized into the contact list when joining automatically.')],
-            'minimize_on_close': [opt_bool, True, _('If enabled, the group chat is minimized into the contact list when closing it.')],
             'send_chatstate': [opt_str, 'composing_only', _('Chat state notifications that are sent to the group chat. Possible values: \'all\', \'composing_only\' or \'disabled\'.')],
         }, {}),
         'plugins': ({
@@ -379,13 +348,13 @@ class Config:
     def foreach(self, cb, data=None):
         for opt in self.__options[1]:
             cb(data, opt, None, self.__options[1][opt])
-        for opt in self.__options_per_key:
+        for opt, value in self.__options_per_key.items():
             cb(data, opt, None, None)
-            dict_ = self.__options_per_key[opt][1]
-            for opt2 in dict_.keys():
+            dict_2 = value[1]
+            for opt2, dict_3 in dict_2.items():
                 cb(data, opt2, [opt], None)
-                for opt3 in dict_[opt2]:
-                    cb(data, opt3, [opt, opt2], dict_[opt2][opt3])
+                for opt3, v in dict_3.items():
+                    cb(data, opt3, [opt, opt2], v)
 
     def get_children(self, node=None):
         """
@@ -636,8 +605,7 @@ class Config:
         #init default values
         self._init_options()
         self.save_timeout_id = None
-        for event in self.soundevents_default:
-            default = self.soundevents_default[event]
+        for event, default in self.soundevents_default.items():
             self.add_per('soundevents', event)
             self.set_per('soundevents', event, 'enabled', default[0])
             self.set_per('soundevents', event, 'path', default[1])

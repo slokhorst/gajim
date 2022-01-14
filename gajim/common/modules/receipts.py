@@ -20,7 +20,7 @@ from nbxmpp.namespaces import Namespace
 from nbxmpp.modules.receipts import build_receipt
 
 from gajim.common import app
-from gajim.common.nec import NetworkEvent
+from gajim.common.events import ReceiptReceived
 from gajim.common.modules.base import BaseModule
 
 
@@ -65,8 +65,7 @@ class Receipts(BaseModule):
                 if not properties.is_encrypted:
                     return
 
-            contact = self._get_contact(properties)
-            if contact is None:
+            if not self._should_answer(properties):
                 return
             self._log.info('Send receipt: %s', properties.jid)
             self._con.connection.send(build_receipt(stanza))
@@ -87,26 +86,19 @@ class Receipts(BaseModule):
                 properties.receipt.id,
                 'received')
 
-            app.nec.push_incoming_event(
-                NetworkEvent('receipt-received',
-                             account=self._account,
-                             jid=jid,
-                             receipt_id=properties.receipt.id))
+            app.ged.raise_event(
+                ReceiptReceived(
+                    account=self._account,
+                    jid=jid,
+                    receipt_id=properties.receipt.id))
 
             raise nbxmpp.NodeProcessed
 
-    def _get_contact(self, properties):
+    def _should_answer(self, properties):
         if properties.is_muc_pm:
-            return app.contacts.get_gc_contact(self._account,
-                                               properties.jid.bare,
-                                               properties.jid.resource)
+            return True
 
-        contact = app.contacts.get_contact(self._account,
-                                           properties.jid.bare)
-        if contact is not None and contact.sub not in ('to', 'none'):
-            return contact
-        return None
-
-
-def get_instance(*args, **kwargs):
-    return Receipts(*args, **kwargs), 'Receipts'
+        contact = self._get_contact(properties.jid.bare)
+        if contact.subscription not in ('to', 'none'):
+            return True
+        return False

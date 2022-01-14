@@ -25,6 +25,15 @@ Setting = namedtuple('Setting', 'kind label type value name callback data desc '
                                 'bind inverted enabled_func props')
 Setting.__new__.__defaults__ = (None,) * len(Setting._fields)  # type: ignore
 
+
+DEFAULT_WORKSPACE_COLOR = 'rgb(191,15,167)'
+
+# Drag and drop target type URI list (for dropped files)
+TARGET_TYPE_URI_LIST = 80
+
+UNLOAD_CHAT_TIME = 300  # seconds
+
+
 @unique
 class Theme(IntEnum):
     NOT_DARK = 0
@@ -105,11 +114,10 @@ WINDOW_MODULES = {
     'Preferences': 'gajim.gui.preferences',
     'CreateGroupchatWindow': 'gajim.gui.groupchat_creation',
     'StartChatDialog': 'gajim.gui.start_chat',
-    'AddNewContactWindow': 'gajim.gui.add_contact',
+    'AddContact': 'gajim.gui.add_contact',
     'SingleMessageWindow': 'gajim.gui.single_message',
     'Bookmarks': 'gajim.gui.bookmarks',
     'AccountWizard': 'gajim.gui.account_wizard',
-    'HistoryWindow': 'gajim.gui.history',
     'ManageProxies': 'gajim.gui.proxies',
     'ManageSounds': 'gajim.gui.manage_sounds',
     'ServiceDiscoveryWindow': 'gajim.gui.discovery',
@@ -123,12 +131,17 @@ WINDOW_MODULES = {
     'SSLErrorDialog': 'gajim.gui.ssl_error_dialog',
     'Themes': 'gajim.gui.themes',
     'AdvancedConfig': 'gajim.gui.advanced_config',
-    'CertificateDialog': 'gajim.gui.dialogs',
-    'SubscriptionRequest': 'gajim.gui.subscription_request',
+    'CertificateDialog': 'gajim.gui.certificate_dialog',
     'RemoveAccount': 'gajim.gui.remove_account',
     'ChangePassword': 'gajim.gui.change_password',
     'PluginsWindow': 'gajim.plugins.gui',
     'Features': 'gajim.gui.features',
-    'StatusChange': 'gajim.gui.status_change',
     'GroupChatInvitation': 'gajim.gui.groupchat_invitation',
+    'ContactInfo': 'gajim.gui.contact_info',
+    'WorkspaceDialog': 'gajim.gui.workspace_dialog',
+    'RosterItemExchange': 'gajim.gui.roster_item_exchange',
+    'ServiceRegistration': 'gajim.gui.service_registration',
+    'SynchronizeAccounts': 'gajim.gui.synchronize_accounts',
+    'AdhocMUC': 'gajim.gui.adhoc_muc',
+    'PasswordDialog': 'gajim.gui.password_dialog',
 }

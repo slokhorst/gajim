@@ -86,7 +86,7 @@ class IBB(BaseModule):
             file_props.disconnect_cb = None
             file_props.continue_cb = None
             file_props.syn_id = stanza.getID()
-            file_props.fp = open(file_props.file_name, 'wb')
+            file_props.fp = open(file_props.file_name, 'wb')  # pylint: disable=consider-using-with
             self.send_reply(stanza)
 
         elif properties.ibb.type == 'close':
@@ -233,7 +233,3 @@ class IBB(BaseModule):
 
         file_props = task.get_user_data()
         self.send_data(file_props)
-
-
-def get_instance(*args, **kwargs):
-    return IBB(*args, **kwargs), 'IBB'

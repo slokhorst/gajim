@@ -12,138 +12,83 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
 
-from typing import Any
-from typing import Dict  # pylint: disable=unused-import
-from typing import List
-from typing import Tuple
+from __future__ import annotations
 
-import sys
+import typing
+
+import inspect
 import logging
+from pathlib import Path
 from importlib import import_module
-from unittest.mock import MagicMock
 
-from gajim.common.types import ConnectionT
+from nbxmpp.structs import StanzaHandler
+
+from gajim.common.modules.base import BaseModule
+
+if typing.TYPE_CHECKING:
+    from gajim.common.types import Client
+
 
 log = logging.getLogger('gajim.c.m')
 
-ZEROCONF_MODULES = ['iq',
-                    'adhoc_commands',
-                    'receipts',
-                    'discovery',
-                    'chatstates']
-
-MODULES = [
-    'adhoc_commands',
-    'annotations',
-    'bits_of_binary',
-    'blocking',
-    'bookmarks',
-    'caps',
-    'carbons',
-    'chat_markers',
-    'chatstates',
-    'delimiter',
-    'discovery',
-    'entity_time',
-    'gateway',
-    'httpupload',
-    'http_auth',
-    'iq',
-    'last_activity',
-    'mam',
-    'message',
-    'metacontacts',
-    'muc',
-    'pep',
-    'ping',
-    'presence',
-    'pubsub',
-    'receipts',
-    'register',
-    'roster',
-    'roster_item_exchange',
-    'search',
-    'security_labels',
-    'software_version',
-    'user_activity',
-    'user_avatar',
-    'user_location',
-    'user_mood',
-    'user_nickname',
-    'user_tune',
-    'vcard4',
-    'vcard_avatars',
-    'vcard_temp',
-    'announce',
-    'ibb',
-    'jingle',
-    'bytestream',
-]
-
-_imported_modules = []  # type: List[tuple]
-_modules = {}  # type: Dict[str, Dict[str, Any]]
+_modules: dict[str, dict[str, BaseModule]] = {}
 _store_publish_modules = [
-    'UserMood',
-    'UserActivity',
     'UserLocation',
     'UserTune',
-]  # type: List[str]
+]
 
 
-class ModuleMock:
-    def __init__(self, name: str) -> None:
-        self._name = name
-
-        # HTTPUpload, ..
-        self.available = False
-
-        # Blocking
-        self.blocked = []  # type: List[Any]
-
-        # Delimiter
-        self.delimiter = '::'
-
-        # Bookmarks
-        self.bookmarks = {}  # type: Dict[Any, Any]
-
-        # Various Modules
-        self.supported = False
-
-    def __getattr__(self, key: str) -> MagicMock:
-        return MagicMock()
-
-
-def register_modules(con: ConnectionT, *args: Any, **kwargs: Any) -> None:
-    if con in _modules:
+def register_modules(client: Client) -> None:
+    if client in _modules:
         return
-    _modules[con.name] = {}
-    for module_name in MODULES:
-        if con.name == 'Local':
-            if module_name not in ZEROCONF_MODULES:
+
+    _modules[client.account] = {}
+
+    path = Path(__file__).parent
+    for module in path.iterdir():
+        if module.suffix not in ['.py', '.pyc']:
+            continue
+
+        if module.name.startswith('__'):
+            continue
+
+        name = module.stem
+        module = import_module('.%s' % name, package='gajim.common.modules')
+        for _, base_class in inspect.getmembers(module, inspect.isclass):
+
+            if base_class is BaseModule:
                 continue
-        instance, name = _load_module(module_name, con, *args, **kwargs)
-        _modules[con.name][name] = instance
+
+            if BaseModule not in inspect.getmro(base_class):
+                continue
+
+            instance = base_class.get_instance(client)
+            module_name = base_class.__name__
+            _modules[client.account][module_name] = instance
 
 
-def register_single_module(con: ConnectionT, instance: Any, name: str) -> None:
-    if con.name not in _modules:
-        raise ValueError('Unknown account name: %s' % con.name)
-    _modules[con.name][name] = instance
+def register_single_module(client: Client,
+                           instance: BaseModule,
+                           name: str) -> None:
+
+    if client.account not in _modules:
+        raise ValueError('Unknown account name: %s' % client.account)
+    _modules[client.account][name] = instance
 
 
-def unregister_modules(con: ConnectionT) -> None:
-    for instance in _modules[con.name].values():
+def unregister_modules(client: Client) -> None:
+    for instance in _modules[client.account].values():
         if hasattr(instance, 'cleanup'):
             instance.cleanup()
-    del _modules[con.name]
+    del _modules[client.account]
 
 
-def unregister_single_module(con: ConnectionT, name: str) -> None:
-    if con.name not in _modules:
+def unregister_single_module(client: Client, name: str) -> None:
+    if client.account not in _modules:
         return
-    if name not in _modules[con.name]:
+    if name not in _modules[client.account]:
         return
-    del _modules[con.name][name]
+    del _modules[client.account][name]
 
 
 def send_stored_publish(account: str) -> None:
@@ -151,24 +96,12 @@ def send_stored_publish(account: str) -> None:
         _modules[account][name].send_stored_publish()
 
 
-def get(account: str, name: str) -> Any:
-    try:
-        return _modules[account][name]
-    except KeyError:
-        return ModuleMock(name)
+def get(account: str, name: str) -> BaseModule:
+    return _modules[account][name]
 
 
-def _load_module(name: str, con: ConnectionT, *args: Any, **kwargs: Any) -> Any:
-    if name not in MODULES:
-        raise ValueError('Module %s does not exist' % name)
-    module = sys.modules.get(name)
-    if module is None:
-        module = import_module('.%s' % name, package='gajim.common.modules')
-    return module.get_instance(con, *args, **kwargs)  # type: ignore
-
-
-def get_handlers(con: ConnectionT) -> List[Tuple[Any, ...]]:
-    handlers = []  # type: List[Tuple[Any, ...]]
-    for module in _modules[con.name].values():
+def get_handlers(client: Client) -> list[StanzaHandler]:
+    handlers: list[StanzaHandler] = []
+    for module in _modules[client.account].values():
         handlers += module.handlers
     return handlers

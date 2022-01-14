@@ -12,6 +12,10 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
+from typing import Any
+
 import sys
 import locale
 import logging
@@ -23,6 +27,7 @@ from gi.repository import Pango
 from gi.repository import GObject
 
 from gajim.common import app
+from gajim.common import ged
 from gajim.common import passwords
 from gajim.common.i18n import _
 from gajim.common.i18n import Q_
@@ -41,7 +46,7 @@ log = logging.getLogger('gajim.gui.accounts')
 
 
 class AccountsWindow(Gtk.ApplicationWindow):
-    def __init__(self):
+    def __init__(self) -> None:
         Gtk.ApplicationWindow.__init__(self)
         self.set_application(app.app)
         self.set_position(Gtk.WindowPosition.CENTER)
@@ -73,7 +78,10 @@ class AccountsWindow(Gtk.ApplicationWindow):
 
         self.show_all()
 
-    def _on_menu_activated(self, _listbox, account, name):
+    def _on_menu_activated(self,
+                           _listbox: Gtk.ListBox,
+                           account: str,
+                           name: str) -> None:
         if name == 'back':
             self._settings.set_page('add-account')
             self._check_relogin()
@@ -82,31 +90,33 @@ class AccountsWindow(Gtk.ApplicationWindow):
         else:
             self._settings.set_page(name)
 
-    def _on_key_press(self, _widget, event):
+    def _on_key_press(self,
+                      _widget: AccountsWindow,
+                      event: Gdk.EventKey) -> None:
         if event.keyval == Gdk.KEY_Escape:
             self.destroy()
 
-    def _on_destroy(self, *args):
+    def _on_destroy(self, _widget: AccountsWindow) -> None:
         self._check_relogin()
 
-    def update_account_label(self, account):
+    def update_account_label(self, account: str) -> None:
         self._accounts[account].update_account_label()
 
-    def update_proxy_list(self):
+    def update_proxy_list(self) -> None:
         for account in self._accounts:
             self._settings.update_proxy_list(account)
 
-    def _check_relogin(self):
-        for account in self._need_relogin:
+    def _check_relogin(self) -> None:
+        for account, r_settings in self._need_relogin.items():
             settings = self._get_relogin_settings(account)
             active = app.settings.get_account_setting(account, 'active')
-            if settings != self._need_relogin[account]:
+            if settings != r_settings:
                 self._need_relogin[account] = settings
                 if active:
                     self._relog(account)
                 break
 
-    def _relog(self, account):
+    def _relog(self, account: str) -> None:
         if not app.account_is_connected(account):
             return
 
@@ -131,7 +141,7 @@ class AccountsWindow(Gtk.ApplicationWindow):
             transient_for=self).show()
 
     @staticmethod
-    def _get_relogin_settings(account):
+    def _get_relogin_settings(account: str) -> list[Any]:
         if account == app.ZEROCONF_ACC_NAME:
             settings = ['zeroconf_first_name', 'zeroconf_last_name',
                         'zeroconf_jabber_id', 'zeroconf_email']
@@ -139,41 +149,37 @@ class AccountsWindow(Gtk.ApplicationWindow):
             settings = ['client_cert', 'proxy', 'resource',
                         'use_custom_host', 'custom_host', 'custom_port']
 
-        values = []
+        values: list[Any] = []
         for setting in settings:
             values.append(app.settings.get_account_setting(account, setting))
         return values
 
     @staticmethod
-    def on_remove_account(account):
-        if app.events.get_events(account):
-            app.interface.raise_dialog('unread-events-on-remove-account')
-            return
-
+    def on_remove_account(account: str) -> None:
         if app.settings.get_account_setting(account, 'is_zeroconf'):
             # Should never happen as button is insensitive
             return
 
         open_window('RemoveAccount', account=account)
 
-    def remove_account(self, account):
+    def remove_account(self, account: str) -> None:
         del self._need_relogin[account]
         self._accounts[account].remove()
 
-    def add_account(self, account, initial=False):
+    def add_account(self, account: str, initial: bool = False) -> None:
         self._need_relogin[account] = self._get_relogin_settings(account)
         self._accounts[account] = Account(account, self._menu, self._settings)
         if not initial:
             self._accounts[account].show()
 
-    def select_account(self, account):
+    def select_account(self, account: str) -> None:
         try:
             self._accounts[account].select()
         except KeyError:
             log.warning('select_account() failed, account %s not found',
                         account)
 
-    def enable_account(self, account, state):
+    def enable_account(self, account: str, state: bool) -> None:
         self._accounts[account].enable_account(state)
 
 
@@ -535,9 +541,19 @@ class AccountRow(Gtk.ListBoxRow):
         self._switch_state_label.set_text(text)
 
     def _on_enable_switch(self, switch, state, account):
-        def _disable():
-            app.connections[account].change_status('offline', 'offline')
+        def _on_disconnect(event):
+            if event.account != account:
+                return
+            app.ged.remove_event_handler('account-disconnected',
+                                         ged.CORE,
+                                         _on_disconnect)
             app.interface.disable_account(account)
+
+        def _disable():
+            app.ged.register_event_handler('account-disconnected',
+                                           ged.CORE,
+                                           _on_disconnect)
+            app.connections[account].change_status('offline', 'offline')
             switch.set_state(state)
             self._set_label(state)
 
@@ -634,7 +650,10 @@ class GeneralPage(GenericSettingPage):
                     SettingType.ACCOUNT_CONFIG, 'account_color',
                     desc=_('Recognize your account by color')),
 
-            Setting(SettingKind.LOGIN, _('Login'), SettingType.DIALOG,
+            Setting(SettingKind.LOGIN,
+                    _('Login'),
+                    SettingType.DIALOG,
+                    desc=_('Change your account’s password, etc.'),
                     bind='account::anonymous_auth',
                     inverted=True,
                     props={'dialog': LoginDialog}),
@@ -712,6 +731,11 @@ class PrivacyPage(GenericSettingPage):
                     desc=_('Disclose information about the client '
                            'and operating system you currently use')),
 
+            Setting(SettingKind.SWITCH, _('Media Playback'),
+                    SettingType.ACCOUNT_CONFIG, 'publish_tune',
+                    desc=_('Disclose information about media that is '
+                           'currently being played on your system.')),
+
             Setting(SettingKind.SWITCH, _('Ignore Unknown Contacts'),
                     SettingType.ACCOUNT_CONFIG, 'ignore_unknown_contacts',
                     desc=_('Ignore everything from contacts not in your '
@@ -788,7 +812,7 @@ class PrivacyPage(GenericSettingPage):
         app.settings.set_contact_settings('send_marker', None)
         app.settings.set_group_chat_settings(
             'send_marker', None, context='private')
-        for ctrl in app.interface.msg_win_mgr.get_controls(acct=self._account):
+        for ctrl in app.window.get_controls(account=self._account):
             ctrl.update_actions()
 
 
@@ -825,7 +849,7 @@ class ConnectionPage(GenericSettingPage):
                     'confirm_unencrypted_connection',
                     desc=_('Show a confirmation dialog before connecting '
                            'unencrypted')),
-            ]
+        ]
         GenericSettingPage.__init__(self, account, settings)
 
     @staticmethod
@@ -849,8 +873,7 @@ class AdvancedPage(GenericSettingPage):
         settings = [
             Setting(SettingKind.SWITCH, _('Contact Information'),
                     SettingType.ACCOUNT_CONFIG, 'request_user_data',
-                    desc=_('Request contact information '
-                           '(Mood, Activity, Tune, Location)')),
+                    desc=_('Request contact information (Tune, Location)')),
 
             Setting(SettingKind.SWITCH, _('Accept all Contact Requests'),
                     SettingType.ACCOUNT_CONFIG, 'autoauth',
@@ -861,8 +884,12 @@ class AdvancedPage(GenericSettingPage):
                     props={'entries': {'httpupload': _('Upload Files'),
                                        'jingle': _('Send Files Directly')}},
                     desc=_('Preferred file transfer mechanism for '
-                           'file drag&drop on a chat window'))
-            ]
+                           'file drag&drop on a chat window')),
+            Setting(SettingKind.SWITCH, _('Security Labels'),
+                    SettingType.ACCOUNT_CONFIG, 'enable_security_labels',
+                    desc=_('Show labels describing confidentiality of '
+                           'messages, if the server supports XEP-0258'))
+        ]
         GenericSettingPage.__init__(self, account, settings)
 
 
@@ -889,7 +916,7 @@ class ZeroConfPage(GenericSettingPage):
             Setting(SettingKind.SWITCH, _('Global Status'),
                     SettingType.ACCOUNT_CONFIG, 'sync_with_global_status',
                     desc=_('Synchronize the status of all accounts')),
-            ]
+        ]
 
         GenericSettingPage.__init__(self, account, settings)
 
@@ -909,7 +936,7 @@ class ZeroconfProfileDialog(SettingsDialog):
 
             Setting(SettingKind.ENTRY, _('Email'),
                     SettingType.ACCOUNT_CONFIG, 'zeroconf_email'),
-            ]
+        ]
 
         SettingsDialog.__init__(self, parent, _('Profile'),
                                 Gtk.DialogFlags.MODAL, settings, account)
@@ -935,7 +962,7 @@ class PriorityDialog(SettingsDialog):
                     bind='account::adjust_priority_with_status',
                     inverted=True,
                     props={'range_': range_}),
-            ]
+        ]
 
         SettingsDialog.__init__(self, parent, _('Priority'),
                                 Gtk.DialogFlags.MODAL, settings, account)
@@ -965,15 +992,16 @@ class CutstomHostnameDialog(SettingsDialog):
                     SettingType.ACCOUNT_CONFIG, 'custom_host',
                     bind='account::use_custom_host'),
 
-            Setting(SettingKind.ENTRY, _('Port'),
+            Setting(SettingKind.SPIN, _('Port'),
                     SettingType.ACCOUNT_CONFIG, 'custom_port',
-                    bind='account::use_custom_host'),
+                    bind='account::use_custom_host',
+                    props={'range_': (0, 65535)},),
 
             Setting(SettingKind.COMBO, _('Type'),
                     SettingType.ACCOUNT_CONFIG, 'custom_type',
                     bind='account::use_custom_host',
                     props={'combo_items': type_values}),
-            ]
+        ]
 
         SettingsDialog.__init__(self, parent, _('Connection Settings'),
                                 Gtk.DialogFlags.MODAL, settings, account)
@@ -989,7 +1017,7 @@ class CertificateDialog(SettingsDialog):
 
             Setting(SettingKind.SWITCH, _('Encrypted Certificate'),
                     SettingType.ACCOUNT_CONFIG, 'client_cert_encrypted'),
-            ]
+        ]
 
         SettingsDialog.__init__(self, parent, _('Certificate Settings'),
                                 Gtk.DialogFlags.MODAL, settings, account)
@@ -1004,7 +1032,8 @@ class LoginDialog(SettingsDialog):
                     bind='account::savepass'),
 
             Setting(SettingKind.SWITCH, _('Save Password'),
-                    SettingType.ACCOUNT_CONFIG, 'savepass'),
+                    SettingType.ACCOUNT_CONFIG, 'savepass',
+                    enabled_func=lambda: not app.settings.get('use_keyring') or passwords.KEYRING_AVAILABLE),
 
             Setting(SettingKind.CHANGEPASSWORD, _('Change Password'),
                     SettingType.DIALOG, callback=self.on_password_change,
@@ -1012,7 +1041,7 @@ class LoginDialog(SettingsDialog):
 
             Setting(SettingKind.SWITCH, _('Use GSSAPI'),
                     SettingType.ACCOUNT_CONFIG, 'enable_gssapi'),
-            ]
+        ]
 
         SettingsDialog.__init__(self, parent, _('Login Settings'),
                                 Gtk.DialogFlags.MODAL, settings, account)

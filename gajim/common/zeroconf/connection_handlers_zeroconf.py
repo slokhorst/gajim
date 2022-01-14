@@ -24,9 +24,7 @@ import logging
 
 from gajim.common import app
 
-from gajim.common import connection_handlers
 from gajim.common.helpers import AdditionalDataDict
-from gajim.common.nec import NetworkEvent
 from gajim.common.modules.util import get_eme_message
 from gajim.common.modules.misc import parse_correction
 from gajim.common.modules.misc import parse_oob
@@ -36,10 +34,10 @@ from gajim.common.modules.misc import parse_xhtml
 log = logging.getLogger('gajim.c.z.connection_handlers_zeroconf')
 
 
-class ConnectionHandlersZeroconf(connection_handlers.ConnectionHandlersBase):
-    def __init__(self):
-        connection_handlers.ConnectionHandlersBase.__init__(self)
+class NetworkEvent:
+    pass
 
+class ConnectionHandlersZeroconf:
     def _messageCB(self, con, stanza, properties):
         """
         Called when we receive a message
@@ -51,7 +49,7 @@ class ConnectionHandlersZeroconf(connection_handlers.ConnectionHandlersBase):
         # Don’t trust from attr set by sender
         stanza.setFrom(con._owner.to)
 
-        app.nec.push_incoming_event(NetworkEvent(
+        app.ged.raise_event(NetworkEvent(
             'raw-message-received',
             conn=self,
             stanza=stanza,
@@ -108,7 +106,7 @@ class ConnectionHandlersZeroconf(connection_handlers.ConnectionHandlersBase):
             'properties': properties,
         }
 
-        app.nec.push_incoming_event(
+        app.ged.raise_event(
             NetworkEvent('decrypted-message-received', **event_attr))
 
     def _message_error_received(self, _con, _stanza, properties):
@@ -119,7 +117,7 @@ class ConnectionHandlersZeroconf(connection_handlers.ConnectionHandlersBase):
                                      properties.id,
                                      properties.error)
 
-        app.nec.push_incoming_event(
+        app.ged.raise_event(
             NetworkEvent('message-error',
                          account=self.name,
                          jid=properties.jid,

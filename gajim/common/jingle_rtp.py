@@ -39,7 +39,6 @@ from gajim.common.jingle_transport import JingleTransportICEUDP
 from gajim.common.jingle_content import contents
 from gajim.common.jingle_content import JingleContent
 from gajim.common.jingle_content import JingleContentSetupException
-from gajim.common.connection_handlers_events import InformationEvent
 from gajim.common.jingle_session import FailedApplication
 
 
@@ -124,19 +123,10 @@ class JingleRTPContent(JingleContent):
         try:
             gst_bin = Gst.parse_bin_from_description(pipeline, True)
             return gst_bin
-        except GLib.GError as err:
-            app.nec.push_incoming_event(
-                InformationEvent(
-                    None,
-                    conn=self.session.connection,
-                    level='error',
-                    pri_txt=_('%s configuration error') % text,
-                    sec_txt=_('Couldn’t set up %(text)s. Check your '
-                              'configuration.\nPipeline:\n%(pipeline)s\n'
-                              'Error:\n%(error)s') % {
-                                  'text': text,
-                                  'pipeline': pipeline,
-                                  'error': str(err)}))
+        except GLib.Error as err:
+            log.error('Couldn’t set up %s. Check your '
+                      'configuration. Pipeline: %s'
+                      'Error: %s', text, pipeline, err)
             raise JingleContentSetupException
 
     def add_remote_candidates(self, candidates):
@@ -165,12 +155,13 @@ class JingleRTPContent(JingleContent):
         else:
             self._dtmf_running = False
 
-    def start_dtmf(self, event):
-        if event in ('*', '#'):
-            event = {'*': Farstream.DTMFEvent.STAR,
-                     '#': Farstream.DTMFEvent.POUND}[event]
+    def start_dtmf(self, key: str) -> None:
+        if key == 'star':
+            event = Farstream.DTMFEvent.STAR
+        elif key == 'pound':
+            event = Farstream.DTMFEvent.POUND
         else:
-            event = int(event)
+            event = int(key)
         self.p2psession.start_telephony_event(event, 2)
 
     def stop_dtmf(self):
@@ -235,6 +226,7 @@ class JingleRTPContent(JingleContent):
                 log.error('Farstream error #%d!\nMessage: %s',
                           message.get_structure().get_value('error-no'),
                           message.get_structure().get_value('error-msg'))
+
         elif message.type == Gst.MessageType.ERROR:
             # TODO: Fix it to fallback to videotestsrc anytime an error occur,
             # or raise an error, Jingle way
@@ -243,12 +235,6 @@ class JingleRTPContent(JingleContent):
             debug_msg = message.get_structure().get_value('debug')
             log.error(gerror_msg)
             log.error(debug_msg)
-            if not self.stream_failed_once:
-                app.nec.push_incoming_event(
-                    InformationEvent(
-                        None, dialog_name='gstreamer-error',
-                        kwargs={'error': gerror_msg, 'debug': debug_msg}))
-
             sink_pad = self.p2psession.get_property('sink-pad')
 
             # Remove old source
@@ -358,13 +344,13 @@ class JingleAudio(JingleRTPContent):
         JingleRTPContent.__init__(self, session, 'audio', transport)
         self.setup_stream()
 
-    def set_mic_volume(self, vol):
+    def set_mic_volume(self, vol: float) -> None:
         """
         vol must be between 0 and 1
         """
         self.mic_volume.set_property('volume', vol)
 
-    def set_out_volume(self, vol):
+    def set_out_volume(self, vol: float) -> None:
         """
         vol must be between 0 and 1
         """
@@ -412,12 +398,19 @@ class JingleAudio(JingleRTPContent):
         # TODO: Add queues?
         self.src_bin = self.make_bin_from_config(
             'audio_input_device',
-            '%s ! audioconvert',
+            '''%s
+            ! webrtcdsp
+                echo-suppression-level=high
+                noise-suppression-level=very-high
+                voice-detection=true
+            ! audioconvert ''',
             _('audio input'))
 
+        # setting name=webrtcechoprobe0 is needed because lingering probes
+        # cause a bug in subsequent calls
         self.sink = self.make_bin_from_config(
             'audio_output_device',
-            'audioconvert ! volume name=gajim_out_vol ! %s',
+            'audioconvert ! volume name=gajim_out_vol ! webrtcechoprobe name=webrtcechoprobe0 ! %s',
             _('audio output'))
 
         self.mic_volume = self.src_bin.get_by_name('gajim_vol')

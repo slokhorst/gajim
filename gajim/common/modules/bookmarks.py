@@ -16,21 +16,23 @@
 
 from typing import Any
 from typing import List
-from typing import Dict
 from typing import Set
 from typing import Tuple
 from typing import Union
 from typing import Optional
+from typing import cast
 
 import functools
 
 from nbxmpp.namespaces import Namespace
 from nbxmpp.protocol import JID
 from nbxmpp.structs import BookmarkData
+from nbxmpp.task import Task
 from gi.repository import GLib
 
 from gajim.common import app
-from gajim.common.nec import NetworkEvent
+from gajim.common.events import BookmarksReceived
+from gajim.common.types import BookmarksDict
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import event_node
 
@@ -47,8 +49,8 @@ class Bookmarks(BaseModule):
         self._compat = False
         self._compat_pep = False
         self._node_max = False
-        self._bookmarks = {}
-        self._join_timeouts = []
+        self._bookmarks: BookmarksDict = {}
+        self._join_timeouts: List[int] = []
         self._request_in_progress = True
 
     @property
@@ -65,7 +67,7 @@ class Bookmarks(BaseModule):
 
     @property
     def bookmarks(self) -> List[BookmarkData]:
-        return self._bookmarks.values()
+        return list(self._bookmarks.values())
 
     @property
     def pep_bookmarks_used(self) -> bool:
@@ -97,8 +99,8 @@ class Bookmarks(BaseModule):
         old_bookmarks = self._bookmarks.copy()
         self._bookmarks = bookmarks
         self._act_on_changed_bookmarks(old_bookmarks)
-        app.nec.push_incoming_event(
-            NetworkEvent('bookmarks-received', account=self._account))
+        app.ged.raise_event(
+            BookmarksReceived(account=self._account))
 
     @event_node(Namespace.BOOKMARKS_1)
     def _bookmark_1_event_received(self, _con, _stanza, properties):
@@ -125,15 +127,15 @@ class Bookmarks(BaseModule):
             self._log.info('Retract: %s', jid)
             bookmark = self._bookmarks.get(jid)
             if bookmark is not None:
-                self._bookmarks.pop(bookmark, None)
+                self._bookmarks.pop(jid, None)
 
         else:
-            new_bookmark = properties.pubsub_event.data
-            self._bookmarks[new_bookmark.jid] = properties.pubsub_event.data
+            new_bookmark: BookmarkData = properties.pubsub_event.data
+            self._bookmarks[new_bookmark.jid] = new_bookmark
 
         self._act_on_changed_bookmarks(old_bookmarks)
-        app.nec.push_incoming_event(
-            NetworkEvent('bookmarks-received', account=self._account))
+        app.ged.raise_event(
+            BookmarksReceived(account=self._account))
 
     def pass_disco(self, info):
         self._node_max = NODE_MAX_NS in info.features
@@ -156,20 +158,19 @@ class Bookmarks(BaseModule):
             return 'PEPBookmarks'
         return 'PrivateBookmarks'
 
-    def _act_on_changed_bookmarks(
-            self, old_bookmarks: Dict[str, BookmarkData]) -> None:
-
+    def _act_on_changed_bookmarks(self,
+                                  current_bookmarks: BookmarksDict) -> None:
         new_bookmarks = self._convert_to_set(self._bookmarks)
-        old_bookmarks = self._convert_to_set(old_bookmarks)
+        old_bookmarks = self._convert_to_set(current_bookmarks)
         changed = new_bookmarks - old_bookmarks
         if not changed:
             return
 
         join = [jid for jid, autojoin in changed if autojoin]
-        bookmarks = []
+        bookmarks: List[BookmarkData] = []
         for jid in join:
             self._log.info('Schedule autojoin in 10s for: %s', jid)
-            bookmarks.append(self._bookmarks.get(jid))
+            bookmarks.append(cast(BookmarkData, self._bookmarks.get(jid)))
         # If another client creates a MUC, the MUC is locked until the
         # configuration is finished. Give the user some time to finish
         # the configuration.
@@ -181,26 +182,25 @@ class Bookmarks(BaseModule):
         # leave = [jid for jid, autojoin in changed if not autojoin]
 
     @staticmethod
-    def _convert_to_set(
-            bookmarks: Dict[str, BookmarkData]) -> Set[Tuple[str, bool]]:
-
-        set_ = set()
+    def _convert_to_set(bookmarks: BookmarksDict) -> Set[Tuple[JID, bool]]:
+        set_: Set[Tuple[JID, bool]] = set()
         for jid, bookmark in bookmarks.items():
             set_.add((jid, bookmark.autojoin))
         return set_
 
     @staticmethod
-    def _convert_to_dict(bookmarks: List) -> Dict[str, BookmarkData]:
-        _dict = {}  # type: Dict[str, BookmarkData]
-        if bookmarks is None:
+    def _convert_to_dict(
+            bookmarks: Optional[List[BookmarkData]]) -> BookmarksDict:
+        _dict: BookmarksDict = {}
+        if not bookmarks:
             return _dict
 
         for bookmark in bookmarks:
             _dict[bookmark.jid] = bookmark
         return _dict
 
-    def get_bookmark(self, jid: Union[str, JID]) -> BookmarkData:
-        return self._bookmarks.get(jid)
+    def get_bookmark(self, jid: Union[str, JID]) -> Optional[BookmarkData]:
+        return self._bookmarks.get(cast(JID, jid))
 
     def request_bookmarks(self) -> None:
         if not app.account_is_available(self._account):
@@ -210,72 +210,42 @@ class Bookmarks(BaseModule):
         self._nbxmpp(self._bookmark_module()).request_bookmarks(
             callback=self._bookmarks_received)
 
-    def _bookmarks_received(self, task: Any) -> None:
+    def _bookmarks_received(self, task: Task) -> None:
         try:
-            bookmarks = task.finish()
+            bookmarks: List[BookmarkData] = task.finish()
         except Exception as error:
             self._log.warning(error)
-            bookmarks = None
+            bookmarks = []
 
         self._request_in_progress = False
         self._bookmarks = self._convert_to_dict(bookmarks)
-        self.auto_join_bookmarks()
-        app.nec.push_incoming_event(
-            NetworkEvent('bookmarks-received', account=self._account))
+        self.auto_join_bookmarks(self.bookmarks)
+        app.ged.raise_event(
+            BookmarksReceived(account=self._account))
 
-    def store_difference(self, bookmarks: List) -> None:
-        if self.nativ_bookmarks_used:
-            retract, add_or_modify = self._determine_changed_bookmarks(
-                bookmarks, self._bookmarks)
-
-            for bookmark in retract:
-                self.remove(bookmark.jid)
-
-            if add_or_modify:
-                self.store_bookmarks(add_or_modify)
-            self._bookmarks = self._convert_to_dict(bookmarks)
-
-        else:
-            self._bookmarks = self._convert_to_dict(bookmarks)
-            self.store_bookmarks()
-
-    def store_bookmarks(self, bookmarks: list = None) -> None:
+    def store_bookmarks(self, bookmarks: List[BookmarkData]) -> None:
         if not app.account_is_available(self._account):
             return
 
-        if bookmarks is None or not self.nativ_bookmarks_used:
-            bookmarks = self._bookmarks.values()
+        if not self.nativ_bookmarks_used:
+            bookmarks = self.bookmarks
 
         self._nbxmpp(self._bookmark_module()).store_bookmarks(bookmarks)
 
-        app.nec.push_incoming_event(
-            NetworkEvent('bookmarks-received', account=self._account))
+        app.ged.raise_event(
+            BookmarksReceived(account=self._account))
 
-    def _join_with_timeout(self, bookmarks: List[Any]) -> None:
+    def _join_with_timeout(self, bookmarks: List[BookmarkData]) -> None:
         self._join_timeouts.pop(0)
         self.auto_join_bookmarks(bookmarks)
 
-    def auto_join_bookmarks(self,
-                            bookmarks: Optional[List[Any]] = None) -> None:
-        if bookmarks is None:
-            bookmarks = self._bookmarks.values()
-
+    def auto_join_bookmarks(self, bookmarks: List[BookmarkData]) -> None:
         for bookmark in bookmarks:
             if bookmark.autojoin:
-                # Only join non-opened groupchats. Opened one are already
-                # auto-joined on re-connection
-                if bookmark.jid not in app.gc_connected[self._account]:
-                    # we are not already connected
-                    self._log.info('Autojoin Bookmark: %s', bookmark.jid)
-                    minimize = app.settings.get_group_chat_setting(
-                        self._account,
-                        bookmark.jid,
-                        'minimize_on_autojoin')
-                    app.interface.join_groupchat(self._account,
-                                                 str(bookmark.jid),
-                                                 minimized=minimize)
+                self._log.info('Autojoin Bookmark: %s', bookmark.jid)
+                self._con.get_module('MUC').join(bookmark.jid)
 
-    def modify(self, jid: str, **kwargs: Dict[str, str]) -> None:
+    def modify(self, jid: JID, **kwargs: Any) -> None:
         bookmark = self._bookmarks.get(jid)
         if bookmark is None:
             return
@@ -289,7 +259,7 @@ class Bookmarks(BaseModule):
 
         self.store_bookmarks([new_bookmark])
 
-    def add_or_modify(self, jid: str, **kwargs: Dict[str, str]) -> None:
+    def add_or_modify(self, jid: JID, **kwargs: Any) -> None:
         bookmark = self._bookmarks.get(jid)
         if bookmark is not None:
             self.modify(jid, **kwargs)
@@ -307,38 +277,17 @@ class Bookmarks(BaseModule):
             return
         if publish:
             if self.nativ_bookmarks_used:
-                self._nbxmpp('NativeBookmarks').retract_bookmark(str(jid))
+                self._nbxmpp('NativeBookmarks').retract_bookmark(jid)
             else:
-                self.store_bookmarks()
+                self.store_bookmarks(self.bookmarks)
 
-    @staticmethod
-    def _determine_changed_bookmarks(
-            new_bookmarks: List[BookmarkData],
-            old_bookmarks: Dict[str, BookmarkData]) -> Tuple[
-                List[BookmarkData], List[BookmarkData]]:
-
-        new_jids = [bookmark.jid for bookmark in new_bookmarks]
-        new_bookmarks = set(new_bookmarks)
-        old_bookmarks = set(old_bookmarks.values())
-
-        retract = []
-        add_or_modify = []
-        changed_bookmarks = new_bookmarks.symmetric_difference(old_bookmarks)
-
-        for bookmark in changed_bookmarks:
-            if bookmark.jid not in new_jids:
-                retract.append(bookmark)
-            if bookmark in new_bookmarks:
-                add_or_modify.append(bookmark)
-        return retract, add_or_modify
-
-    def get_name_from_bookmark(self, jid: str) -> str:
-        bookmark = self._bookmarks.get(jid)
+    def get_name_from_bookmark(self, jid: Union[str, JID]) -> Optional[str]:
+        bookmark = self._bookmarks.get(cast(JID, jid))
         if bookmark is None:
-            return ''
+            return bookmark
         return bookmark.name
 
-    def is_bookmark(self, jid: str) -> bool:
+    def is_bookmark(self, jid: Union[str, JID]) -> bool:
         return jid in self._bookmarks
 
     def _remove_timeouts(self):
@@ -347,7 +296,3 @@ class Bookmarks(BaseModule):
 
     def cleanup(self):
         self._remove_timeouts()
-
-
-def get_instance(*args, **kwargs):
-    return Bookmarks(*args, **kwargs), 'Bookmarks'

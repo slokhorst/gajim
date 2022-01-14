@@ -12,13 +12,17 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+from typing import Optional
+
 import time
 
 from gi.repository import Gdk
 from gi.repository import GLib
 from gi.repository import Gtk
 
+from nbxmpp import JID
 from nbxmpp.namespaces import Namespace
+from nbxmpp.structs import DiscoInfo
 
 from gajim.common import app
 from gajim.common.i18n import _
@@ -28,7 +32,7 @@ from gajim.common.helpers import get_groupchat_name
 from gajim.common.const import RFC5646_LANGUAGE_TAGS
 from gajim.common.const import AvatarSize
 
-from .util import get_builder
+from .builder import get_builder
 from .util import make_href_markup
 
 
@@ -97,42 +101,48 @@ MUC_FEATURES = {
 
 
 class GroupChatInfoScrolled(Gtk.ScrolledWindow):
-    def __init__(self, account=None, options=None):
+    def __init__(self,
+                 account: Optional[str] = None,
+                 width: int = 300,
+                 minimal: bool = False
+                 ) -> None:
         Gtk.ScrolledWindow.__init__(self)
-        if options is None:
-            options = {}
-
-        self._minimal = options.get('minimal', False)
-
-        self.set_size_request(options.get('width', 400), -1)
+        self.set_size_request(width, -1)
         self.set_halign(Gtk.Align.CENTER)
 
-        if self._minimal:
+        self._minimal = minimal
+
+        if minimal:
             self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
         else:
             self.set_vexpand(True)
+            self.set_hexpand(True)
+            self.set_propagate_natural_width(True)
             self.set_min_content_height(400)
             self.set_policy(Gtk.PolicyType.NEVER,
                             Gtk.PolicyType.AUTOMATIC)
 
         self._account = account
-        self._info = None
+        self._info: Optional[DiscoInfo] = None
 
         self._ui = get_builder('groupchat_info_scrolled.ui')
         self.add(self._ui.info_grid)
         self._ui.connect_signals(self)
         self.show_all()
 
-    def get_account(self):
+    def get_account(self) -> Optional[str]:
         return self._account
 
-    def set_account(self, account):
+    def set_account(self, account: str) -> None:
         self._account = account
 
-    def get_jid(self):
+    def get_jid(self) -> Optional[JID]:
         return self._info.jid
 
-    def set_author(self, author, epoch_timestamp=None):
+    def set_author(self,
+                   author: Optional[str],
+                   epoch_timestamp: Optional[float] = None
+                   ) -> None:
         has_author = bool(author)
         if has_author and epoch_timestamp is not None:
             time_ = time.strftime('%c', time.localtime(epoch_timestamp))
@@ -142,31 +152,30 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
         self._ui.author.set_visible(has_author)
         self._ui.author_label.set_visible(has_author)
 
-    def set_subject(self, subject):
+    def set_subject(self, subject: str) -> None:
         has_subject = bool(subject)
         subject = GLib.markup_escape_text(subject or '')
         self._ui.subject.set_markup(make_href_markup(subject))
         self._ui.subject.set_visible(has_subject)
         self._ui.subject_label.set_visible(has_subject)
 
-    def set_from_disco_info(self, info):
+    def set_from_disco_info(self, info: DiscoInfo) -> None:
         self._info = info
         # Set name
         if self._account is None:
             name = info.muc_name
         else:
-            con = app.connections[self._account]
-            name = get_groupchat_name(con, info.jid)
+            client = app.get_client(self._account)
+            name = get_groupchat_name(client, info.jid)
+            contact = client.get_module('Contacts').get_contact(
+                info.jid, groupchat=True)
+            surface = contact.get_avatar(
+                AvatarSize.GROUP_INFO,
+                self.get_scale_factor())
+            self._ui.avatar_image.set_from_surface(surface)
+
         self._ui.name.set_text(name)
         self._ui.name.set_visible(True)
-
-        # Set avatar
-        surface = app.interface.avatar_storage.get_muc_surface(
-            self._account,
-            str(info.jid),
-            AvatarSize.GROUP_INFO,
-            self.get_scale_factor())
-        self._ui.avatar_image.set_from_surface(surface)
 
         # Set description
         has_desc = bool(info.muc_description)
@@ -176,6 +185,7 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
 
         # Set address
         self._ui.address.set_text(str(info.jid))
+        self._ui.address.set_tooltip_text(str(info.jid))
 
         if self._minimal:
             return
@@ -217,7 +227,7 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
 
         self._add_features(info.features)
 
-    def _add_features(self, features):
+    def _add_features(self, features: list[str]) -> None:
         grid = self._ui.info_grid
         for row in range(30, 9, -1):
             # Remove everything from row 30 to 10
@@ -242,28 +252,28 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
                 row += 1
         grid.show_all()
 
-    def _on_copy_address(self, _button):
+    def _on_copy_address(self, _button: Gtk.Button) -> None:
         clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
         clipboard.set_text(f'xmpp:{self._info.jid}?join', -1)
 
     @staticmethod
-    def _on_activate_log_link(button):
+    def _on_activate_log_link(button: Gtk.LinkButton) -> int:
         open_uri(button.get_uri())
         return Gdk.EVENT_STOP
 
-    def _on_activate_contact_link(self, button):
+    def _on_activate_contact_link(self, button: Gtk.LinkButton) -> int:
         open_uri(f'xmpp:{button.get_uri()}?message', account=self._account)
         return Gdk.EVENT_STOP
 
     @staticmethod
-    def _on_activate_subject_link(_label, uri):
+    def _on_activate_subject_link(_label: Gtk.Label, uri: str) -> int:
         # We have to use this, because the default GTK handler
         # is not cross-platform compatible
         open_uri(uri)
         return Gdk.EVENT_STOP
 
     @staticmethod
-    def _get_feature_icon(icon, tooltip):
+    def _get_feature_icon(icon: str, tooltip: str) -> Gtk.Image:
         image = Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.MENU)
         image.set_valign(Gtk.Align.CENTER)
         image.set_halign(Gtk.Align.END)
@@ -271,14 +281,14 @@ class GroupChatInfoScrolled(Gtk.ScrolledWindow):
         return image
 
     @staticmethod
-    def _get_feature_label(text):
+    def _get_feature_label(text: str) -> Gtk.Label:
         label = Gtk.Label(label=text, use_markup=True)
         label.set_halign(Gtk.Align.START)
         label.set_valign(Gtk.Align.START)
         return label
 
-    def _get_contact_button(self, contact):
-        button = Gtk.LinkButton.new(contact)
+    def _get_contact_button(self, contact: str) -> Gtk.Button:
+        button = Gtk.LinkButton(label=contact)
         button.set_halign(Gtk.Align.START)
         button.get_style_context().add_class('link-button')
         button.connect('activate-link', self._on_activate_contact_link)

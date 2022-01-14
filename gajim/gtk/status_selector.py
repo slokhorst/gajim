@@ -12,29 +12,37 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+from typing import Any, Optional
+
 from gi.repository import Gtk
 from gi.repository import Pango
 
 from gajim.common import app
+from gajim.common import ged
+from gajim.common.const import AvatarSize
+from gajim.common.helpers import get_connection_status
 from gajim.common.helpers import get_uf_show
 from gajim.common.helpers import get_global_show
 from gajim.common.helpers import statuses_unified
 from gajim.common.i18n import _
 
-from .util import get_icon_name
+from .avatar import get_show_circle
 
 
 class StatusSelector(Gtk.MenuButton):
-    def __init__(self, compact=False):
+    def __init__(self, account: Optional[str] = None, compact: bool = False):
         Gtk.MenuButton.__init__(self)
         self.set_direction(Gtk.ArrowType.UP)
+        self._account = account
         self._compact = compact
         self._create_popover()
-        self.set_no_show_all(True)
 
         self._current_show_icon = Gtk.Image()
-        self._current_show_icon.set_from_icon_name(
-            get_icon_name('offline'), Gtk.IconSize.MENU)
+        surface = get_show_circle(
+            'offline',
+            AvatarSize.SHOW_CIRCLE,
+            self.get_scale_factor())
+        self._current_show_icon.set_from_surface(surface)
 
         box = Gtk.Box(spacing=6)
         box.add(self._current_show_icon)
@@ -47,7 +55,9 @@ class StatusSelector(Gtk.MenuButton):
             box.show_all()
         self.add(box)
 
-    def _create_popover(self):
+        app.ged.register_event_handler('our-show', ged.POSTGUI, self.update)
+
+    def _create_popover(self) -> None:
         popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         popover_box.get_style_context().add_class('margin-3')
         popover_items = [
@@ -55,8 +65,6 @@ class StatusSelector(Gtk.MenuButton):
             'away',
             'xa',
             'dnd',
-            'separator',
-            'change_status_message',
             'separator',
             'offline',
         ]
@@ -70,15 +78,11 @@ class StatusSelector(Gtk.MenuButton):
             show_label = Gtk.Label()
             show_label.set_halign(Gtk.Align.START)
 
-            if item == 'change_status_message':
-                show_icon.set_from_icon_name('document-edit-symbolic',
-                                             Gtk.IconSize.MENU)
-                show_label.set_text_with_mnemonic(_('_Change Status Message'))
-            else:
-                show_icon.set_from_icon_name(get_icon_name(item),
-                                             Gtk.IconSize.MENU)
-                show_label.set_text_with_mnemonic(
-                    get_uf_show(item, use_mnemonic=True))
+            surface = get_show_circle(
+                item, AvatarSize.SHOW_CIRCLE, self.get_scale_factor())
+            show_icon.set_from_surface(surface)
+            show_label.set_text_with_mnemonic(
+                get_uf_show(item, use_mnemonic=True))
 
             show_box = Gtk.Box(spacing=6)
             show_box.add(show_icon)
@@ -89,10 +93,6 @@ class StatusSelector(Gtk.MenuButton):
             button.set_relief(Gtk.ReliefStyle.NONE)
             button.add(show_box)
             button.connect('clicked', self._on_change_status)
-
-            if item == 'change_status_message':
-                self._change_status_message = button
-
             popover_box.add(button)
 
         popover_box.show_all()
@@ -100,23 +100,22 @@ class StatusSelector(Gtk.MenuButton):
         self._status_popover.add(popover_box)
         self.set_popover(self._status_popover)
 
-    def _on_change_status(self, button):
+    def _on_change_status(self, button: Gtk.Button) -> None:
         self._status_popover.popdown()
         new_status = button.get_name()
-        if new_status == 'change_status_message':
-            new_status = None
-        app.interface.change_status(status=new_status)
+        app.interface.change_status(status=new_status, account=self._account)
 
-    def update(self):
-        if not app.connections:
-            self.hide()
-            return
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        if self._account is None:
+            show = get_global_show()
+        else:
+            show = get_connection_status(self._account)
 
-        self.show()
-        show = get_global_show()
+        surface = get_show_circle(
+            show, AvatarSize.SHOW_CIRCLE, self.get_scale_factor())
+        self._current_show_icon.set_from_surface(surface)
+
         uf_show = get_uf_show(show)
-        self._current_show_icon.set_from_icon_name(
-            get_icon_name(show), Gtk.IconSize.MENU)
         if statuses_unified():
             self._current_show_icon.set_tooltip_text(_('Status: %s') % uf_show)
             if not self._compact:
@@ -127,5 +126,3 @@ class StatusSelector(Gtk.MenuButton):
                 _('Status: %s') % show_label)
             if not self._compact:
                 self._current_show_label.set_text(show_label)
-
-        self._change_status_message.set_sensitive(show != 'offline')

@@ -12,6 +12,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+from typing import Any
+
 import logging
 import random
 
@@ -19,6 +21,7 @@ from gi.repository import Gtk
 from gi.repository import Gdk
 
 from nbxmpp.errors import StanzaError
+from nbxmpp.task import Task
 
 from gajim.common import app
 from gajim.common.const import MUC_CREATION_EXAMPLES
@@ -28,14 +31,14 @@ from gajim.common.helpers import validate_jid
 from gajim.common.helpers import to_user_string
 
 from .dialogs import ErrorDialog
-from .util import get_builder
+from .builder import get_builder
 from .util import ensure_not_destroyed
 
 log = logging.getLogger('gajim.gui.groupchat_creation')
 
 
 class CreateGroupchatWindow(Gtk.ApplicationWindow):
-    def __init__(self, account):
+    def __init__(self, account: str) -> None:
         Gtk.ApplicationWindow.__init__(self)
         self.set_name('CreateGroupchat')
         self.set_application(app.app)
@@ -49,7 +52,7 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
         self._ui = get_builder('groupchat_creation.ui')
         self.add(self._ui.create_group_chat)
 
-        self._destroyed = False
+        self._destroyed: bool = False
 
         self._account = self._fill_account_combo(account)
 
@@ -57,17 +60,17 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
         self._fill_placeholders()
 
         self._ui.connect_signals(self)
-        self.connect('key-press-event', self._on_key_press_event)
+        self.connect('key-press-event', self._on_key_press)
         self.connect('destroy', self._on_destroy)
 
         self.show_all()
         self.set_focus(self._ui.address_entry)
 
-    def _get_muc_service_jid(self):
-        con = app.connections[self._account]
-        return str(con.get_module('MUC').service_jid or 'muc.example.com')
+    def _get_muc_service_jid(self) -> str:
+        client = app.get_client(self._account)
+        return str(client.get_module('MUC').service_jid or 'muc.example.com')
 
-    def _fill_account_combo(self, account):
+    def _fill_account_combo(self, account: str) -> str:
         accounts = app.get_enabled_accounts_with_labels(connected_only=True)
         account_liststore = self._ui.account_combo.get_model()
         for acc in accounts:
@@ -84,7 +87,7 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
         self._ui.account_combo.set_active_id(account)
         return account
 
-    def _create_entry_completion(self):
+    def _create_entry_completion(self) -> None:
         entry_completion = Gtk.EntryCompletion()
         model = Gtk.ListStore(str)
         entry_completion.set_model(model)
@@ -95,7 +98,7 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
 
         self._ui.address_entry.set_completion(entry_completion)
 
-    def _fill_placeholders(self):
+    def _fill_placeholders(self) -> None:
         placeholder = random.choice(MUC_CREATION_EXAMPLES)
         server = self._get_muc_service_jid()
 
@@ -104,17 +107,17 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
         self._ui.description_entry.set_placeholder_text(
             placeholder[1] + _(' (optional)...'))
         self._ui.address_entry.set_placeholder_text(
-            '%s@%s' % (placeholder[2], server))
+            f'{placeholder[2]}@{server}')
 
-    def _on_key_press_event(self, _widget, event):
+    def _on_key_press(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> None:
         if event.keyval == Gdk.KEY_Escape:
             self.destroy()
 
-    def _on_account_combo_changed(self, combo):
+    def _on_account_combo_changed(self, combo: Gtk.ComboBox) -> None:
         self._account = combo.get_active_id()
         self._fill_placeholders()
 
-    def _update_entry_completion(self, entry, text):
+    def _update_entry_completion(self, entry: Gtk.Entry, text: str) -> None:
         text = entry.get_text()
         if '@' in text:
             text = text.split('@', 1)[0]
@@ -123,9 +126,9 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
         model.clear()
 
         server = self._get_muc_service_jid()
-        model.append(['%s@%s' % (text, server)])
+        model.append([f'{text}@{server}'])
 
-    def _validate_jid(self, text):
+    def _validate_jid(self, text: str) -> None:
         if not text:
             self._set_warning_icon(False)
             self._ui.create_button.set_sensitive(False)
@@ -142,7 +145,7 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
             self._set_warning_icon(False)
             self._ui.create_button.set_sensitive(True)
 
-    def _set_processing_state(self, enabled):
+    def _set_processing_state(self, enabled: bool) -> None:
         if enabled:
             self._ui.spinner.start()
             self._ui.create_button.set_sensitive(False)
@@ -150,39 +153,39 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
             self._ui.spinner.stop()
         self._ui.grid.set_sensitive(not enabled)
 
-    def _set_warning_icon(self, enabled):
+    def _set_warning_icon(self, enabled: bool) -> None:
         icon = 'dialog-warning-symbolic' if enabled else None
         self._ui.address_entry.set_icon_from_icon_name(
             Gtk.EntryIconPosition.SECONDARY, icon)
 
-    def _set_warning_tooltip(self, text):
+    def _set_warning_tooltip(self, text: str) -> None:
         self._ui.address_entry.set_icon_tooltip_text(
             Gtk.EntryIconPosition.SECONDARY, text)
 
-    def _set_warning(self, text):
+    def _set_warning(self, text: str) -> None:
         self._set_warning_icon(True)
         self._set_warning_tooltip(text)
         self._ui.create_button.set_sensitive(False)
 
-    def _set_warning_from_error(self, error):
+    def _set_warning_from_error(self, error: StanzaError) -> None:
         condition = error.condition
         if condition == 'gone':
             condition = 'already-exists'
         text = MUC_DISCO_ERRORS.get(condition, to_user_string(error))
         self._set_warning(text)
 
-    def _set_warning_from_error_code(self, error_code):
+    def _set_warning_from_error_code(self, error_code: str) -> None:
         self._set_warning(MUC_DISCO_ERRORS[error_code])
 
-    def _on_address_entry_changed(self, entry):
+    def _on_address_entry_changed(self, entry: Gtk.Entry) -> None:
         text = entry.get_text()
         self._update_entry_completion(entry, text)
         self._validate_jid(text)
 
-    def _on_address_entry_activate(self, _widget):
+    def _on_address_entry_activate(self, _entry: Gtk.Entry) -> None:
         self._on_create_clicked()
 
-    def _on_create_clicked(self, *args):
+    def _on_create_clicked(self, *args: Any) -> None:
         if not app.account_is_available(self._account):
             ErrorDialog(
                 _('Not Connected'),
@@ -192,12 +195,12 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
         room_jid = self._ui.address_entry.get_text()
 
         self._set_processing_state(True)
-        con = app.connections[self._account]
-        con.get_module('Discovery').disco_info(
+        client = app.get_client(self._account)
+        client.get_module('Discovery').disco_info(
             room_jid, callback=self._disco_info_received)
 
     @ensure_not_destroyed
-    def _disco_info_received(self, task):
+    def _disco_info_received(self, task: Task) -> None:
         try:
             result = task.finish()
         except StanzaError as error:
@@ -212,7 +215,7 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
 
         self._set_processing_state(False)
 
-    def _create_muc(self, room_jid):
+    def _create_muc(self, room_jid: str) -> None:
         name = self._ui.name_entry.get_text()
         description = self._ui.description_entry.get_text()
         is_public = self._ui.public_switch.get_active()
@@ -234,9 +237,9 @@ class CreateGroupchatWindow(Gtk.ApplicationWindow):
         app.interface.create_groupchat(
             self._account,
             str(room_jid),
-            config=config)
+            config)
 
         self.destroy()
 
-    def _on_destroy(self, *args):
+    def _on_destroy(self, _widget: Gtk.Widget) -> None:
         self._destroyed = True

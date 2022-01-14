@@ -21,6 +21,11 @@
 # You should have received a copy of the GNU General Public License
 # along with Gajim. If not, see <http://www.gnu.org/licenses/>.
 
+from typing import Any
+from typing import KeysView
+from typing import NamedTuple
+from typing import Optional
+
 import time
 import datetime
 import calendar
@@ -28,6 +33,10 @@ import json
 import logging
 import sqlite3 as sqlite
 from collections import namedtuple
+
+from nbxmpp import JID
+from nbxmpp.structs import CommonError
+from nbxmpp.structs import MessageProperties
 
 from gajim.common import app
 from gajim.common import configpaths
@@ -39,7 +48,6 @@ from gajim.common.const import JIDConstant
 from gajim.common.storage.base import SqliteStorage
 from gajim.common.storage.base import timeit
 
-
 CURRENT_USER_VERSION = 6
 
 ARCHIVE_SQL_STATEMENT = '''
@@ -48,12 +56,6 @@ ARCHIVE_SQL_STATEMENT = '''
             jid TEXT UNIQUE,
             type INTEGER
     );
-    CREATE TABLE unread_messages(
-            message_id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE,
-            jid_id INTEGER,
-            shown BOOLEAN default 0
-    );
-    CREATE INDEX idx_unread_messages_jid_id ON unread_messages (jid_id);
     CREATE TABLE logs(
             log_line_id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE,
             account_id INTEGER,
@@ -84,8 +86,58 @@ ARCHIVE_SQL_STATEMENT = '''
     PRAGMA user_version=%s;
     ''' % CURRENT_USER_VERSION
 
-
 log = logging.getLogger('gajim.c.storage.archive')
+
+
+class JidsTableRow(NamedTuple):
+    jid_id: int
+    jid: JID
+    type: JIDConstant
+
+
+class ConversationRow(NamedTuple):
+    contact_name: str
+    time: float
+    kind: int
+    show: int
+    message: str
+    subject: str
+    additional_data: AdditionalDataDict
+    log_line_id: int
+    message_id: str
+    stanza_id: str
+    error: CommonError
+    marker: str
+
+
+class LastConversationRow(NamedTuple):
+    contact_name: str
+    time: float
+    kind: int
+    message: str
+    additional_data: AdditionalDataDict
+    message_id: str
+    stanza_id: str
+
+
+class SearchLogRow(NamedTuple):
+    account_id: int
+    jid_id: int
+    contact_name: str
+    time: float
+    kind: int
+    show: int
+    message: str
+    subject: str
+    additional_data: AdditionalDataDict
+    log_line_id: int
+
+
+class LastArchiveMessageRow(NamedTuple):
+    id: int
+    last_mam_id: str
+    oldest_mam_timestamp: str
+    last_muc_timestamp: str
 
 
 class MessageArchiveStorage(SqliteStorage):
@@ -95,10 +147,10 @@ class MessageArchiveStorage(SqliteStorage):
                                configpaths.get('LOG_DB'),
                                ARCHIVE_SQL_STATEMENT)
 
-        self._jid_ids = {}
-        self._jid_ids_reversed = {}
+        self._jid_ids: dict[JID, JidsTableRow] = {}
+        self._jid_ids_reversed: dict[int, JidsTableRow] = {}
 
-    def init(self, **kwargs):
+    def init(self, **kwargs: Any) -> None:
         SqliteStorage.init(self,
                            detect_types=sqlite.PARSE_COLNAMES)
 
@@ -113,9 +165,12 @@ class MessageArchiveStorage(SqliteStorage):
         self._get_jid_ids_from_db()
         self._cleanup_chat_history()
 
-    def _namedtuple_factory(self, cursor, row):
+    def _namedtuple_factory(self,
+                            cursor: sqlite.Cursor,
+                            row: tuple[Any, ...]) -> NamedTuple:
+
         fields = [col[0] for col in cursor.description]
-        Row = namedtuple("Row", fields)
+        Row = namedtuple("Row", fields)  # type: ignore
         named_row = Row(*row)
         if 'additional_data' in fields:
             _dict = json.loads(named_row.additional_data or '{}')
@@ -130,7 +185,7 @@ class MessageArchiveStorage(SqliteStorage):
                 named_row = named_row._replace(account=jid)
         return named_row
 
-    def _migrate(self):
+    def _migrate(self) -> None:
         user_version = self.user_version
         if user_version == 0:
             # All migrations from 0.16.9 until 1.0.0
@@ -184,11 +239,7 @@ class MessageArchiveStorage(SqliteStorage):
             self._execute_multiple(statements)
 
     @staticmethod
-    def dispatch(event, error):
-        app.ged.raise_event(event, None, str(error))
-
-    @staticmethod
-    def _get_timeout():
+    def _get_timeout() -> int:
         """
         returns the timeout in epoch
         """
@@ -200,11 +251,11 @@ class MessageArchiveStorage(SqliteStorage):
         return timeout
 
     @staticmethod
-    def _like(search_str):
-        return '%{}%'.format(search_str)
+    def _like(search_str: str) -> str:
+        return f'%{search_str}%'
 
     @timeit
-    def _get_jid_ids_from_db(self):
+    def _get_jid_ids_from_db(self) -> None:
         """
         Load all jid/jid_id tuples into a dict for faster access
         """
@@ -214,55 +265,31 @@ class MessageArchiveStorage(SqliteStorage):
             self._jid_ids[row.jid] = row
             self._jid_ids_reversed[row.jid_id] = row
 
-    def get_jids_in_db(self):
+    def get_jid_from_id(self, jid_id: int) -> JidsTableRow:
+        return self._jid_ids_reversed[jid_id]
+
+    def get_jids_in_db(self) -> KeysView[JID]:
         return self._jid_ids.keys()
 
-    def jid_is_from_pm(self, jid):
-        """
-        If jid is gajim@conf/nkour it's likely a pm one, how we know gajim@conf
-        is not a normal guy and nkour is not his resource?  we ask if gajim@conf
-        is already in jids (with type room jid) this fails if user disables
-        logging for room and only enables for pm (so highly unlikely) and if we
-        fail we do not go chaos (user will see the first pm as if it was message
-        in room's public chat) and after that all okay
-        """
-        if jid.find('/') > -1:
-            possible_room_jid = jid.split('/', 1)[0]
-            return self.jid_is_room_jid(possible_room_jid)
-        # it's not a full jid, so it's not a pm one
-        return False
-
-    def jid_is_room_jid(self, jid):
-        """
-        Return True if it's a room jid, False if it's not, None if we don't know
-        """
-        jid_ = self._jid_ids.get(jid)
-        if jid_ is None:
-            return None
-        return jid_.type == JIDConstant.ROOM_TYPE
-
-    @staticmethod
-    def _get_family_jids(account, jid):
-        """
-        Get all jids of the metacontacts family
-
-        :param account: The account
-
-        :param jid:     The JID
-
-        returns a list of JIDs'
-        """
-        family = app.contacts.get_metacontacts_family(account, jid)
-        if family:
-            return [user['jid'] for user in family]
-        return [jid]
-
-    def get_account_id(self, account, type_=JIDConstant.NORMAL_TYPE):
+    def get_account_id(self,
+                       account: str,
+                       type_: JIDConstant = JIDConstant.NORMAL_TYPE
+                       ) -> int:
         jid = app.get_jid_from_account(account)
         return self.get_jid_id(jid, type_=type_)
 
+    def get_active_account_ids(self) -> list[int]:
+        account_ids: list[int] = []
+        for account in app.settings.get_active_accounts():
+            account_ids.append(self.get_account_id(account))
+        return account_ids
+
     @timeit
-    def get_jid_id(self, jid, kind=None, type_=None):
+    def get_jid_id(self,
+                   jid: JID,
+                   kind: Optional[KindConstant] = None,
+                   type_: Optional[JIDConstant] = None
+                   ) -> int:
         """
         Get the jid id from a jid.
         In case the jid id is not found create a new one.
@@ -297,13 +324,15 @@ class MessageArchiveStorage(SqliteStorage):
 
         sql = 'INSERT INTO jids (jid, type) VALUES (?, ?)'
         lastrowid = self._con.execute(sql, (jid, type_)).lastrowid
-        Row = namedtuple('Row', 'jid_id jid type')
-        self._jid_ids[jid] = Row(lastrowid, jid, type_)
+        self._jid_ids[jid] = JidsTableRow(jid_id=lastrowid,
+                                          jid=jid,
+                                          type=type_)
         self._delayed_commit()
         return lastrowid
 
     @staticmethod
-    def convert_show_values_to_db_api_values(show):
+    def convert_show_values_to_db_api_values(show: Optional[str]
+                                             ) -> Optional[ShowConstant]:
         """
         Convert from string style to constant ints for db
         """
@@ -327,147 +356,241 @@ class MessageArchiveStorage(SqliteStorage):
         return None
 
     @timeit
-    def insert_unread_events(self, message_id, jid_id):
+    def get_conversation_before_after(self,
+                                      account: str,
+                                      jid: JID,
+                                      before: bool,
+                                      timestamp: float,
+                                      n_lines: int
+                                      ) -> list[ConversationRow]:
         """
-        Add unread message with id: message_id
-        """
-        sql = '''INSERT INTO unread_messages (message_id, jid_id, shown)
-                 VALUES (?, ?, 0)'''
-        self._con.execute(sql, (message_id, jid_id))
-        self._delayed_commit()
+        Load n_lines lines of conversation with jid before or after timestamp
 
-    @timeit
-    def set_read_messages(self, message_ids):
-        """
-        Mark all messages with ids in message_ids as read
-        """
-        ids = ','.join([str(i) for i in message_ids])
-        sql = 'DELETE FROM unread_messages WHERE message_id IN (%s)' % ids
-        self._con.execute(sql)
-        self._delayed_commit()
+        :param account:         The account
 
-    @timeit
-    def set_shown_unread_msgs(self, msg_log_id):
-        """
-        Mark unread message as shown un GUI
-        """
-        sql = 'UPDATE unread_messages SET shown = 1 where message_id = %s' % \
-                msg_log_id
-        self._con.execute(sql)
-        self._delayed_commit()
+        :param jid:             The jid for which we request the conversation
 
-    @timeit
-    def reset_shown_unread_messages(self):
-        """
-        Set shown field to False in unread_messages table
-        """
-        sql = 'UPDATE unread_messages SET shown = 0'
-        self._con.execute(sql)
-        self._delayed_commit()
+        :param before:          bool for direction (before or after timestamp)
 
-    @timeit
-    def get_unread_msgs(self):
-        """
-        Get all unread messages
-        """
-        all_messages = []
-        try:
-            unread_results = self._con.execute(
-                'SELECT message_id, shown from unread_messages').fetchall()
-        except Exception:
-            unread_results = []
-        for message in unread_results:
-            msg_log_id = message.message_id
-            shown = message.shown
-            # here we get infos for that message, and related jid from jids table
-            # do NOT change order of SELECTed things, unless you change function(s)
-            # that called this function
-            result = self._con.execute('''
-                    SELECT logs.log_line_id, logs.message, logs.time, logs.subject,
-                    jids.jid, logs.additional_data
-                    FROM logs, jids
-                    WHERE logs.log_line_id = %d AND logs.jid_id = jids.jid_id
-                    ''' % msg_log_id
-                    ).fetchone()
-            if result is None:
-                # Log line is no more in logs table.
-                # remove it from unread_messages
-                self.set_read_messages([msg_log_id])
-                continue
-
-            all_messages.append((result, shown))
-        return all_messages
-
-    @timeit
-    def load_groupchat_messages(self, account, jid):
-        account_id = self.get_account_id(account, type_=JIDConstant.ROOM_TYPE)
-
-        sql = '''
-            SELECT time, contact_name, message, additional_data, message_id
-            FROM logs NATURAL JOIN jids WHERE jid = ?
-            AND account_id = ? AND kind = ?
-            ORDER BY time DESC, log_line_id DESC LIMIT ?'''
-
-        messages = self._con.execute(
-            sql, (jid, account_id, KindConstant.GC_MSG, 50)).fetchall()
-
-        messages.reverse()
-        return messages
-
-    @timeit
-    def get_last_conversation_lines(self, account, jid, pending):
-        """
-        Get recent messages
-
-        Pending messages are already in queue to be printed when the
-        ChatControl is opened, so we don’t want to request those messages.
-        How many messages are requested depends on the 'restore_lines'
-        config value. How far back in time messages are requested depends on
-        _get_timeout().
-
-        :param account: The account
-
-        :param jid:     The jid from which we request the conversation lines
-
-        :param pending: How many messages are currently pending so we don’t
-                        request those messages
+        :param timestamp:       timestamp
 
         returns a list of namedtuples
         """
-
-        restore = app.settings.get('restore_lines')
-        if restore <= 0:
-            return []
-
-        kinds = map(str, [KindConstant.SINGLE_MSG_RECV,
-                          KindConstant.SINGLE_MSG_SENT,
-                          KindConstant.CHAT_MSG_RECV,
-                          KindConstant.CHAT_MSG_SENT,
-                          KindConstant.ERROR])
-
-        jids = self._get_family_jids(account, jid)
+        jids = [jid]
         account_id = self.get_account_id(account)
+        kinds = map(str, [KindConstant.ERROR])
+
+        if before:
+            time_order = 'AND time < ? ORDER BY time DESC, log_line_id DESC'
+        else:
+            time_order = 'AND time > ? ORDER BY time ASC, log_line_id ASC'
 
         sql = '''
-            SELECT time, kind, message, error as "error [common_error]",
-                   subject, additional_data, marker as "marker [marker]",
-                   message_id
+            SELECT contact_name, time, kind, show, message, subject,
+                   additional_data, log_line_id, message_id, stanza_id,
+                   error as "error [common_error]",
+                   marker as "marker [marker]"
             FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
-            AND account_id = {account_id} AND kind IN ({kinds})
-            AND time > get_timeout()
-            ORDER BY time DESC, log_line_id DESC LIMIT ? OFFSET ?
+            AND account_id = {account_id}
+            AND kind NOT IN ({kinds})
+            {time_order}
+            LIMIT ?
+            '''.format(jids=', '.join('?' * len(jids)),
+                       account_id=account_id,
+                       kinds=', '.join(kinds),
+                       time_order=time_order)
+
+        return self._con.execute(
+            sql,
+            tuple(jids) + (timestamp, n_lines)).fetchall()
+
+    @timeit
+    def get_conversation_muc_before_after(self,
+                                          _account: str,
+                                          jid: JID,
+                                          before: bool,
+                                          timestamp: float,
+                                          n_lines: int
+                                          ) -> list[ConversationRow]:
+        """
+        Load n_lines lines of conversation with jid before or after timestamp
+
+        :param account:         The account
+
+        :param jid:             The jid for which we request the conversation
+
+        :param before:          bool for direction (before or after timestamp)
+
+        :param timestamp:       timestamp
+
+        returns a list of namedtuples
+        """
+        jids = [jid]
+        if before:
+            time_order = 'AND time < ? ORDER BY time DESC, log_line_id DESC'
+        else:
+            time_order = 'AND time > ? ORDER BY time ASC, log_line_id ASC'
+
+        # TODO: this does not load messages correctly when account_id is set
+        # account_id = self.get_account_id(account, type_=JIDConstant.ROOM_TYPE)
+
+        sql = '''
+            SELECT contact_name, time, kind, show, message, subject,
+                   additional_data, log_line_id, message_id, stanza_id,
+                   error as "error [common_error]",
+                   marker as "marker [marker]"
+            FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
+            AND kind = {kind}
+            {time_order}
+            LIMIT ?
+            '''.format(jids=', '.join('?' * len(jids)),
+                       kind=KindConstant.GC_MSG,
+                       time_order=time_order)
+
+        return self._con.execute(
+            sql,
+            tuple(jids) + (timestamp, n_lines)).fetchall()
+
+    @timeit
+    def get_last_conversation_line(self,
+                                   account: str,
+                                   jid: JID
+                                   ) -> LastConversationRow:
+        """
+        Load the last line of a conversation with jid for account.
+        Loads messages, but no status messages or error messages.
+
+        :param account:         The account
+
+        :param jid:             The jid for which we request the conversation
+
+        returns a list of namedtuples
+        """
+        jids = [jid]
+        account_id = self.get_account_id(account)
+
+        kinds = map(str, [KindConstant.STATUS,
+                          KindConstant.GCSTATUS,
+                          KindConstant.ERROR])
+
+        sql = '''
+            SELECT contact_name, time, kind, message, stanza_id, message_id,
+            additional_data
+            FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
+            AND account_id = {account_id}
+            AND kind NOT IN ({kinds})
+            ORDER BY time DESC
             '''.format(jids=', '.join('?' * len(jids)),
                        account_id=account_id,
                        kinds=', '.join(kinds))
 
-        messages = self._con.execute(
-            sql, tuple(jids) + (restore, pending)).fetchall()
-
-        messages.reverse()
-        return messages
+        return self._con.execute(sql, tuple(jids)).fetchone()
 
     @timeit
-    def get_conversation_for_date(self, account, jid, date):
+    def get_conversation_around(self,
+                                account: str,
+                                jid: JID,
+                                timestamp: float
+                                ) -> tuple[list[ConversationRow],
+                                           list[ConversationRow]]:
+        """
+        Load all lines of conversation with jid around a specific timestamp
+
+        :param account:         The account
+
+        :param jid:             The jid for which we request the conversation
+
+        :param timestamp:       Timestamp around which to fetch messages
+
+        returns a list of namedtuples
+        """
+        jids = [jid]
+        account_id = self.get_account_id(account)
+        kinds = map(str, [KindConstant.ERROR])
+        n_lines = 20
+
+        sql_before = '''
+            SELECT contact_name, time, kind, show, message, subject,
+                   additional_data, log_line_id, message_id, stanza_id,
+                   error as "error [common_error]",
+                   marker as "marker [marker]"
+            FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
+            AND account_id = {account_id}
+            AND kind NOT IN ({kinds})
+            AND time < ?
+            ORDER BY time DESC, log_line_id DESC
+            LIMIT ?
+            '''.format(jids=', '.join('?' * len(jids)),
+                       account_id=account_id,
+                       kinds=', '.join(kinds))
+        sql_at_after = '''
+            SELECT contact_name, time, kind, show, message, subject,
+                   additional_data, log_line_id, message_id, stanza_id,
+                   error as "error [common_error]",
+                   marker as "marker [marker]"
+            FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
+            AND account_id = {account_id}
+            AND kind NOT IN ({kinds})
+            AND time >= ?
+            ORDER BY time ASC, log_line_id ASC
+            LIMIT ?
+            '''.format(jids=', '.join('?' * len(jids)),
+                       account_id=account_id,
+                       kinds=', '.join(kinds))
+        before = self._con.execute(
+            sql_before,
+            tuple(jids) + (timestamp, n_lines)).fetchall()
+        at_after = self._con.execute(
+            sql_at_after,
+            tuple(jids) + (timestamp, n_lines)).fetchall()
+        return before, at_after
+
+    @timeit
+    def get_conversation_between(self,
+                                 account: str,
+                                 jid: str,
+                                 before: float,
+                                 after: float) -> list[ConversationRow]:
+        """
+        Load all lines of conversation with jid between two timestamps
+
+        :param account:         The account
+
+        :param jid:             The jid for which we request the conversation
+
+        :param before:          latest timestamp
+
+        :param after:           earliest timestamp
+
+        returns a list of namedtuples
+        """
+        jids = [jid]
+        account_id = self.get_account_id(account)
+        kinds = map(str, [KindConstant.ERROR])
+
+        sql = '''
+            SELECT contact_name, time, kind, show, message, subject,
+                   additional_data, log_line_id, message_id, stanza_id,
+                   error as "error [common_error]",
+                   marker as "marker [marker]"
+            FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
+            AND account_id = {account_id}
+            AND kind NOT IN ({kinds})
+            AND time < ? AND time >= ?
+            ORDER BY time DESC, log_line_id DESC
+            '''.format(jids=', '.join('?' * len(jids)),
+                       account_id=account_id,
+                       kinds=', '.join(kinds))
+
+        return self._con.execute(
+            sql,
+            tuple(jids) + (before, after)).fetchall()
+
+    @timeit
+    def get_messages_for_date(self,
+                              account: str,
+                              jid: str,
+                              date: datetime.datetime):
         """
         Load the complete conversation with a given jid on a specific date
 
@@ -481,25 +604,37 @@ class MessageArchiveStorage(SqliteStorage):
         returns a list of namedtuples
         """
 
-        jids = self._get_family_jids(account, jid)
+        jids = [jid]
+        account_id = self.get_account_id(account)
 
         delta = datetime.timedelta(
             hours=23, minutes=59, seconds=59, microseconds=999999)
+        date_ts = date.timestamp()
+        delta_ts = (date + delta).timestamp()
 
         sql = '''
             SELECT contact_name, time, kind, show, message, subject,
                    additional_data, log_line_id
             FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
+            AND account_id = {account_id}
             AND time BETWEEN ? AND ?
-            ORDER BY time, log_line_id
-            '''.format(jids=', '.join('?' * len(jids)))
+            ORDER BY time DESC, log_line_id DESC
+            '''.format(jids=', '.join('?' * len(jids)),
+                       account_id=account_id)
 
-        return self._con.execute(sql, tuple(jids) +
-                                      (date.timestamp(),
-                                      (date + delta).timestamp())).fetchall()
+        return self._con.execute(
+            sql,
+            tuple(jids) + (date_ts, delta_ts)).fetchall()
 
     @timeit
-    def search_log(self, account, jid, query, date=None):
+    def search_log(self,
+                   _account: str,
+                   jid: JID,
+                   query: str,
+                   from_users: Optional[list[str]] = None,
+                   before: Optional[datetime.datetime] = None,
+                   after: Optional[datetime.datetime] = None
+                   ) -> list[SearchLogRow]:
         """
         Search the conversation log for messages containing the `query` string.
 
@@ -509,39 +644,126 @@ class MessageArchiveStorage(SqliteStorage):
 
         :param account: The account
 
-        :param jid:     The jid for which we request the conversation
+        :param jid: The jid for which we request the conversation
 
-        :param query:   A search string
+        :param query: A search string
 
-        :param date:    datetime.datetime instance
-                        example: datetime.datetime(year, month, day)
+        :param from_users: A list of usernames or None
+
+        :param before: A datetime.datetime instance or None
+
+        :param after: A datetime.datetime instance or None
 
         returns a list of namedtuples
         """
-        jids = self._get_family_jids(account, jid)
+        jids = [jid]
 
-        if date:
-            delta = datetime.timedelta(
-                hours=23, minutes=59, seconds=59, microseconds=999999)
+        kinds = map(str, [KindConstant.STATUS,
+                          KindConstant.GCSTATUS])
 
-            between = '''
-                AND time BETWEEN {start} AND {end}
-                '''.format(start=date.timestamp(),
-                           end=(date + delta).timestamp())
+        if before is None:
+            before_ts = datetime.datetime.now().timestamp()
+        else:
+            before_ts = before.timestamp()
+
+        if after is None:
+            after_ts = datetime.datetime(1971, 1, 1).timestamp()
+        else:
+            after_ts = after.timestamp()
+
+        if from_users is None:
+            users_query_string = ''
+        else:
+            users_query_string = 'AND UPPER(contact_name) IN (?)'
 
         sql = '''
-        SELECT contact_name, time, kind, show, message, subject,
-               additional_data, log_line_id
-        FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
-        AND message LIKE like(?) {date_search}
-        ORDER BY time DESC, log_line_id
-        '''.format(jids=', '.join('?' * len(jids)),
-                   date_search=between if date else '')
+            SELECT account_id, jid_id, contact_name, time, kind, show, message,
+                   subject, additional_data, log_line_id
+            FROM logs NATURAL JOIN jids WHERE jid IN ({jids})
+            AND message LIKE like(?)
+            AND kind NOT IN ({kinds})
+            {users_query}
+            AND time BETWEEN ? AND ?
+            ORDER BY time DESC, log_line_id
+            '''.format(jids=', '.join('?' * len(jids)),
+                       kinds=', '.join(kinds),
+                       users_query=users_query_string)
 
-        return self._con.execute(sql, tuple(jids) + (query,)).fetchall()
+        if from_users is None:
+            return self._con.execute(
+                sql, tuple(jids) + (query, after_ts, before_ts)).fetchall()
+
+        users = ','.join([user.upper() for user in from_users])
+        return self._con.execute(sql, tuple(jids) + (
+            query, users, after_ts, before_ts)).fetchall()
 
     @timeit
-    def get_days_with_logs(self, account, jid, year, month):
+    def search_all_logs(self,
+                        query: str,
+                        from_users: Optional[list[str]] = None,
+                        before: Optional[datetime.datetime] = None,
+                        after: Optional[datetime.datetime] = None
+                        ) -> list[SearchLogRow]:
+        """
+        Search all conversation logs for messages containing the `query`
+        string.
+
+        :param query: A search string
+
+        :param from_users: A list of usernames or None
+
+        :param before: A datetime.datetime instance or None
+
+        :param after: A datetime.datetime instance or None
+
+        returns a list of namedtuples
+        """
+        account_ids = self.get_active_account_ids()
+        kinds = map(str, [KindConstant.STATUS,
+                          KindConstant.GCSTATUS])
+
+        if before is None:
+            before_ts = datetime.datetime.now().timestamp()
+        else:
+            before_ts = before.timestamp()
+
+        if after is None:
+            after_ts = datetime.datetime(1971, 1, 1).timestamp()
+        else:
+            after_ts = after.timestamp()
+
+        if from_users is None:
+            users_query_string = ''
+        else:
+            users_query_string = 'AND UPPER(contact_name) IN (?)'
+
+        sql = '''
+            SELECT account_id, jid_id, contact_name, time, kind, show, message,
+                   subject, additional_data, log_line_id
+            FROM logs WHERE message LIKE like(?)
+            AND account_id IN ({account_ids})
+            AND kind NOT IN ({kinds})
+            {users_query}
+            AND time BETWEEN ? AND ?
+            ORDER BY time DESC, log_line_id
+            '''.format(account_ids=', '.join(map(str, account_ids)),
+                       kinds=', '.join(kinds),
+                       users_query=users_query_string)
+
+        if from_users is None:
+            return self._con.execute(
+                sql, (query, after_ts, before_ts)).fetchall()
+
+        users = ','.join([user.upper() for user in from_users])
+        return self._con.execute(
+            sql, (query, users, after_ts, before_ts)).fetchall()
+
+    @timeit
+    def get_days_with_logs(self,
+                           _account: str,
+                           jid: str,
+                           year: int,
+                           month: int) -> Any:
         """
         Request the days in a month where we received messages
         for a given `jid`.
@@ -556,7 +778,7 @@ class MessageArchiveStorage(SqliteStorage):
 
         returns a list of namedtuples
         """
-        jids = self._get_family_jids(account, jid)
+        jids = [jid]
 
         kinds = map(str, [KindConstant.STATUS,
                           KindConstant.GCSTATUS])
@@ -582,7 +804,7 @@ class MessageArchiveStorage(SqliteStorage):
                                       (date + delta).timestamp())).fetchall()
 
     @timeit
-    def get_last_date_that_has_logs(self, account, jid):
+    def get_last_date_that_has_logs(self, _account: str, jid: str) -> Any:
         """
         Get the timestamp of the last message we received for the jid.
 
@@ -592,7 +814,7 @@ class MessageArchiveStorage(SqliteStorage):
 
         returns a timestamp or None
         """
-        jids = self._get_family_jids(account, jid)
+        jids = [jid]
 
         kinds = map(str, [KindConstant.STATUS,
                           KindConstant.GCSTATUS])
@@ -609,7 +831,7 @@ class MessageArchiveStorage(SqliteStorage):
         return self._con.execute(sql, tuple(jids)).fetchone().time
 
     @timeit
-    def get_first_date_that_has_logs(self, account, jid):
+    def get_first_date_that_has_logs(self, _account: str, jid: str) -> Any:
         """
         Get the timestamp of the first message we received for the jid.
 
@@ -619,7 +841,7 @@ class MessageArchiveStorage(SqliteStorage):
 
         returns a timestamp or None
         """
-        jids = self._get_family_jids(account, jid)
+        jids = [jid]
 
         kinds = map(str, [KindConstant.STATUS,
                           KindConstant.GCSTATUS])
@@ -636,7 +858,10 @@ class MessageArchiveStorage(SqliteStorage):
         return self._con.execute(sql, tuple(jids)).fetchone().time
 
     @timeit
-    def get_date_has_logs(self, account, jid, date):
+    def get_date_has_logs(self,
+                          _account: str,
+                          jid: str,
+                          date: datetime.datetime) -> Any:
         """
         Get single timestamp of a message we received for the jid
         in the time range of one day.
@@ -650,7 +875,7 @@ class MessageArchiveStorage(SqliteStorage):
 
         returns a timestamp or None
         """
-        jids = self._get_family_jids(account, jid)
+        jids = [jid]
 
         delta = datetime.timedelta(
             hours=23, minutes=59, seconds=59, microseconds=999999)
@@ -668,8 +893,13 @@ class MessageArchiveStorage(SqliteStorage):
             sql, tuple(jids) + (start, end)).fetchone()
 
     @timeit
-    def deduplicate_muc_message(self, account, jid, resource,
-                                timestamp, message_id):
+    def deduplicate_muc_message(self,
+                                account: str,
+                                jid: str,
+                                resource: str,
+                                timestamp: float,
+                                message_id: str
+                                ) -> bool:
         """
         Check if a message is already in the `logs` table
 
@@ -716,8 +946,13 @@ class MessageArchiveStorage(SqliteStorage):
         return False
 
     @timeit
-    def find_stanza_id(self, account, archive_jid, stanza_id, origin_id=None,
-                       groupchat=False):
+    def find_stanza_id(self,
+                       account: str,
+                       archive_jid: str,
+                       stanza_id: str,
+                       origin_id: Optional[str] = None,
+                       groupchat: bool = False
+                       ) -> bool:
         """
         Checks if a stanza-id is already in the `logs` table
 
@@ -734,7 +969,7 @@ class MessageArchiveStorage(SqliteStorage):
 
         return True if the stanza-id was found
         """
-        ids = []
+        ids: list[str] = []
         if stanza_id is not None:
             ids.append(stanza_id)
         if origin_id is not None:
@@ -775,11 +1010,141 @@ class MessageArchiveStorage(SqliteStorage):
 
         if result is not None:
             log.info('Found duplicated message, stanza-id: %s, origin-id: %s, '
-                     'archive-jid: %s, account: %s', stanza_id, origin_id, archive_jid, account_id)
+                     'archive-jid: %s, account: %s', stanza_id, origin_id,
+                     archive_jid, account_id)
             return True
         return False
 
-    def insert_jid(self, jid, kind=None, type_=JIDConstant.NORMAL_TYPE):
+    @timeit
+    def store_message_correction(self,
+                                 account: str,
+                                 jid: JID,
+                                 correct_id: str,
+                                 corrected_text: str,
+                                 is_groupchat: bool) -> None:
+        type_ = JIDConstant.NORMAL_TYPE
+        if is_groupchat:
+            type_ = JIDConstant.ROOM_TYPE
+
+        jid_id = self.get_jid_id(str(jid), type_=type_)
+        account_id = self.get_account_id(account)
+        sql = '''
+            SELECT log_line_id, message, additional_data
+            FROM logs
+            WHERE +jid_id = ?
+            AND account_id = ?
+            AND message_id = ?
+            '''
+        row = self._con.execute(
+            sql, (jid_id, account_id, correct_id)).fetchone()
+        if row is None:
+            return
+
+        if row.additional_data is None:
+            additional_data = AdditionalDataDict()
+        else:
+            additional_data = row.additional_data
+
+        original_text = additional_data.get_value(
+            'corrected', 'original_text')
+        if original_text is None:
+            # Only set original_text for the first correction
+            additional_data.set_value(
+                'corrected', 'original_text', row.message)
+        serialized_dict = json.dumps(additional_data.data)
+
+        sql = '''
+            UPDATE logs SET message = ?, additional_data = ?
+            WHERE log_line_id = ?
+            '''
+        self._con.execute(
+            sql, (corrected_text, serialized_dict, row.log_line_id))
+
+    @timeit
+    def update_additional_data(self,
+                               account: str,
+                               stanza_id: str,
+                               properties: MessageProperties) -> None:
+        is_groupchat = properties.type.is_groupchat
+        type_ = JIDConstant.NORMAL_TYPE
+        if is_groupchat:
+            type_ = JIDConstant.ROOM_TYPE
+
+        assert properties.jid is not None
+        archive_id = self.get_jid_id(properties.jid.bare, type_=type_)
+        account_id = self.get_account_id(account)
+
+        if is_groupchat:
+            # Stanza ID is only unique within a specific archive.
+            # So a Stanza ID could be repeated in different MUCs, so we
+            # filter also for the archive JID which is the bare MUC jid.
+
+            # Use Unary-"+" operator for "jid_id", otherwise the
+            # idx_logs_jid_id_time index is used instead of the much better
+            # idx_logs_stanza_id index
+            sql = '''
+                SELECT additional_data FROM logs
+                WHERE stanza_id = ?
+                AND +jid_id = ?
+                AND account_id = ?
+                LIMIT 1
+                '''
+            result = self._con.execute(
+                sql, (stanza_id, archive_id, account_id)).fetchone()
+        else:
+            sql = '''
+                SELECT additional_data FROM logs
+                WHERE stanza_id = ?
+                AND account_id = ?
+                AND kind != ?
+                LIMIT 1
+                '''
+            result = self._con.execute(
+                sql, (stanza_id, account_id, KindConstant.GC_MSG)).fetchone()
+
+        if result is None:
+            return
+
+        if result.additional_data is None:
+            additional_data = AdditionalDataDict()
+        else:
+            additional_data = result.additional_data
+
+        if properties.is_moderation:
+            assert properties.moderation is not None
+            additional_data.set_value(
+                'retracted', 'by', properties.moderation.moderator_jid)
+            additional_data.set_value(
+                'retracted', 'timestamp', properties.moderation.timestamp)
+            additional_data.set_value(
+                'retracted', 'reason', properties.moderation.reason)
+        serialized_dict = json.dumps(additional_data.data)
+
+        if is_groupchat:
+            sql = '''
+                UPDATE logs SET additional_data = ?
+                WHERE stanza_id = ?
+                AND account_id = ?
+                AND +jid_id = ?
+                '''
+            self._con.execute(
+                sql, (serialized_dict, stanza_id, account_id, archive_id))
+        else:
+            sql = '''
+                UPDATE logs SET additional_data = ?
+                WHERE stanza_id = ?
+                AND account_id = ?
+                AND kind != ?
+                '''
+            self._con.execute(
+                sql, (serialized_dict, stanza_id, account_id,
+                      KindConstant.GC_MSG))
+
+    def insert_jid(self,
+                   jid: str,
+                   kind: Optional[KindConstant] = None,
+                   type_: JIDConstant = JIDConstant.NORMAL_TYPE
+                   ) -> int:
         """
         Insert a new jid into the `jids` table.
         This is an alias of get_jid_id() for better readablility.
@@ -793,8 +1158,13 @@ class MessageArchiveStorage(SqliteStorage):
         return self.get_jid_id(jid, kind, type_)
 
     @timeit
-    def insert_into_logs(self, account, jid, time_, kind,
-                         unread=True, **kwargs):
+    def insert_into_logs(self,
+                         account: str,
+                         jid: str,
+                         time_: float,
+                         kind: KindConstant,
+                         **kwargs: Any
+                         ) -> int:
         """
         Insert a new message into the `logs` table
 
@@ -832,17 +1202,17 @@ class MessageArchiveStorage(SqliteStorage):
         log.info('Insert into DB: jid: %s, time: %s, kind: %s, stanza_id: %s',
                  jid, time_, kind, kwargs.get('stanza_id', None))
 
-        if unread and kind == KindConstant.CHAT_MSG_RECV:
-            sql = '''INSERT INTO unread_messages (message_id, jid_id)
-                     VALUES (?, (SELECT jid_id FROM jids WHERE jid = ?))'''
-            self._con.execute(sql, (lastrowid, jid))
-
         self._delayed_commit()
 
         return lastrowid
 
     @timeit
-    def set_message_error(self, account_jid, jid, message_id, error):
+    def set_message_error(self,
+                          account_jid: str,
+                          jid: JID,
+                          message_id: str,
+                          error: str
+                          ) -> None:
         """
         Update the corresponding message with the error
 
@@ -871,7 +1241,12 @@ class MessageArchiveStorage(SqliteStorage):
         self._delayed_commit()
 
     @timeit
-    def set_marker(self, account_jid, jid, message_id, state):
+    def set_marker(self,
+                   account_jid: str,
+                   jid: str,
+                   message_id: str,
+                   state: str
+                   ) -> None:
         """
         Update the marker state of the corresponding message
 
@@ -894,17 +1269,17 @@ class MessageArchiveStorage(SqliteStorage):
             # Unknown JID
             return
 
-        state = 0 if state == 'received' else 1
+        state_int = 0 if state == 'received' else 1
 
         sql = '''
             UPDATE logs SET marker = ?
             WHERE account_id = ? AND jid_id = ? AND message_id = ?
             '''
-        self._con.execute(sql, (state, account_id, jid_id, message_id))
+        self._con.execute(sql, (state_int, account_id, jid_id, message_id))
         self._delayed_commit()
 
     @timeit
-    def get_archive_infos(self, jid):
+    def get_archive_infos(self, jid: str) -> Optional[LastArchiveMessageRow]:
         """
         Get the archive infos
 
@@ -916,7 +1291,7 @@ class MessageArchiveStorage(SqliteStorage):
         return self._con.execute(sql, (jid_id,)).fetchone()
 
     @timeit
-    def set_archive_infos(self, jid, **kwargs):
+    def set_archive_infos(self, jid: str, **kwargs: Any) -> None:
         """
         Set archive infos
 
@@ -960,7 +1335,7 @@ class MessageArchiveStorage(SqliteStorage):
         self._delayed_commit()
 
     @timeit
-    def reset_archive_infos(self, jid):
+    def reset_archive_infos(self, jid: str) -> None:
         """
         Set archive infos
 
@@ -976,7 +1351,31 @@ class MessageArchiveStorage(SqliteStorage):
         log.info('Reset message archive info: %s', jid)
         self._delayed_commit()
 
-    def _cleanup_chat_history(self):
+    def remove_history(self, account: str, jid: JID) -> None:
+        """
+        Remove history for a specific chat.
+        If it's a group chat, remove last MAM ID as well.
+        """
+        account_id = self.get_account_id(account)
+        jid_id = self.get_jid_id(jid)
+        sql = 'DELETE FROM logs WHERE account_id = ? AND jid_id = ?'
+        self._con.execute(sql, (account_id, jid_id))
+
+        self._delayed_commit()
+        log.info('Removed history for: %s', jid)
+
+    def forget_jid_data(self, account: str, jid: JID) -> None:
+        jid_id = self.get_jid_id(jid)
+        sql = 'DELETE FROM jids WHERE jid_id = ?'
+        self._con.execute(sql, (jid_id,))
+
+        sql = 'DELETE FROM last_archive_message WHERE jid_id = ?'
+        self._con.execute(sql, (jid_id,))
+
+        self._delayed_commit()
+        log.info('Forgot data for: %s', jid)
+
+    def _cleanup_chat_history(self) -> None:
         """
         Remove messages from account where messages are older than max_age
         """

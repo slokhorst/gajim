@@ -19,7 +19,7 @@ from gajim.gui.avatar import clip_circle
 from gajim.gui.avatar_selector import AvatarSelector
 from gajim.gui.dialogs import ErrorDialog
 from gajim.gui.filechoosers import AvatarChooserDialog
-from gajim.gui.util import get_builder
+from gajim.gui.builder import get_builder
 from gajim.gui.vcard_grid import VCardGrid
 from gajim.gui.util import scroll_to_end
 
@@ -38,6 +38,7 @@ MENU_DICT = {
     'role': Q_('?profile:Role'),
     'url': _('URL'),
     'key': Q_('?profile:Public Encryption Key'),
+    'note': Q_('?profile:Note'),
 }
 
 
@@ -55,6 +56,10 @@ class ProfileWindow(Gtk.ApplicationWindow):
 
         self.account = account
         self._jid = app.get_jid_from_account(account)
+
+        self._client = app.get_client(self.account)
+        self._contact = self._client.get_module('Contacts').get_contact(
+            self._jid)
 
         self._ui = get_builder('profile.ui')
 
@@ -112,6 +117,11 @@ class ProfileWindow(Gtk.ApplicationWindow):
         self._ui.connect_signals(self)
         self.connect('key-press-event', self._on_key_press_event)
 
+        self.connect('destroy', self._on_destroy)
+
+    def _on_destroy(self, *args):
+        app.check_finalize(self)
+
     def _on_access_model_received(self, task):
         namespace = task.get_user_data()
 
@@ -125,14 +135,14 @@ class ProfileWindow(Gtk.ApplicationWindow):
         access_model = result == 'open'
 
         if namespace == Namespace.VCARD4_PUBSUB:
-            self._ui.vcard_access.set_active(access_model)
+            self._set_vcard_access_switch(access_model)
         else:
             if self._avatar_nick_public is None:
                 self._avatar_nick_public = access_model
             else:
-                self._avatar_nick_public = (self._avatar_nick_public and
+                self._avatar_nick_public = (self._avatar_nick_public or
                                             access_model)
-            self._ui.avatar_nick_access.set_active(self._avatar_nick_public)
+            self._set_avatar_nick_access_switch(self._avatar_nick_public)
 
     def _on_vcard_received(self, task):
         try:
@@ -151,12 +161,9 @@ class ProfileWindow(Gtk.ApplicationWindow):
 
     def _load_avatar(self):
         scale = self.get_scale_factor()
-        self._current_avatar = app.contacts.get_avatar(
-            self.account,
-            self._jid,
-            AvatarSize.VCARD,
-            scale)
-
+        self._current_avatar = self._contact.get_avatar(AvatarSize.VCARD,
+                                                        scale,
+                                                        add_show=False)
         self._ui.avatar_image.set_from_surface(self._current_avatar)
         self._ui.avatar_image.show()
 
@@ -222,8 +229,8 @@ class ProfileWindow(Gtk.ApplicationWindow):
         vcard = self._vcard_grid.get_vcard()
         self._current_vcard = vcard.copy()
 
-        con = app.connections[self.account]
-        con.get_module('VCard4').set_vcard(
+        client = app.get_client(self.account)
+        client.get_module('VCard4').set_vcard(
             self._current_vcard,
             public=self._ui.vcard_access.get_active(),
             callback=self._on_save_finished)
@@ -232,17 +239,17 @@ class ProfileWindow(Gtk.ApplicationWindow):
 
         if self._new_avatar is False:
             if self._avatar_nick_public != public:
-                con.get_module('UserAvatar').set_access_model(public)
+                client.get_module('UserAvatar').set_access_model(public)
 
         else:
             # Only update avatar if it changed
-            con.get_module('UserAvatar').set_avatar(
+            client.get_module('UserAvatar').set_avatar(
                 self._new_avatar,
                 public=public,
                 callback=self._on_set_avatar)
 
         nick = GLib.markup_escape_text(self._ui.nickname_entry.get_text())
-        con.get_module('UserNickname').set_nickname(nick, public=public)
+        client.get_module('UserNickname').set_nickname(nick, public=public)
 
         if not nick:
             nick = app.settings.get_account_setting(
@@ -272,10 +279,11 @@ class ProfileWindow(Gtk.ApplicationWindow):
             return
 
     def _on_remove_avatar(self, _button):
-        contact = app.contacts.create_contact(self._jid, self.account)
         scale = self.get_scale_factor()
-        surface = app.interface.avatar_storage.get_surface(
-            contact, AvatarSize.VCARD, scale, default=True)
+        surface = self._contact.get_avatar(AvatarSize.VCARD,
+                                           scale,
+                                           add_show=False,
+                                           default=True)
 
         self._ui.avatar_image.set_from_surface(surface)
         self._ui.remove_avatar_button.hide()
@@ -324,13 +332,22 @@ class ProfileWindow(Gtk.ApplicationWindow):
         self._ui.remove_avatar_button.show()
         self._ui.profile_stack.set_visible_child_name('profile')
 
-    def _access_switch_toggled(self, *args):
-        avatar_nick_access = self._ui.avatar_nick_access.get_active()
-        vcard_access = self._ui.vcard_access.get_active()
-        self._ui.avatar_nick_access_label.set_text(
-            _('Everyone') if avatar_nick_access else _('Contacts'))
+    def _set_vcard_access_switch(self, state):
+        self._ui.vcard_access.set_active(state)
         self._ui.vcard_access_label.set_text(
-            _('Everyone') if vcard_access else _('Contacts'))
+            _('Everyone') if state else _('Contacts'))
+
+    def _set_avatar_nick_access_switch(self, state):
+        self._ui.avatar_nick_access.set_active(state)
+        self._ui.avatar_nick_access_label.set_text(
+            _('Everyone') if state else _('Contacts'))
+
+    def _access_switch_toggled(self, *args):
+        state = self._ui.vcard_access.get_active()
+        self._set_vcard_access_switch(state)
+
+        state = self._ui.avatar_nick_access.get_active()
+        self._set_avatar_nick_access_switch(state)
 
     def _on_save_finished(self, task):
         try:
