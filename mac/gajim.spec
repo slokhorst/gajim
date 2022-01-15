@@ -10,7 +10,9 @@ info_plist = {
     "NSHighResolutionCapable": True,
 }
 
-hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit', 'importlib', 'importlib.resources', 'nbxmpp.idlequeue', 'nbxmpp.structs', 'nbxmpp.errors', 'json', 'OpenSSL', 'precis_i18n.codec']
+hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit', 'importlib', 'importlib.resources',
+                 'json', 'OpenSSL', 'precis_i18n.codec']
+hiddenimports += collect_submodules('nbxmpp')
 
 import sys
 print("sys.path:")
