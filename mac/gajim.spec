@@ -10,7 +10,7 @@ info_plist = {
     "NSHighResolutionCapable": True,
 }
 
-hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit', 'importlib', 'importlib.resources', 'nbxmpp.idlequeue', 'nbxmpp.structs', 'nbxmpp.errors', 'json']
+hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit', 'importlib', 'importlib.resources', 'nbxmpp.idlequeue', 'nbxmpp.structs', 'nbxmpp.errors', 'json', 'OpenSSL']
 
 import sys
 print("sys.path:")
