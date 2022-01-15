@@ -14,6 +14,7 @@ info_plist = {
 
 hiddenimports = ['nbxmpp', 'pyobjc', 'AppKit', 'importlib', 'importlib.resources',
                  'json', 'OpenSSL', 'precis_i18n.codec']
+hiddenimports += collect_submodules('gajim')
 hiddenimports += collect_submodules('nbxmpp')
 
 import sys
