@@ -1,5 +1,7 @@
 # -*- mode: python -*-
 
+from PyInstaller.utils.hooks import collect_submodules
+
 block_cipher = None
 
 cwd = os.getcwd()
