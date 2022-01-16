@@ -14,7 +14,7 @@ jobs:
         brew install python
         brew install gettext git gtk+3 librsvg pygobject3 adwaita-icon-theme gtksourceview4
         brew install gtksourceview3 gst-python
-        #brew install libsoup
+        brew install libsoup
         brew install libsoup@2
         pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
         pip3 install git+https://github.com/pyinstaller/pyinstaller.git@develop
