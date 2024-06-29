@@ -1,24 +1,13 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 import logging
 
-from gi.repository import Gtk
 from gi.repository import Gdk
-
+from gi.repository import Gtk
 from nbxmpp.errors import MalformedStanzaError
 from nbxmpp.errors import StanzaError
 from nbxmpp.task import Task
@@ -26,13 +15,13 @@ from nbxmpp.task import Task
 from gajim.common import app
 from gajim.common.i18n import _
 
-from .builder import get_builder
-from .util import EventHelper
-from .dialogs import DialogButton
-from .dialogs import ConfirmationDialog
-from .dialogs import InformationDialog
+from gajim.gtk.builder import get_builder
+from gajim.gtk.dialogs import ConfirmationDialog
+from gajim.gtk.dialogs import DialogButton
+from gajim.gtk.dialogs import InformationDialog
+from gajim.gtk.util import EventHelper
 
-log = logging.getLogger('gajim.gui.mam_preferences')
+log = logging.getLogger('gajim.gtk.mam_preferences')
 
 
 class MamPreferences(Gtk.ApplicationWindow, EventHelper):
@@ -47,7 +36,7 @@ class MamPreferences(Gtk.ApplicationWindow, EventHelper):
         self.connect_after('key-press-event', self._on_key_press)
 
         self.account = account
-        self._con = app.connections[account]
+        self._client = app.get_client(account)
         self._destroyed = False
 
         self._ui = get_builder('mam_preferences.ui')
@@ -63,7 +52,7 @@ class MamPreferences(Gtk.ApplicationWindow, EventHelper):
 
         self._activate_spinner()
 
-        self._con.get_module('MAM').request_preferences(
+        self._client.get_module('MAM').request_preferences(
             callback=self._mam_prefs_received)
 
     def _on_destroy(self, widget: MamPreferences) -> None:
@@ -82,10 +71,10 @@ class MamPreferences(Gtk.ApplicationWindow, EventHelper):
         self._ui.default_combo.set_active_id(result.default)
         self._ui.preferences_store.clear()
         for jid in result.always:
-            self._ui.preferences_store.append((str(jid), True))
+            self._ui.preferences_store.append([str(jid), True])
 
         for jid in result.never:
-            self._ui.preferences_store.append((str(jid), False))
+            self._ui.preferences_store.append([str(jid), False])
 
     def _mam_prefs_saved(self, task: Task) -> None:
         try:
@@ -156,7 +145,7 @@ class MamPreferences(Gtk.ApplicationWindow, EventHelper):
                 always.append(jid)
             else:
                 never.append(jid)
-        self._con.get_module('MAM').set_preferences(
+        self._client.get_module('MAM').set_preferences(
             default, always, never, callback=self._mam_prefs_saved)
 
     def _activate_spinner(self) -> None:

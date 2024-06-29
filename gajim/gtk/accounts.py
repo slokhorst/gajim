@@ -1,48 +1,44 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 from typing import Any
+from typing import cast
 
-import sys
 import locale
 import logging
 from collections import defaultdict
 
-from gi.repository import Gtk
 from gi.repository import Gdk
-from gi.repository import Pango
 from gi.repository import GObject
+from gi.repository import Gtk
+from gi.repository import Pango
+from nbxmpp.stringprep import saslprep
 
 from gajim.common import app
-from gajim.common import ged
 from gajim.common import passwords
+from gajim.common import types
+from gajim.common.const import ClientState
 from gajim.common.i18n import _
-from gajim.common.i18n import Q_
+from gajim.common.i18n import p_
+from gajim.common.setting_values import AllSettingsT
 
-from .dialogs import DialogButton
-from .dialogs import ConfirmationDialog
-from .const import Setting
-from .const import SettingKind
-from .const import SettingType
-from .settings import SettingsDialog
-from .settings import SettingsBox
-from .util import open_window
+from gajim.gtk.const import Setting
+from gajim.gtk.const import SettingKind
+from gajim.gtk.const import SettingType
+from gajim.gtk.dialogs import ConfirmationDialog
+from gajim.gtk.dialogs import DialogButton
+from gajim.gtk.menus import build_accounts_menu
+from gajim.gtk.omemo_trust_manager import OMEMOTrustManager
+from gajim.gtk.settings import PopoverSetting
+from gajim.gtk.settings import SettingsBox
+from gajim.gtk.settings import SettingsDialog
+from gajim.gtk.util import get_app_window
+from gajim.gtk.util import open_window
 
-
-log = logging.getLogger('gajim.gui.accounts')
+log = logging.getLogger('gajim.gtk.accounts')
 
 
 class AccountsWindow(Gtk.ApplicationWindow):
@@ -55,8 +51,8 @@ class AccountsWindow(Gtk.ApplicationWindow):
         self.set_default_size(700, 550)
         self.set_resizable(True)
         self.set_title(_('Accounts'))
-        self._need_relogin = {}
-        self._accounts = {}
+        self._need_relogin: dict[str, list[AllSettingsT]] = {}
+        self._accounts: dict[str, Account] = {}
 
         self._menu = AccountMenu()
         self._settings = Settings()
@@ -67,9 +63,6 @@ class AccountsWindow(Gtk.ApplicationWindow):
         self.add(box)
 
         for account in app.get_accounts_sorted():
-            if account == 'Local':
-                # Disable zeroconf support until its working again
-                continue
             self.add_account(account, initial=True)
 
         self._menu.connect('menu-activated', self._on_menu_activated)
@@ -98,6 +91,7 @@ class AccountsWindow(Gtk.ApplicationWindow):
 
     def _on_destroy(self, _widget: AccountsWindow) -> None:
         self._check_relogin()
+        app.check_finalize(self)
 
     def update_account_label(self, account: str) -> None:
         self._accounts[account].update_account_label()
@@ -120,14 +114,11 @@ class AccountsWindow(Gtk.ApplicationWindow):
         if not app.account_is_connected(account):
             return
 
-        if account == app.ZEROCONF_ACC_NAME:
-            app.connections[app.ZEROCONF_ACC_NAME].update_details()
-            return
-
         def relog():
-            app.connections[account].disconnect(gracefully=True,
-                                                reconnect=True,
-                                                destroy_client=True)
+            client = app.get_client(account)
+            client.disconnect(gracefully=True,
+                              reconnect=True,
+                              destroy_client=True)
 
         ConfirmationDialog(
             _('Re-Login'),
@@ -141,25 +132,20 @@ class AccountsWindow(Gtk.ApplicationWindow):
             transient_for=self).show()
 
     @staticmethod
-    def _get_relogin_settings(account: str) -> list[Any]:
-        if account == app.ZEROCONF_ACC_NAME:
-            settings = ['zeroconf_first_name', 'zeroconf_last_name',
-                        'zeroconf_jabber_id', 'zeroconf_email']
-        else:
-            settings = ['client_cert', 'proxy', 'resource',
-                        'use_custom_host', 'custom_host', 'custom_port']
-
-        values: list[Any] = []
-        for setting in settings:
-            values.append(app.settings.get_account_setting(account, setting))
+    def _get_relogin_settings(account: str) -> list[AllSettingsT]:
+        values: list[AllSettingsT] = []
+        values.append(
+            app.settings.get_account_setting(account, 'client_cert'))
+        values.append(app.settings.get_account_setting(account, 'proxy'))
+        values.append(app.settings.get_account_setting(account, 'resource'))
+        values.append(
+            app.settings.get_account_setting(account, 'use_custom_host'))
+        values.append(app.settings.get_account_setting(account, 'custom_host'))
+        values.append(app.settings.get_account_setting(account, 'custom_port'))
         return values
 
     @staticmethod
     def on_remove_account(account: str) -> None:
-        if app.settings.get_account_setting(account, 'is_zeroconf'):
-            # Should never happen as button is insensitive
-            return
-
         open_window('RemoveAccount', account=account)
 
     def remove_account(self, account: str) -> None:
@@ -172,9 +158,9 @@ class AccountsWindow(Gtk.ApplicationWindow):
         if not initial:
             self._accounts[account].show()
 
-    def select_account(self, account: str) -> None:
+    def select_account(self, account: str, page: str | None = None) -> None:
         try:
-            self._accounts[account].select()
+            self._accounts[account].select(page)
         except KeyError:
             log.warning('select_account() failed, account %s not found',
                         account)
@@ -191,22 +177,22 @@ class Settings(Gtk.ScrolledWindow):
         self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self._stack = Gtk.Stack(vhomogeneous=False)
         self._stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self._stack.get_style_context().add_class('settings-stack')
         self._stack.add_named(AddNewAccountPage(), 'add-account')
-        self.get_style_context().add_class('accounts-settings')
 
         self.add(self._stack)
-        self._page_signal_ids = {}
-        self._pages = defaultdict(list)
+        self._page_signal_ids: dict[GenericSettingPage, int] = {}
+        self._pages: dict[str, list[GenericSettingPage]] = defaultdict(list)
 
-    def add_page(self, page):
+    def add_page(self, page: GenericSettingPage) -> None:
         self._pages[page.account].append(page)
-        self._stack.add_named(page, '%s-%s' % (page.account, page.name))
+        self._stack.add_named(page, f'{page.account}-{page.name}')
         self._page_signal_ids[page] = page.connect_signal(self._stack)
 
-    def set_page(self, name):
+    def set_page(self, name: str) -> None:
         self._stack.set_visible_child_name(name)
 
-    def remove_account(self, account):
+    def remove_account(self, account: str) -> None:
         for page in self._pages[account]:
             signal_id = self._page_signal_ids[page]
             del self._page_signal_ids[page]
@@ -215,10 +201,11 @@ class Settings(Gtk.ScrolledWindow):
             page.destroy()
         del self._pages[account]
 
-    def update_proxy_list(self, account):
+    def update_proxy_list(self, account: str) -> None:
         for page in self._pages[account]:
             if page.name != 'connection':
                 continue
+            assert isinstance(page, ConnectionPage)
             page.update_proxy_entries()
 
 
@@ -228,7 +215,7 @@ class AccountMenu(Gtk.Box):
         'menu-activated': (GObject.SignalFlags.RUN_FIRST, None, (str, str)),
     }
 
-    def __init__(self):
+    def __init__(self) -> None:
         Gtk.Box.__init__(self)
         self.set_hexpand(False)
         self.set_size_request(160, -1)
@@ -240,7 +227,8 @@ class AccountMenu(Gtk.Box):
 
         self._accounts_listbox = Gtk.ListBox()
         self._accounts_listbox.set_sort_func(self._sort_func)
-        self._accounts_listbox.get_style_context().add_class('settings-box')
+        self._accounts_listbox.get_style_context().add_class(
+            'accounts-menu-listbox')
         self._accounts_listbox.connect('row-activated',
                                        self._on_account_row_activated)
 
@@ -251,33 +239,41 @@ class AccountMenu(Gtk.Box):
         self.add(self._stack)
 
     @staticmethod
-    def _sort_func(row1, row2):
-        if row1.label == 'Local':
-            return -1
+    def _sort_func(row1: AccountRow, row2: AccountRow) -> int:
         return locale.strcoll(row1.label.lower(), row2.label.lower())
 
-    def add_account(self, row):
+    def add_account(self, row: AccountRow) -> None:
         self._accounts_listbox.add(row)
         sub_menu = AccountSubMenu(row.account)
-        self._stack.add_named(sub_menu, '%s-menu' % row.account)
+        self._stack.add_named(sub_menu, f'{row.account}-menu')
 
         sub_menu.connect('row-activated', self._on_sub_menu_row_activated)
 
-    def remove_account(self, row):
+    def remove_account(self, row: AccountRow) -> None:
         if self._stack.get_visible_child_name() != 'accounts':
             # activate 'back' button
-            self._stack.get_visible_child().get_row_at_index(1).emit('activate')
+            listbox = cast(Gtk.ListBox, self._stack.get_visible_child())
+            back_row = cast(Gtk.ListBoxRow, listbox.get_row_at_index(1))
+            back_row.emit('activate')
         self._accounts_listbox.remove(row)
-        sub_menu = self._stack.get_child_by_name('%s-menu' % row.account)
+        sub_menu = self._stack.get_child_by_name(f'{row.account}-menu')
+        assert sub_menu is not None
         self._stack.remove(sub_menu)
         row.destroy()
         sub_menu.destroy()
 
-    def _on_account_row_activated(self, _listbox, row):
-        self._stack.set_visible_child_name('%s-menu' % row.account)
-        self._stack.get_visible_child().get_row_at_index(2).emit('activate')
+    def _on_account_row_activated(self,
+                                  _listbox: Gtk.ListBox,
+                                  row: AccountRow
+                                  ) -> None:
+        self._stack.set_visible_child_name(f'{row.account}-menu')
+        listbox = cast(Gtk.ListBox, self._stack.get_visible_child())
+        listbox_row = cast(Gtk.ListBoxRow, listbox.get_row_at_index(2))
+        listbox_row.emit('activate')
 
-    def _on_sub_menu_row_activated(self, listbox, row):
+    def _on_sub_menu_row_activated(self,
+                                   listbox: AccountSubMenu,
+                                   row: MenuItem) -> None:
         if row.name == 'back':
             self._stack.set_visible_child_full(
                 'accounts', Gtk.StackTransitionType.OVER_RIGHT)
@@ -288,11 +284,18 @@ class AccountMenu(Gtk.Box):
         else:
             self.emit('menu-activated',
                       listbox.account,
-                      '%s-%s' % (listbox.account, row.name))
+                      f'{listbox.account}-{row.name}')
 
-    def update_account_label(self, account):
+    def set_page(self, account: str, page_name: str) -> None:
+        sub_menu = cast(
+            AccountSubMenu, self._stack.get_child_by_name(f'{account}-menu'))
+        sub_menu.select_row_by_name(page_name)
+        self.emit('menu-activated', account, f'{account}-{page_name}')
+
+    def update_account_label(self, account: str) -> None:
         self._accounts_listbox.invalidate_sort()
-        sub_menu = self._stack.get_child_by_name('%s-menu' % account)
+        sub_menu = cast(
+            AccountSubMenu, self._stack.get_child_by_name(f'{account}-menu'))
         sub_menu.update()
 
 
@@ -302,33 +305,41 @@ class AccountSubMenu(Gtk.ListBox):
         'update': (GObject.SignalFlags.RUN_FIRST, None, (str,))
     }
 
-    def __init__(self, account):
+    def __init__(self, account: str) -> None:
         Gtk.ListBox.__init__(self)
         self.set_vexpand(True)
         self.set_hexpand(True)
-        self.get_style_context().add_class('settings-box')
+        self.get_style_context().add_class('accounts-menu-listbox')
 
         self._account = account
 
         self.add(AccountLabelMenuItem(self, self._account))
         self.add(BackMenuItem())
         self.add(PageMenuItem('general', _('General')))
-        if account != 'Local':
-            self.add(PageMenuItem('privacy', _('Privacy')))
-            self.add(PageMenuItem('connection', _('Connection')))
-            self.add(PageMenuItem('advanced', _('Advanced')))
-            self.add(RemoveMenuItem())
+        self.add(PageMenuItem('privacy', _('Privacy')))
+        self.add(PageMenuItem('encryption-omemo', _('Encryption (OMEMO)')))
+        self.add(PageMenuItem('connection', _('Connection')))
+        self.add(PageMenuItem('advanced', _('Advanced')))
+        self.add(RemoveMenuItem())
 
     @property
-    def account(self):
+    def account(self) -> str:
         return self._account
 
-    def update(self):
+    def select_row_by_name(self, row_name: str) -> None:
+        for row in self.get_children():
+            if not isinstance(row, PageMenuItem):
+                continue
+            if row.name == row_name:
+                self.select_row(row)
+                return
+
+    def update(self) -> None:
         self.emit('update', self._account)
 
 
 class MenuItem(Gtk.ListBoxRow):
-    def __init__(self, name):
+    def __init__(self, name: str) -> None:
         Gtk.ListBoxRow.__init__(self)
         self._name = name
         self._box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
@@ -338,12 +349,12 @@ class MenuItem(Gtk.ListBoxRow):
         self.add(self._box)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
 
 class RemoveMenuItem(MenuItem):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__('remove')
         self._label.set_text(_('Remove'))
         image = Gtk.Image.new_from_icon_name('user-trash-symbolic',
@@ -357,7 +368,7 @@ class RemoveMenuItem(MenuItem):
 
 
 class AccountLabelMenuItem(MenuItem):
-    def __init__(self, parent, account):
+    def __init__(self, parent: AccountSubMenu, account: str) -> None:
         super().__init__('account-label')
         self._update_account_label(parent, account)
 
@@ -378,13 +389,16 @@ class AccountLabelMenuItem(MenuItem):
 
         parent.connect('update', self._update_account_label)
 
-    def _update_account_label(self, _listbox, account):
+    def _update_account_label(self,
+                              _listbox: Gtk.ListBox,
+                              account: str
+                              ) -> None:
         account_label = app.get_account_label(account)
         self._label.set_text(account_label)
 
 
 class BackMenuItem(MenuItem):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__('back')
         self.set_selectable(False)
 
@@ -399,17 +413,19 @@ class BackMenuItem(MenuItem):
 
 
 class PageMenuItem(MenuItem):
-    def __init__(self, name, label):
+    def __init__(self, name: str, label: str) -> None:
         super().__init__(name)
 
         if name == 'general':
-            icon = 'preferences-system-symbolic'
+            icon = 'avatar-default-symbolic'
         elif name == 'privacy':
             icon = 'preferences-system-privacy-symbolic'
+        elif name == 'encryption-omemo':
+            icon = 'channel-secure-symbolic'
         elif name == 'connection':
             icon = 'preferences-system-network-symbolic'
         elif name == 'advanced':
-            icon = 'preferences-other-symbolic'
+            icon = 'preferences-system-symbolic'
         else:
             icon = 'dialog-error-symbolic'
 
@@ -421,56 +437,60 @@ class PageMenuItem(MenuItem):
 
 
 class Account:
-    def __init__(self, account, menu, settings):
+    def __init__(self,
+                 account: str,
+                 menu: AccountMenu,
+                 settings: Settings
+                 ) -> None:
         self._account = account
         self._menu = menu
         self._settings = settings
 
-        if account == app.ZEROCONF_ACC_NAME:
-            self._settings.add_page(ZeroConfPage(account))
-        else:
-            self._settings.add_page(GeneralPage(account))
-            self._settings.add_page(ConnectionPage(account))
-            self._settings.add_page(PrivacyPage(account))
-            self._settings.add_page(AdvancedPage(account))
+        self._settings.add_page(GeneralPage(account))
+        self._settings.add_page(PrivacyPage(account))
+        self._settings.add_page(EncryptionOMEMOPage(account))
+        self._settings.add_page(ConnectionPage(account))
+        self._settings.add_page(AdvancedPage(account))
 
         self._account_row = AccountRow(account)
         self._menu.add_account(self._account_row)
 
-    def select(self):
+    def select(self, page_name: str | None = None) -> None:
         self._account_row.emit('activate')
+        if page_name is not None:
+            self._menu.set_page(self._account, page_name)
 
-    def show(self):
+    def show(self) -> None:
         self._menu.show_all()
         self._settings.show_all()
         self.select()
 
-    def remove(self):
+    def remove(self) -> None:
         self._menu.remove_account(self._account_row)
         self._settings.remove_account(self._account)
 
-    def update_account_label(self):
+    def update_account_label(self) -> None:
         self._account_row.update_account_label()
         self._menu.update_account_label(self._account)
 
-    def enable_account(self, state):
+    def enable_account(self, state: bool) -> None:
         self._account_row.enable_account(state)
 
     @property
-    def menu(self):
+    def menu(self) -> AccountMenu:
         return self._menu
 
     @property
-    def account(self):
+    def account(self) -> str:
         return self._account
 
     @property
-    def settings(self):
+    def settings(self) -> str:
         return self._account
 
 
 class AccountRow(Gtk.ListBoxRow):
-    def __init__(self, account):
+    def __init__(self, account: str) -> None:
         Gtk.ListBoxRow.__init__(self)
         self.set_selectable(False)
 
@@ -496,20 +516,11 @@ class AccountRow(Gtk.ListBoxRow):
         self._switch.set_vexpand(False)
 
         self._switch_state_label = Gtk.Label()
-        self._switch_state_label.set_xalign(1)
+        self._switch_state_label.set_xalign(0)
         self._switch_state_label.set_valign(Gtk.Align.CENTER)
+        label_width = max(len(p_('Switch', 'On')), len(p_('Switch', 'Off')))
+        self._switch_state_label.set_width_chars(label_width)
         self._set_label(account_enabled)
-
-        if (self._account == app.ZEROCONF_ACC_NAME and
-                not app.is_installed('ZEROCONF')):
-            self._switch.set_active(False)
-            self.set_activatable(False)
-            self.set_sensitive(False)
-            if sys.platform in ('win32', 'darwin'):
-                tooltip = _('Please check if Bonjour is installed.')
-            else:
-                tooltip = _('Please check if Avahi is installed.')
-            self.set_tooltip_text(tooltip)
 
         self._switch.connect(
             'state-set', self._on_enable_switch, self._account)
@@ -522,83 +533,87 @@ class AccountRow(Gtk.ListBoxRow):
         self.add(box)
 
     @property
-    def account(self):
+    def account(self) -> str:
         return self._account
 
     @property
-    def label(self):
+    def label(self) -> str:
         return self._label.get_text()
 
-    def update_account_label(self):
+    def update_account_label(self) -> None:
         self._label.set_text(app.get_account_label(self._account))
 
-    def enable_account(self, state):
+    def enable_account(self, state: bool) -> None:
         self._switch.set_state(state)
         self._set_label(state)
 
-    def _set_label(self, active):
-        text = Q_('?switch:On') if active else Q_('?switch:Off')
+    def _set_label(self, active: bool) -> None:
+        text = p_('Switch', 'On') if active else p_('Switch', 'Off')
         self._switch_state_label.set_text(text)
 
-    def _on_enable_switch(self, switch, state, account):
-        def _on_disconnect(event):
-            if event.account != account:
-                return
-            app.ged.remove_event_handler('account-disconnected',
-                                         ged.CORE,
-                                         _on_disconnect)
-            app.interface.disable_account(account)
+    def _on_enable_switch(self,
+                          switch: Gtk.Switch,
+                          state: bool,
+                          account: str
+                          ) -> int:
 
-        def _disable():
-            app.ged.register_event_handler('account-disconnected',
-                                           ged.CORE,
-                                           _on_disconnect)
-            app.connections[account].change_status('offline', 'offline')
+        def _disable() -> None:
+            client = app.get_client(account)
+            client.connect_signal('state-changed', self._on_state_changed)
+            client.change_status('offline', 'offline')
             switch.set_state(state)
             self._set_label(state)
 
-        old_state = app.settings.get_account_setting(account, 'active')
-        if old_state == state:
+        account_is_active = app.settings.get_account_setting(account, 'active')
+        if account_is_active == state:
             return Gdk.EVENT_PROPAGATE
 
-        if (account in app.connections and
-                not app.connections[account].state.is_disconnected):
+        if (account_is_active and
+                not app.get_client(account).state.is_disconnected):
             # Connecting or connected
+            window = cast(AccountsWindow, get_app_window('AccountsWindow'))
+            account_label = app.get_account_label(account)
             ConfirmationDialog(
                 _('Disable Account'),
-                _('Account %s is still connected') % account,
+                _('Account %s is still connected') % account_label,
                 _('All chat and group chat windows will be closed.'),
                 [DialogButton.make('Cancel',
                                    callback=lambda: switch.set_active(True)),
                  DialogButton.make('Remove',
                                    text=_('_Disable Account'),
                                    callback=_disable)],
-                transient_for=self.get_toplevel()).show()
+                transient_for=window).show()
             return Gdk.EVENT_STOP
 
         if state:
-            app.interface.enable_account(account)
+            app.app.enable_account(account)
         else:
-            app.interface.disable_account(account)
+            app.app.disable_account(account)
 
         return Gdk.EVENT_PROPAGATE
 
+    def _on_state_changed(self,
+                          client: types.Client,
+                          _signal_name: str,
+                          client_state: ClientState
+                          ) -> None:
+
+        if client_state.is_disconnected:
+            app.app.disable_account(client.account)
+
 
 class AddNewAccountPage(Gtk.Box):
-    def __init__(self):
+    def __init__(self) -> None:
         Gtk.Box.__init__(self,
                          orientation=Gtk.Orientation.VERTICAL,
                          spacing=18)
         self.set_vexpand(True)
         self.set_hexpand(True)
         self.set_margin_top(24)
-        pixbuf = Gtk.IconTheme.load_icon_for_scale(
-            Gtk.IconTheme.get_default(),
-            'org.gajim.Gajim-symbolic',
-            100,
-            self.get_scale_factor(),
-            0)
-        self.add(Gtk.Image.new_from_pixbuf(pixbuf))
+        image = Gtk.Image.new_from_icon_name(
+            'org.gajim.Gajim-symbolic', Gtk.IconSize.from_name('100'))
+        image.set_opacity(0.2)
+        self.add(image)
 
         button = Gtk.Button(label=_('Add Account'))
         button.get_style_context().add_class('suggested-action')
@@ -608,14 +623,18 @@ class AddNewAccountPage(Gtk.Box):
 
 
 class GenericSettingPage(Gtk.Box):
-    def __init__(self, account, settings):
+
+    name = ''
+
+    def __init__(self, account: str, settings: list[Setting]) -> None:
         Gtk.Box.__init__(self, orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.set_valign(Gtk.Align.START)
         self.set_vexpand(True)
+        self.get_style_context().add_class('settings-page')
         self.account = account
 
         self.listbox = SettingsBox(account)
-        self.listbox.get_style_context().add_class('accounts-settings-border')
+        self.listbox.get_style_context().add_class('border')
         self.listbox.set_selection_mode(Gtk.SelectionMode.NONE)
         self.listbox.set_vexpand(False)
         self.listbox.set_valign(Gtk.Align.END)
@@ -626,11 +645,11 @@ class GenericSettingPage(Gtk.Box):
 
         self.pack_end(self.listbox, True, True, 0)
 
-    def connect_signal(self, stack):
+    def connect_signal(self, stack: Gtk.Stack) -> int:
         return stack.connect('notify::visible-child',
                              self._on_visible_child_changed)
 
-    def _on_visible_child_changed(self, stack, _param):
+    def _on_visible_child_changed(self, stack: Gtk.Stack, _param: Any) -> None:
         if self == stack.get_visible_child():
             self.listbox.update_states()
 
@@ -639,15 +658,29 @@ class GeneralPage(GenericSettingPage):
 
     name = 'general'
 
-    def __init__(self, account):
+    def __init__(self, account: str) -> None:
+
+        workspaces = self._get_workspaces()
 
         settings = [
-            Setting(SettingKind.ENTRY, _('Label'),
-                    SettingType.ACCOUNT_CONFIG, 'account_label',
+            Setting(SettingKind.ENTRY,
+                    _('Label'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'account_label',
                     callback=self._on_account_name_change),
 
-            Setting(SettingKind.COLOR, _('Color'),
-                    SettingType.ACCOUNT_CONFIG, 'account_color',
+            Setting(SettingKind.POPOVER,
+                    _('Default Workspace'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'default_workspace',
+                    props={'entries': workspaces},
+                    desc=_('Chats from this account will use this workspace by '
+                           'default')),
+
+            Setting(SettingKind.COLOR,
+                    _('Color'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'account_color',
                     desc=_('Recognize your account by color')),
 
             Setting(SettingKind.LOGIN,
@@ -658,50 +691,71 @@ class GeneralPage(GenericSettingPage):
                     inverted=True,
                     props={'dialog': LoginDialog}),
 
-            Setting(SettingKind.ACTION, _('Import Contacts'),
-                    SettingType.ACTION, '-import-contacts',
+            Setting(SettingKind.ACTION,
+                    _('Import Contacts'),
+                    SettingType.ACTION,
+                    '-import-contacts',
                     props={'account': account}),
 
             # Currently not supported by nbxmpp
             #
-            # Setting(SettingKind.DIALOG, _('Client Certificate'),
-            #         SettingType.DIALOG, props={'dialog': CertificateDialog}),
-
-            Setting(SettingKind.SWITCH, _('Connect on startup'),
-                    SettingType.ACCOUNT_CONFIG, 'autoconnect'),
+            # Setting(SettingKind.DIALOG,
+            #         _('Client Certificate'),
+            #         SettingType.DIALOG,
+            #         props={'dialog': CertificateDialog}),
 
             Setting(SettingKind.SWITCH,
-                    _('Save conversations for all contacts'),
-                    SettingType.ACCOUNT_CONFIG, 'no_log_for',
-                    desc=_('Store conversations on the harddrive')),
+                    _('Connect on startup'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'autoconnect'),
 
-            Setting(SettingKind.SWITCH, _('Global Status'),
-                    SettingType.ACCOUNT_CONFIG, 'sync_with_global_status',
+            Setting(SettingKind.SWITCH,
+                    _('Global Status'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'sync_with_global_status',
                     desc=_('Synchronise the status of all accounts')),
 
-            Setting(SettingKind.SWITCH, _('Remember Last Status'),
-                    SettingType.ACCOUNT_CONFIG, 'restore_last_status',
+            Setting(SettingKind.SWITCH,
+                    _('Remember Last Status'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'restore_last_status',
                     desc=_('Restore status and status message of your '
                            'last session')),
 
-            Setting(SettingKind.SWITCH, _('Use file transfer proxies'),
-                    SettingType.ACCOUNT_CONFIG, 'use_ft_proxies'),
+            Setting(SettingKind.SWITCH,
+                    _('Use file transfer proxies'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'use_ft_proxies'),
         ]
         GenericSettingPage.__init__(self, account, settings)
 
-    def _on_account_name_change(self, *args):
-        self.get_toplevel().update_account_label(self.account)
+    @staticmethod
+    def _get_workspaces() -> dict[str, str]:
+        workspaces: dict[str, str] = {'': _('Disabled')}
+        for workspace_id in app.settings.get_workspaces():
+            name = app.settings.get_workspace_setting(workspace_id, 'name')
+            workspaces[workspace_id] = name
+        return workspaces
+
+    def _on_account_name_change(self, *args: Any) -> None:
+        window = cast(AccountsWindow, get_app_window('AccountsWindow'))
+        window.update_account_label(self.account)
+        build_accounts_menu()
 
 
 class PrivacyPage(GenericSettingPage):
 
     name = 'privacy'
 
-    def __init__(self, account):
+    def __init__(self, account: str) -> None:
         self._account = account
+        self._client: types.Client | None = None
+        if app.account_is_connected(account):
+            self._client = app.get_client(account)
 
         history_max_age = {
             -1: _('Forever'),
+            0: _('Until Gajim is Closed'),
             86400: _('1 Day'),
             604800: _('1 Week'),
             2629743: _('1 Month'),
@@ -711,38 +765,69 @@ class PrivacyPage(GenericSettingPage):
         }
 
         chatstate_entries = {
-            'all': _('Enabled'),
-            'composing_only': _('Composing Only'),
             'disabled': _('Disabled'),
+            'composing_only': _('Composing Only'),
+            'all': _('All Chat States'),
+        }
+
+        encryption_entries = {
+            '': _('Unencrypted'),
+            'OMEMO': 'OMEMO',
+            'OpenPGP': 'OpenPGP',
+            'PGP': 'PGP',
         }
 
         settings = [
-            Setting(SettingKind.SWITCH, _('Idle Time'),
-                    SettingType.ACCOUNT_CONFIG, 'send_idle_time',
+            Setting(SettingKind.POPOVER,
+                    _('Default Encryption'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'encryption_default',
+                    desc=_('Encryption method to use '
+                           'unless overridden on a per-contact basis'),
+                    props={'entries': encryption_entries}),
+
+            Setting(SettingKind.SWITCH,
+                    _('Idle Time'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'send_idle_time',
+                    callback=self._send_idle_time,
                     desc=_('Disclose the time of your last activity')),
 
-            Setting(SettingKind.SWITCH, _('Local System Time'),
-                    SettingType.ACCOUNT_CONFIG, 'send_time_info',
+            Setting(SettingKind.SWITCH,
+                    _('Local System Time'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'send_time_info',
+                    callback=self._send_time_info,
                     desc=_('Disclose the local system time of the '
                            'device Gajim runs on')),
 
-            Setting(SettingKind.SWITCH, _('Client / Operating System'),
-                    SettingType.ACCOUNT_CONFIG, 'send_os_info',
-                    desc=_('Disclose information about the client '
-                           'and operating system you currently use')),
+            Setting(SettingKind.SWITCH,
+                    _('Operating System'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'send_os_info',
+                    callback=self._send_os_info,
+                    desc=_('Disclose information about the '
+                           'operating system you currently use')),
 
-            Setting(SettingKind.SWITCH, _('Media Playback'),
-                    SettingType.ACCOUNT_CONFIG, 'publish_tune',
+            Setting(SettingKind.SWITCH,
+                    _('Media Playback'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'publish_tune',
+                    callback=self._publish_tune,
                     desc=_('Disclose information about media that is '
                            'currently being played on your system.')),
 
-            Setting(SettingKind.SWITCH, _('Ignore Unknown Contacts'),
-                    SettingType.ACCOUNT_CONFIG, 'ignore_unknown_contacts',
+            Setting(SettingKind.SWITCH,
+                    _('Ignore Unknown Contacts'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'ignore_unknown_contacts',
                     desc=_('Ignore everything from contacts not in your '
-                           'Roster')),
+                           'contact list')),
 
-            Setting(SettingKind.SWITCH, _('Send Message Receipts'),
-                    SettingType.ACCOUNT_CONFIG, 'answer_receipts',
+            Setting(SettingKind.SWITCH,
+                    _('Send Message Receipts'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'answer_receipts',
                     desc=_('Tell your contacts if you received a message')),
 
             Setting(SettingKind.POPOVER,
@@ -788,63 +873,129 @@ class PrivacyPage(GenericSettingPage):
                     'chat_history_max_age',
                     props={'entries': history_max_age},
                     desc=_('How long Gajim should keep your chat history')),
+
+            Setting(SettingKind.ACTION,
+                    _('Export Chat History'),
+                    SettingType.ACTION,
+                    '-export-history',
+                    props={'account': account},
+                    desc=_('Export your chat history from Gajim'))
         ]
         GenericSettingPage.__init__(self, account, settings)
 
     @staticmethod
-    def _reset_send_chatstate(button):
+    def _reset_send_chatstate(button: Gtk.Button) -> None:
         button.set_sensitive(False)
         app.settings.set_contact_settings('send_chatstate', None)
 
     @staticmethod
-    def _reset_gc_send_chatstate(button):
+    def _reset_gc_send_chatstate(button: Gtk.Button) -> None:
         button.set_sensitive(False)
         app.settings.set_group_chat_settings('send_chatstate', None)
 
-    def _send_read_marker(self, state, _data):
+    def _send_idle_time(self, state: bool, _data: Any) -> None:
+        if self._client is not None:
+            self._client.get_module('LastActivity').set_enabled(state)
+
+    def _send_time_info(self, state: bool, _data: Any) -> None:
+        if self._client is not None:
+            self._client.get_module('EntityTime').set_enabled(state)
+
+    def _send_os_info(self, state: bool, _data: Any) -> None:
+        if self._client is not None:
+            self._client.get_module('SoftwareVersion').set_enabled(state)
+
+    def _publish_tune(self, state: bool, _data: Any) -> None:
+        if self._client is not None:
+            self._client.get_module('UserTune').set_enabled(state)
+
+    def _send_read_marker(self, state: bool, _data: Any) -> None:
         app.settings.set_account_setting(
             self._account, 'send_marker_default', state)
         app.settings.set_account_setting(
             self._account, 'gc_send_marker_private_default', state)
 
-    def _reset_send_read_marker(self, button):
+    def _reset_send_read_marker(self, button: Gtk.Button) -> None:
         button.set_sensitive(False)
         app.settings.set_contact_settings('send_marker', None)
         app.settings.set_group_chat_settings(
             'send_marker', None, context='private')
-        for ctrl in app.window.get_controls(account=self._account):
-            ctrl.update_actions()
+
+
+class EncryptionOMEMOPage(GenericSettingPage):
+
+    name = 'encryption-omemo'
+
+    def __init__(self, account: str) -> None:
+        settings = [
+            Setting(SettingKind.SWITCH,
+                    _('Blind Trust'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'omemo_blind_trust',
+                    desc=_('Blindly trust new devices until you verify them'))
+        ]
+        GenericSettingPage.__init__(self, account, settings)
+
+        heading = Gtk.Label(label=_('Trust Management'))
+        heading.get_style_context().add_class('bold')
+        heading.set_xalign(0)
+        self.add(heading)
+
+        btbv_label = Gtk.Label()
+        btbv_label.set_xalign(0)
+        wiki_url = 'https://dev.gajim.org/gajim/gajim/-/wikis/help/OMEMO'
+        link_text = _('Read more about blind trust')
+        markup = f'<a href="{wiki_url}">{link_text}</a>'
+        btbv_label.set_markup(markup)
+        self.add(btbv_label)
+
+        omemo_trust_manager = OMEMOTrustManager(account)
+        omemo_trust_manager.set_margin_top(18)
+        self.pack_end(omemo_trust_manager, True, True, 0)
+        self.reorder_child(omemo_trust_manager, 0)
 
 
 class ConnectionPage(GenericSettingPage):
 
     name = 'connection'
 
-    def __init__(self, account):
+    def __init__(self, account: str) -> None:
 
         settings = [
-            Setting(SettingKind.POPOVER, _('Proxy'),
-                    SettingType.ACCOUNT_CONFIG, 'proxy', name='proxy',
+            Setting(SettingKind.POPOVER,
+                    _('Proxy'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'proxy',
+                    name='proxy',
                     props={'entries': self._get_proxies(),
                            'default-text': _('System'),
                            'button-icon-name': 'preferences-system-symbolic',
                            'button-callback': self._on_proxy_edit}),
 
-            Setting(SettingKind.HOSTNAME, _('Hostname'), SettingType.DIALOG,
+            Setting(SettingKind.HOSTNAME,
+                    _('Hostname'),
+                    SettingType.DIALOG,
                     desc=_('Manually set the hostname for the server'),
                     props={'dialog': CutstomHostnameDialog}),
 
-            Setting(SettingKind.ENTRY, _('Resource'),
-                    SettingType.ACCOUNT_CONFIG, 'resource'),
+            Setting(SettingKind.ENTRY,
+                    _('Resource'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'resource'),
 
-            Setting(SettingKind.PRIORITY, _('Priority'),
-                    SettingType.DIALOG, props={'dialog': PriorityDialog}),
+            Setting(SettingKind.PRIORITY,
+                    _('Priority'),
+                    SettingType.DIALOG,
+                    props={'dialog': PriorityDialog}),
 
-            Setting(SettingKind.SWITCH, _('Use Unencrypted Connection'),
-                    SettingType.ACCOUNT_CONFIG, 'use_plain_connection',
+            Setting(SettingKind.SWITCH,
+                    _('Use Unencrypted Connection'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'use_plain_connection',
                     desc=_('Use an unencrypted connection to the server')),
 
-            Setting(SettingKind.SWITCH, _('Confirm Unencrypted Connection'),
+            Setting(SettingKind.SWITCH,
+                    _('Confirm Unencrypted Connection'),
                     SettingType.ACCOUNT_CONFIG,
                     'confirm_unencrypted_connection',
                     desc=_('Show a confirmation dialog before connecting '
@@ -853,110 +1004,72 @@ class ConnectionPage(GenericSettingPage):
         GenericSettingPage.__init__(self, account, settings)
 
     @staticmethod
-    def _get_proxies():
+    def _get_proxies() -> dict[str, str]:
         return {proxy: proxy for proxy in app.settings.get_proxies()}
 
     @staticmethod
-    def _on_proxy_edit(*args):
+    def _on_proxy_edit(*args: Any) -> None:
         open_window('ManageProxies')
 
-    def update_proxy_entries(self):
-        self.listbox.get_setting('proxy').update_entries(self._get_proxies())
+    def update_proxy_entries(self) -> None:
+        popover_row = cast(PopoverSetting, self.listbox.get_setting('proxy'))
+        popover_row.update_entries(self._get_proxies())
 
 
 class AdvancedPage(GenericSettingPage):
 
     name = 'advanced'
 
-    def __init__(self, account):
+    def __init__(self, account: str) -> None:
 
         settings = [
-            Setting(SettingKind.SWITCH, _('Contact Information'),
-                    SettingType.ACCOUNT_CONFIG, 'request_user_data',
+            Setting(SettingKind.SWITCH,
+                    _('Contact Information'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'request_user_data',
                     desc=_('Request contact information (Tune, Location)')),
 
-            Setting(SettingKind.SWITCH, _('Accept all Contact Requests'),
-                    SettingType.ACCOUNT_CONFIG, 'autoauth',
+            Setting(SettingKind.SWITCH,
+                    _('Accept all Contact Requests'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'autoauth',
                     desc=_('Automatically accept all contact requests')),
 
-            Setting(SettingKind.POPOVER, _('Filetransfer Preference'),
-                    SettingType.ACCOUNT_CONFIG, 'filetransfer_preference',
+            Setting(SettingKind.POPOVER,
+                    _('Filetransfer Preference'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'filetransfer_preference',
                     props={'entries': {'httpupload': _('Upload Files'),
                                        'jingle': _('Send Files Directly')}},
                     desc=_('Preferred file transfer mechanism for '
                            'file drag&drop on a chat window')),
-            Setting(SettingKind.SWITCH, _('Security Labels'),
-                    SettingType.ACCOUNT_CONFIG, 'enable_security_labels',
+            Setting(SettingKind.SWITCH,
+                    _('Security Labels'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'enable_security_labels',
                     desc=_('Show labels describing confidentiality of '
                            'messages, if the server supports XEP-0258'))
         ]
         GenericSettingPage.__init__(self, account, settings)
 
 
-class ZeroConfPage(GenericSettingPage):
-
-    name = 'general'
-
-    def __init__(self, account):
-
-        settings = [
-            Setting(SettingKind.DIALOG, _('Profile'),
-                    SettingType.DIALOG,
-                    props={'dialog': ZeroconfProfileDialog}),
-
-            Setting(SettingKind.SWITCH, _('Connect on startup'),
-                    SettingType.ACCOUNT_CONFIG, 'autoconnect',
-                    desc=_('Use environment variable')),
-
-            Setting(SettingKind.SWITCH,
-                    _('Save conversations for all contacts'),
-                    SettingType.ACCOUNT_CONFIG, 'no_log_for',
-                    desc=_('Store conversations on the harddrive')),
-
-            Setting(SettingKind.SWITCH, _('Global Status'),
-                    SettingType.ACCOUNT_CONFIG, 'sync_with_global_status',
-                    desc=_('Synchronize the status of all accounts')),
-        ]
-
-        GenericSettingPage.__init__(self, account, settings)
-
-
-class ZeroconfProfileDialog(SettingsDialog):
-    def __init__(self, account, parent):
-
-        settings = [
-            Setting(SettingKind.ENTRY, _('First Name'),
-                    SettingType.ACCOUNT_CONFIG, 'zeroconf_first_name'),
-
-            Setting(SettingKind.ENTRY, _('Last Name'),
-                    SettingType.ACCOUNT_CONFIG, 'zeroconf_last_name'),
-
-            Setting(SettingKind.ENTRY, _('XMPP Address'),
-                    SettingType.ACCOUNT_CONFIG, 'zeroconf_jabber_id'),
-
-            Setting(SettingKind.ENTRY, _('Email'),
-                    SettingType.ACCOUNT_CONFIG, 'zeroconf_email'),
-        ]
-
-        SettingsDialog.__init__(self, parent, _('Profile'),
-                                Gtk.DialogFlags.MODAL, settings, account)
-
-
 class PriorityDialog(SettingsDialog):
-    def __init__(self, account, parent):
+    def __init__(self, account: str, parent: Gtk.Window) -> None:
 
         neg_priority = app.settings.get('enable_negative_priority')
         if neg_priority:
-            range_ = (-128, 127)
+            range_ = (-128, 127, 1)
         else:
-            range_ = (0, 127)
+            range_ = (0, 127, 1)
 
         settings = [
-            Setting(SettingKind.SWITCH, _('Adjust to status'),
+            Setting(SettingKind.SWITCH,
+                    _('Adjust to status'),
                     SettingType.ACCOUNT_CONFIG,
                     'adjust_priority_with_status'),
 
-            Setting(SettingKind.SPIN, _('Priority'),
+            Setting(SettingKind.SPIN,
+                    _('Priority'),
                     SettingType.ACCOUNT_CONFIG,
                     'priority',
                     bind='account::adjust_priority_with_status',
@@ -969,36 +1082,44 @@ class PriorityDialog(SettingsDialog):
 
         self.connect('destroy', self.on_destroy)
 
-    def on_destroy(self, *args):
+    def on_destroy(self, *args: Any) -> None:
         # Update priority
-        if self.account not in app.connections:
+        if self.account not in app.settings.get_active_accounts():
             return
-        show = app.connections[self.account].status
-        status = app.connections[self.account].status_message
-        app.connections[self.account].change_status(show, status)
+        client = app.get_client(self.account)
+        show = client.status
+        status = client.status_message
+        client.change_status(show, status)
 
 
 class CutstomHostnameDialog(SettingsDialog):
-    def __init__(self, account, parent):
+    def __init__(self, account: str, parent: Gtk.Window) -> None:
 
         type_values = ('START TLS', 'DIRECT TLS', 'PLAIN')
 
         settings = [
-            Setting(SettingKind.SWITCH, _('Enable'),
+            Setting(SettingKind.SWITCH,
+                    _('Enable'),
                     SettingType.ACCOUNT_CONFIG,
                     'use_custom_host'),
 
-            Setting(SettingKind.ENTRY, _('Hostname'),
-                    SettingType.ACCOUNT_CONFIG, 'custom_host',
+            Setting(SettingKind.ENTRY,
+                    _('Hostname'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'custom_host',
                     bind='account::use_custom_host'),
 
-            Setting(SettingKind.SPIN, _('Port'),
-                    SettingType.ACCOUNT_CONFIG, 'custom_port',
+            Setting(SettingKind.SPIN,
+                    _('Port'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'custom_port',
                     bind='account::use_custom_host',
-                    props={'range_': (0, 65535)},),
+                    props={'range_': (0, 65535, 1)}),
 
-            Setting(SettingKind.COMBO, _('Type'),
-                    SettingType.ACCOUNT_CONFIG, 'custom_type',
+            Setting(SettingKind.COMBO,
+                    _('Type'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'custom_type',
                     bind='account::use_custom_host',
                     props={'combo_items': type_values}),
         ]
@@ -1008,15 +1129,19 @@ class CutstomHostnameDialog(SettingsDialog):
 
 
 class CertificateDialog(SettingsDialog):
-    def __init__(self, account, parent):
+    def __init__(self, account: str, parent: Gtk.Window) -> None:
 
         settings = [
-            Setting(SettingKind.FILECHOOSER, _('Client Certificate'),
-                    SettingType.ACCOUNT_CONFIG, 'client_cert',
+            Setting(SettingKind.FILECHOOSER,
+                    _('Client Certificate'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'client_cert',
                     props={'filefilter': (_('PKCS12 Files'), '*.p12')}),
 
-            Setting(SettingKind.SWITCH, _('Encrypted Certificate'),
-                    SettingType.ACCOUNT_CONFIG, 'client_cert_encrypted'),
+            Setting(SettingKind.SWITCH,
+                    _('Encrypted Certificate'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'client_cert_encrypted'),
         ]
 
         SettingsDialog.__init__(self, parent, _('Certificate Settings'),
@@ -1024,23 +1149,32 @@ class CertificateDialog(SettingsDialog):
 
 
 class LoginDialog(SettingsDialog):
-    def __init__(self, account, parent):
+    def __init__(self, account: str, parent: Gtk.Window) -> None:
 
         settings = [
-            Setting(SettingKind.ENTRY, _('Password'),
-                    SettingType.ACCOUNT_CONFIG, 'password',
+            Setting(SettingKind.ENTRY,
+                    _('Password'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'password',
                     bind='account::savepass'),
 
-            Setting(SettingKind.SWITCH, _('Save Password'),
-                    SettingType.ACCOUNT_CONFIG, 'savepass',
-                    enabled_func=lambda: not app.settings.get('use_keyring') or passwords.KEYRING_AVAILABLE),
+            Setting(SettingKind.SWITCH,
+                    _('Save Password'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'savepass',
+                    enabled_func=(lambda: not app.settings.get('use_keyring') or
+                                  passwords.is_keyring_available())),
 
-            Setting(SettingKind.CHANGEPASSWORD, _('Change Password'),
-                    SettingType.DIALOG, callback=self.on_password_change,
+            Setting(SettingKind.CHANGEPASSWORD,
+                    _('Change Password'),
+                    SettingType.DIALOG,
+                    callback=self.on_password_change,
                     props={'dialog': None}),
 
-            Setting(SettingKind.SWITCH, _('Use GSSAPI'),
-                    SettingType.ACCOUNT_CONFIG, 'enable_gssapi'),
+            Setting(SettingKind.SWITCH,
+                    _('Use GSSAPI'),
+                    SettingType.ACCOUNT_CONFIG,
+                    'enable_gssapi'),
         ]
 
         SettingsDialog.__init__(self, parent, _('Login Settings'),
@@ -1048,10 +1182,16 @@ class LoginDialog(SettingsDialog):
 
         self.connect('destroy', self.on_destroy)
 
-    def on_password_change(self, new_password, _data):
+    def on_password_change(self, new_password: str, _data: Any) -> None:
+        try:
+            new_password = saslprep(new_password)
+        except Exception:
+            # TODO: Show warning for invalid passwords
+            return
+
         passwords.save_password(self.account, new_password)
 
-    def on_destroy(self, *args):
+    def on_destroy(self, *args: Any) -> None:
         savepass = app.settings.get_account_setting(self.account, 'savepass')
         if not savepass:
             passwords.delete_password(self.account)

@@ -1,41 +1,31 @@
+
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-from typing import cast
 from typing import Any
+from typing import cast
 
 import logging
 
-from gi.repository import Gtk
 from gi.repository import Gdk
+from gi.repository import Gtk
 from gi.repository import Pango
-
 from nbxmpp.errors import StanzaError
 from nbxmpp.task import Task
 
 from gajim.common import app
+from gajim.common.const import MUC_DISCO_ERRORS
+from gajim.common.helpers import get_group_chat_nick
+from gajim.common.helpers import to_user_string
 from gajim.common.i18n import _
 from gajim.common.i18n import get_rfc5646_lang
-from gajim.common.helpers import to_user_string
-from gajim.common.helpers import get_group_chat_nick
-from gajim.common.const import MUC_DISCO_ERRORS
 
-from .groupchat_info import GroupChatInfoScrolled
-from .groupchat_nick import NickChooser
-from .util import ensure_not_destroyed
+from gajim.gtk.groupchat_info import GroupChatInfoScrolled
+from gajim.gtk.groupchat_nick import NickChooser
+from gajim.gtk.util import ensure_not_destroyed
 
-log = logging.getLogger('gajim.gui.groupchat_join')
+log = logging.getLogger('gajim.gtk.groupchat_join')
 
 
 class GroupchatJoin(Gtk.ApplicationWindow):
@@ -47,6 +37,8 @@ class GroupchatJoin(Gtk.ApplicationWindow):
         self.set_show_menubar(False)
         self.set_title(_('Join Group Chat'))
         self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        self.set_default_size(500, 550)
+        self.get_style_context().add_class('dialog-margin')
 
         self._destroyed = False
         self.account = account
@@ -135,11 +127,12 @@ class GroupchatJoin(Gtk.ApplicationWindow):
         self._stack.set_visible_child_name('error')
 
     def _set_error(self, error: StanzaError) -> None:
-        text = MUC_DISCO_ERRORS.get(error.condition, to_user_string(error))
+        text = MUC_DISCO_ERRORS.get(
+            error.condition or '', to_user_string(error))
         if error.condition == 'gone':
             reason = error.get_text(get_rfc5646_lang())
             if reason:
-                text = '%s:\n%s' % (text, reason)
+                text = f'{text}:\n{reason}'
         self._show_error_page(text)
 
     def _set_error_from_code(self, error_code: str) -> None:
@@ -148,7 +141,7 @@ class GroupchatJoin(Gtk.ApplicationWindow):
     def _on_join(self, _button: Gtk.Button) -> None:
         nickname = self._nick_chooser.get_text()
 
-        app.interface.show_add_join_groupchat(
+        app.window.show_add_join_groupchat(
             self.account, self.jid, nickname=nickname)
         self.destroy()
 
@@ -195,6 +188,7 @@ class ProgressPage(Gtk.Box):
         self.set_vexpand(True)
         self.set_homogeneous(True)
         self._spinner = Gtk.Spinner()
+        self._spinner.set_halign(Gtk.Align.CENTER)
 
         self.add(self._spinner)
         self.show_all()

@@ -1,25 +1,8 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
-
-from typing import Optional
-from typing import cast
-from typing import TYPE_CHECKING
-
-import time
-from datetime import datetime
 
 from gi.repository import GdkPixbuf
 from gi.repository import Gtk
@@ -27,25 +10,26 @@ from gi.repository import Gtk
 from gajim.common import app
 from gajim.common import types
 from gajim.common.const import AvatarSize
-from gajim.common.const import KindConstant
 from gajim.common.events import JingleRequestReceived
 from gajim.common.i18n import _
 from gajim.common.jingle_session import JingleSession
-from gajim.common.storage.archive import ConversationRow
+from gajim.common.modules.contacts import BareContact
+from gajim.common.storage.archive.const import ChatDirection
+from gajim.common.storage.archive.models import Message
+from gajim.common.util.datetime import utc_now
 
-from .widgets import SimpleLabel
-from .base import BaseRow
-
-if TYPE_CHECKING:
-    from gajim.gui.conversation.view import ConversationView
+from gajim.gtk.conversation.rows.base import BaseRow
+from gajim.gtk.conversation.rows.widgets import DateTimeLabel
+from gajim.gtk.conversation.rows.widgets import NicknameLabel
+from gajim.gtk.conversation.rows.widgets import SimpleLabel
 
 
 class CallRow(BaseRow):
     def __init__(self,
                  account: str,
                  contact: types.BareContact,
-                 event: Optional[JingleRequestReceived] = None,
-                 db_message: Optional[ConversationRow] = None
+                 event: JingleRequestReceived | None = None,
+                 message: Message | None = None
                  ) -> None:
         BaseRow.__init__(self, account)
 
@@ -53,23 +37,24 @@ class CallRow(BaseRow):
 
         self._client = app.get_client(account)
 
-        if db_message is not None:
-            timestamp = db_message.time
+        if message is not None:
+            timestamp = message.timestamp
         else:
-            timestamp = time.time()
-        self.timestamp = datetime.fromtimestamp(timestamp)
-        self.db_timestamp = timestamp
+            timestamp = utc_now()
+        self.timestamp = timestamp.astimezone()
+        self.db_timestamp = timestamp.timestamp()
 
         self._contact = contact
         self._event = event
-        self._db_message = db_message
+        self._message = message
 
-        self._session: Optional[JingleSession] = None
+        self._session: JingleSession | None = None
 
-        if db_message is not None:
-            sid = db_message.additional_data.get_value('gajim', 'sid')
+        if message is not None and message.call is not None:
             module = self._client.get_module('Jingle')
-            self._session = module.get_jingle_session(self._contact.jid, sid)
+            self._session = module.get_jingle_session(
+                str(self._contact.jid), message.call.sid)
+            self.pk = message.pk
 
         self._avatar_placeholder = Gtk.Box()
         self._avatar_placeholder.set_size_request(AvatarSize.ROSTER, -1)
@@ -79,12 +64,6 @@ class CallRow(BaseRow):
             self._add_history_call_widget()
         else:
             self._add_incoming_call_widget()
-
-        timestamp_widget = self.create_timestamp_widget(self.timestamp)
-        timestamp_widget.set_hexpand(True)
-        timestamp_widget.set_halign(Gtk.Align.END)
-        timestamp_widget.set_valign(Gtk.Align.START)
-        self.grid.attach(timestamp_widget, 3, 0, 1, 1)
 
         self.show_all()
 
@@ -101,43 +80,46 @@ class CallRow(BaseRow):
     def _on_accept(self, button: Gtk.Button) -> None:
         button.set_sensitive(False)
         self._decline_button.set_sensitive(False)
-        view = cast('ConversationView', self.get_parent())
         if self._event is not None:
             session = self._client.get_module('Jingle').get_jingle_session(
                 self._event.fjid, self._event.sid)
-            view.accept_call(session)
+            if session is not None:
+                app.call_manager.accept_call(session)
         else:
             assert self._session is not None
-            view.accept_call(self._session)
+            app.call_manager.accept_call(self._session)
 
-    def _on_decline(self, _button: Gtk.Button) -> None:
-        view = cast('ConversationView', self.get_parent())
+    def _on_decline(self, button: Gtk.Button) -> None:
+        button.set_sensitive(False)
+        self._accept_button.set_sensitive(False)
         if self._event is not None:
             session = self._client.get_module('Jingle').get_jingle_session(
                 self._event.fjid, self._event.sid)
-            view.decline_call(session)
+            if session is not None:
+                app.call_manager.decline_call(session)
         else:
             assert self._session is not None
-            view.decline_call(self._session)
+            app.call_manager.decline_call(self._session)
         self._session = None
 
     def _add_history_call_widget(self) -> None:
         contact = self._client.get_module('Contacts').get_contact(
-            str(self._client.get_own_jid().bare))
+            self._client.get_own_jid().bare)
+        assert isinstance(contact, BareContact)
+
         is_self = True
-        if self._db_message is not None:
-            if self._db_message.kind == KindConstant.CALL_INCOMING:
+        if self._message is not None:
+            if self._message.direction == ChatDirection.INCOMING:
                 contact = self._contact
                 is_self = True
             else:
                 is_self = False
 
         if self._event is not None:
-            if self._event == 'incoming-call':
-                is_self = False
-            else:
-                contact = self._contact
-                is_self = True
+            is_self = False
+        else:
+            contact = self._contact
+            is_self = True
 
         scale = self.get_scale_factor()
         avatar = contact.get_avatar(AvatarSize.ROSTER, scale, add_show=False)
@@ -145,10 +127,19 @@ class CallRow(BaseRow):
         avatar_image = Gtk.Image.new_from_surface(avatar)
         self._avatar_placeholder.add(avatar_image)
 
-        name_widget = self.create_name_widget(contact.name, is_self)
+        name_widget = NicknameLabel(contact.name, is_self)
         name_widget.set_halign(Gtk.Align.START)
         name_widget.set_valign(Gtk.Align.START)
-        self.grid.attach(name_widget, 1, 0, 1, 1)
+
+        timestamp_widget = DateTimeLabel(self.timestamp)
+        timestamp_widget.set_halign(Gtk.Align.START)
+        timestamp_widget.set_valign(Gtk.Align.START)
+
+        meta_box = Gtk.Box()
+        meta_box.set_spacing(6)
+        meta_box.add(name_widget)
+        meta_box.add(timestamp_widget)
+        self.grid.attach(meta_box, 1, 0, 1, 1)
 
         icon = Gtk.Image.new_from_icon_name('call-start-symbolic',
                                             Gtk.IconSize.MENU)

@@ -7,28 +7,18 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from typing import NamedTuple
-from typing import Optional
 
 import os
 import sys
 
-from gi.repository import Gtk
 from gi.repository import Gdk
+from gi.repository import Gtk
 
 from gajim.common import app
+from gajim.common import passwords
 from gajim.common.i18n import _
 
 
@@ -38,7 +28,7 @@ class Feature(NamedTuple):
     tooltip: str
     dependency_u: str
     dependency_w: str
-    enabled: Optional[bool]
+    enabled: bool | None
 
 
 class Features(Gtk.ApplicationWindow):
@@ -86,6 +76,11 @@ class Features(Gtk.ApplicationWindow):
         self.feature_listbox.add(item)
 
     def _get_features(self) -> list[Feature]:
+        tray_icon_available = bool(
+            sys.platform == 'win32' or
+            app.is_installed('APPINDICATOR') or
+            app.is_installed('AYATANA_APPINDICATOR'))
+        av_available = app.is_installed('AV') and sys.platform != 'win32'
         notification_sounds_available: bool = (
             app.is_installed('GSOUND') or sys.platform in ('win32', 'darwin'))
         notification_sounds_enabled: bool = app.settings.get('sounds_on')
@@ -95,44 +90,33 @@ class Features(Gtk.ApplicationWindow):
         auto_status_enabled = bool(any(auto_status))
 
         return [
-            Feature(_('App Indicator Icon'),
-                    app.is_installed('APPINDICATOR') or
-                    app.is_installed('AYATANA_APPINDICATOR'),
-                    _('Enables Gajim to provide a system notification area '
-                      'icon'),
+            Feature(_('Notification Area Icon'),
+                    tray_icon_available,
+                    _('Enables Gajim to provide a notification area icon'),
                     _('Requires: libappindicator3'),
-                    _('Feature not available under Windows'),
+                    _('No additional requirements'),
                     None),
-            Feature(_('Audio / Video'),
-                    app.is_installed('AV'),
+            Feature(_('Audio Preview'),
+                    app.is_installed('GST'),
+                    _('Enables Gajim to provide a Audio preview'),
+                    _('Requires: gstreamer-1.0, gst-plugins-base-1.0'),
+                    _('No additional requirements'),
+                    None),
+            Feature(_('Audio / Video Calls'),
+                    av_available,
                     _('Enables Gajim to provide Audio and Video chats'),
-                    _('Requires: gir1.2-farstream-0.2, gir1.2-gstreamer-1.0, '
-                      'gstreamer1.0-plugins-base, gstreamer1.0-plugins-ugly, '
-                      'gstreamer1.0-libav, and gstreamer1.0-gtk3'),
-                    _('Feature not available under Windows'),
+                    _('Requires: farstream-0.2, gstreamer-1.0, '
+                      'gst-plugins-base-1.0, gst-plugins-ugly-1.0, '
+                      'gst-libav and gstreamer-gtk3-plugin'),
+                    _('Feature not available on Windows'),
                     None),
             Feature(_('Automatic Status'),
                     self._idle_available(),
-                    _('Enables Gajim to measure your computer\'s idle time in '
+                    _('Enables Gajim to measure your computer’s idle time in '
                       'order to set your Status automatically'),
                     _('Requires: libxss'),
                     _('No additional requirements'),
                     auto_status_enabled),
-            Feature(_('Bonjour / Zeroconf (Serverless Chat)'),
-                    app.is_installed('ZEROCONF'),
-                    _('Enables Gajim to automatically detected clients in a '
-                      'local network for serverless chats'),
-                    _('Requires: gir1.2-avahi-0.6'),
-                    _('Requires: pybonjour and bonjour SDK running (%(url)s)')
-                    % {'url': 'https://developer.apple.com/opensource/)'},
-                    None),
-            Feature(_('Location detection'),
-                    app.is_installed('GEOCLUE'),
-                    _('Enables Gajim to be location-aware, if the user decides '
-                      'to publish the device’s location'),
-                    _('Requires: geoclue'),
-                    _('Feature is not available under Windows'),
-                    None),
             Feature(_('Notification Sounds'),
                     notification_sounds_available,
                     _('Enables Gajim to play sounds for various notifications'),
@@ -140,33 +124,27 @@ class Features(Gtk.ApplicationWindow):
                     _('No additional requirements'),
                     notification_sounds_enabled),
             Feature(_('Secure Password Storage'),
-                    self._some_keyring_available(),
+                    passwords.is_keyring_available(),
                     _('Enables Gajim to store Passwords securely instead of '
                       'storing them in plaintext'),
                     _('Requires: gnome-keyring or kwallet'),
-                    _('Windows Credential Vault is used for secure password '
-                      'storage'),
+                    _('No additional requirements'),
                     app.settings.get('use_keyring')),
             Feature(_('Spell Checker'),
                     app.is_installed('GSPELL'),
                     _('Enables Gajim to spell check your messages while '
                       'composing'),
                     _('Requires: Gspell'),
-                    _('Requires: Gspell'),
+                    _('No additional requirements'),
                     spell_check_enabled),
             Feature(_('UPnP-IGD Port Forwarding'),
                     app.is_installed('UPNP'),
                     _('Enables Gajim to request your router to forward ports '
                       'for file transfers'),
-                    _('Requires: gir1.2-gupnpigd-1.0'),
-                    _('Feature not available under Windows'),
+                    _('Requires: gupnpigd-1.0'),
+                    _('Feature not available on Windows'),
                     None)
         ]
-
-    @staticmethod
-    def _some_keyring_available() -> bool:
-        from gajim.common import passwords
-        return passwords.KEYRING_AVAILABLE
 
     @staticmethod
     def _idle_available() -> bool:
@@ -210,7 +188,7 @@ class FeatureItem(Gtk.Grid):
         self.add(self._icon)
         self.add(self._box)
 
-    def _set_feature(self, available: bool, enabled: Optional[bool]) -> None:
+    def _set_feature(self, available: bool, enabled: bool | None) -> None:
         self._icon.get_style_context().remove_class('error-color')
         self._icon.get_style_context().remove_class('warning-color')
         self._icon.get_style_context().remove_class('success-color')

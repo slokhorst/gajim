@@ -1,16 +1,6 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
@@ -19,19 +9,20 @@ from datetime import timedelta
 
 from gi.repository import Gtk
 
-from gajim.common import types
 from gajim.common.i18n import _
+from gajim.common.types import ChatContactT
+from gajim.common.util.datetime import FIRST_LOCAL_DATETIME
 
-from .base import BaseRow
+from gajim.gtk.conversation.rows.base import BaseRow
 
 
 class ReadMarkerRow(BaseRow):
-    def __init__(self, account: str, contact: types.BareContact) -> None:
-        BaseRow.__init__(self, account, widget='label')
+    def __init__(self, contact: ChatContactT) -> None:
+        BaseRow.__init__(self, contact.account, widget='label')
         self.set_activatable(False)
         self.type = 'read_marker'
-        self.timestamp = datetime.fromtimestamp(0)
-        self._last_incoming_timestamp = datetime.fromtimestamp(0)
+        self.timestamp = FIRST_LOCAL_DATETIME
+        self._last_incoming_timestamp = FIRST_LOCAL_DATETIME
 
         contact.connect('nickname-update', self._on_nickname_update)
 
@@ -46,14 +37,14 @@ class ReadMarkerRow(BaseRow):
         self.set_no_show_all(True)
 
     def _on_nickname_update(self,
-                            contact: types.BareContact,
+                            contact: ChatContactT,
                             _signal_name: str
                             ) -> None:
         text = _('%s has read up to this point') % contact.name
         self.label.set_text(text)
 
-    def set_timestamp(self, timestamp: datetime) -> None:
-        if timestamp <= self._last_incoming_timestamp:
+    def set_timestamp(self, timestamp: datetime, force: bool = False) -> None:
+        if timestamp <= self._last_incoming_timestamp and not force:
             return
 
         self.timestamp = timestamp

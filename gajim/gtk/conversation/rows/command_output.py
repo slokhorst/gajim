@@ -1,27 +1,16 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
-
-import time
-from datetime import datetime
+# SPDX-License-Identifier: GPL-3.0-only
 
 from gi.repository import GLib
 from gi.repository import Gtk
 
 from gajim.common.const import AvatarSize
+from gajim.common.util.datetime import utc_now
 
-from .widgets import SimpleLabel
-from .base import BaseRow
+from gajim.gtk.conversation.rows.base import BaseRow
+from gajim.gtk.conversation.rows.widgets import DateTimeLabel
+from gajim.gtk.conversation.rows.widgets import SimpleLabel
 
 
 class CommandOutputRow(BaseRow):
@@ -29,9 +18,9 @@ class CommandOutputRow(BaseRow):
         BaseRow.__init__(self, account)
 
         self.type = 'command_output'
-        timestamp = time.time()
-        self.timestamp = datetime.fromtimestamp(timestamp)
-        self.db_timestamp = timestamp
+        now = utc_now()
+        self.timestamp = now.astimezone()
+        self.db_timestamp = now.timestamp()
 
         self.get_style_context().add_class('conversation-command-row')
 
@@ -43,6 +32,11 @@ class CommandOutputRow(BaseRow):
         avatar_placeholder.add(icon)
         self.grid.attach(avatar_placeholder, 0, 0, 1, 1)
 
+        timestamp_widget = DateTimeLabel(self.timestamp)
+        timestamp_widget.set_valign(Gtk.Align.START)
+        timestamp_widget.set_margin_start(0)
+        self.grid.attach(timestamp_widget, 1, 0, 1, 1)
+
         text = GLib.markup_escape_text(text)
         markup = f'<tt>{text}</tt>'
         self._label = SimpleLabel()
@@ -51,12 +45,6 @@ class CommandOutputRow(BaseRow):
         else:
             self._label.get_style_context().add_class('gajim-command-output')
         self._label.set_markup(markup)
-        self.grid.attach(self._label, 1, 0, 1, 1)
-
-        timestamp_widget = self.create_timestamp_widget(self.timestamp)
-        timestamp_widget.set_hexpand(True)
-        timestamp_widget.set_halign(Gtk.Align.END)
-        timestamp_widget.set_valign(Gtk.Align.START)
-        self.grid.attach(timestamp_widget, 3, 0, 1, 1)
+        self.grid.attach(self._label, 1, 1, 1, 1)
 
         self.show_all()

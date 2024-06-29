@@ -1,24 +1,14 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
+import typing
 from typing import Any
-from typing import Optional
 
-import sys
 import logging
+import sys
 from pathlib import Path
 
 from gi.repository import Gio
@@ -26,12 +16,11 @@ from gi.repository import GLib
 
 from gajim.common import app
 
-if sys.platform == 'win32':
+if sys.platform == 'win32' or typing.TYPE_CHECKING:
     import winsound
 
-elif sys.platform == 'darwin':
+if sys.platform == 'darwin' or typing.TYPE_CHECKING:
     from AppKit import NSSound
-
 
 log = logging.getLogger('gajim.c.sound')
 
@@ -57,6 +46,7 @@ class PlatformWindows(PlaySound):
         if self._loop_in_progress:
             return
 
+        assert winsound is not None
         flags = (winsound.SND_FILENAME |
                  winsound.SND_ASYNC |
                  winsound.SND_NODEFAULT)
@@ -70,6 +60,7 @@ class PlatformWindows(PlaySound):
             log.exception('Sound Playback Error')
 
     def stop(self) -> None:
+        assert winsound is not None
         try:
             winsound.PlaySound(None, 0)
         except Exception:
@@ -83,6 +74,7 @@ class PlatformWindows(PlaySound):
 class PlatformMacOS(PlaySound):
 
     def play(self, path: Path, loop: bool = False) -> None:
+        assert NSSound is not None
         sound = NSSound.alloc()
         sound.initWithContentsOfFile_byReference_(str(path), True)
         sound.play()
@@ -97,7 +89,7 @@ class PlatformMacOS(PlaySound):
 class PlatformUnix(PlaySound):
 
     def __init__(self) -> None:
-        self._cancellable: Optional[Gio.Cancellable] = None
+        self._cancellable: Gio.Cancellable | None = None
 
     def play(self, path: Path, loop: bool = False) -> None:
         if not app.is_installed('GSOUND'):
@@ -162,10 +154,13 @@ def _init_platform() -> PlaySound:
 
     return PlatformUnix()
 
+
 _platform_player = _init_platform()
+
 
 def play(path: Path, loop: bool = False) -> None:
     _platform_player.play(path, loop)
+
 
 def stop():
     _platform_player.stop()

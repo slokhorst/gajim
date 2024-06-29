@@ -1,22 +1,12 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-"""
-Handles the jingle signalling protocol
-"""
 
-#TODO:
+# Handles the jingle signalling protocol
+
+
+# TODO:
 # * things in XEP 0176, including:
 #      - http://xmpp.org/extensions/xep-0176.html#protocol-restarts
 #      - http://xmpp.org/extensions/xep-0176.html#fallback
@@ -28,28 +18,35 @@ Handles the jingle signalling protocol
 #   * config:
 #     - codecs
 
+from __future__ import annotations
+
+from typing import Any
+
 import logging
 
 import nbxmpp
 from nbxmpp.namespaces import Namespace
+from nbxmpp.protocol import Iq
+from nbxmpp.structs import IqProperties
 from nbxmpp.structs import StanzaHandler
 
 from gajim.common import helpers
-from gajim.common import jingle_xtls
-from gajim.common.modules.base import BaseModule
-
+from gajim.common import types
+from gajim.common.file_props import FileProp
+from gajim.common.jingle_ft import JingleFileTransfer
+from gajim.common.jingle_rtp import JingleAudio
+from gajim.common.jingle_rtp import JingleVideo
 from gajim.common.jingle_session import JingleSession
 from gajim.common.jingle_session import JingleStates
-from gajim.common.jingle_ft import JingleFileTransfer
-from gajim.common.jingle_transport import JingleTransportSocks5
 from gajim.common.jingle_transport import JingleTransportIBB
-from gajim.common.jingle_rtp import JingleAudio, JingleVideo
+from gajim.common.jingle_transport import JingleTransportSocks5
+from gajim.common.modules.base import BaseModule
 
 logger = logging.getLogger('gajim.c.m.jingle')
 
 
 class Jingle(BaseModule):
-    def __init__(self, con):
+    def __init__(self, con: types.Client) -> None:
         BaseModule.__init__(self, con)
 
         self.handlers = [
@@ -63,49 +60,33 @@ class Jingle(BaseModule):
                           typ='set',
                           ns=Namespace.JINGLE,
                           callback=self._on_jingle_iq),
-            StanzaHandler(name='iq',
-                          typ='get',
-                          ns=Namespace.PUBKEY_PUBKEY,
-                          callback=self._on_pubkey_request),
-            StanzaHandler(name='iq',
-                          typ='result',
-                          ns=Namespace.PUBKEY_PUBKEY,
-                          callback=self._pubkey_result_received),
         ]
 
         # dictionary: sessionid => JingleSession object
-        self._sessions = {}
+        self._sessions: dict[str, JingleSession] = {}
 
         # dictionary: (jid, iq stanza id) => JingleSession object,
         # one time callbacks
-        self.__iq_responses = {}
-        self.files = []
+        self.__iq_responses: dict[tuple[str, str], JingleSession] = {}
+        self.files: list[dict[str, Any]] = []
 
-    def delete_jingle_session(self, sid):
-        """
+    def delete_jingle_session(self, sid: str) -> None:
+        '''
         Remove a jingle session from a jingle stanza dispatcher
-        """
+        '''
         if sid in self._sessions:
-            #FIXME: Move this elsewhere?
+            # FIXME: Move this elsewhere?
             for content in list(self._sessions[sid].contents.values()):
                 content.destroy()
             self._sessions[sid].callbacks = []
             del self._sessions[sid]
 
-    def _on_pubkey_request(self, con, stanza, _properties):
-        jid_from = helpers.get_full_jid_from_iq(stanza)
-        self._log.info('Pubkey request from %s', jid_from)
-        sid = stanza.getAttr('id')
-        jingle_xtls.send_cert(con, jid_from, sid)
-        raise nbxmpp.NodeProcessed
-
-    def _pubkey_result_received(self, con, stanza, _properties):
-        jid_from = helpers.get_full_jid_from_iq(stanza)
-        self._log.info('Pubkey result from %s', jid_from)
-        jingle_xtls.handle_new_cert(con, stanza, jid_from)
-
-    def _on_jingle_iq(self, _con, stanza, _properties):
-        """
+    def _on_jingle_iq(self,
+                      _con: types.xmppClient,
+                      stanza: Iq,
+                      _properties: IqProperties
+                      ) -> None:
+        '''
         The jingle stanza dispatcher
 
         Route jingle stanza to proper JingleSession object, or create one if it
@@ -113,7 +94,7 @@ class Jingle(BaseModule):
 
         TODO: Also check if the stanza isn't an error stanza, if so route it
         adequately.
-        """
+        '''
         # get data
         try:
             jid = helpers.get_full_jid_from_iq(stanza)
@@ -136,9 +117,10 @@ class Jingle(BaseModule):
                 if id_ in sesn.iq_ids:
                     sesn.on_stanza(stanza)
             return
+
         # do we need to create a new jingle object
         if sid not in self._sessions:
-            #TODO: tie-breaking and other things...
+            # TODO: tie-breaking and other things...
             newjingle = JingleSession(self._con, weinitiate=False, jid=jid,
                                       iq_id=id_, sid=sid)
             self._sessions[sid] = newjingle
@@ -146,14 +128,15 @@ class Jingle(BaseModule):
         self._sessions[sid].collect_iq_id(id_)
         self._sessions[sid].on_stanza(stanza)
         # Delete invalid/unneeded sessions
-        if sid in self._sessions and \
-        self._sessions[sid].state == JingleStates.ENDED:
+        if (sid in self._sessions and
+                self._sessions[sid].state == JingleStates.ENDED):
             self.delete_jingle_session(sid)
         raise nbxmpp.NodeProcessed
 
-    def start_audio(self, jid):
-        if self.get_jingle_session(jid, media='audio'):
-            return self.get_jingle_session(jid, media='audio').sid
+    def start_audio(self, jid: str) -> str:
+        audio_session = self.get_jingle_session(jid, media='audio')
+        if audio_session is not None:
+            return audio_session.sid
         jingle = self.get_jingle_session(jid, media='video')
         if jingle:
             jingle.add_content('voice', JingleAudio(jingle))
@@ -164,9 +147,10 @@ class Jingle(BaseModule):
             jingle.start_session()
         return jingle.sid
 
-    def start_video(self, jid):
-        if self.get_jingle_session(jid, media='video'):
-            return self.get_jingle_session(jid, media='video').sid
+    def start_video(self, jid: str) -> str:
+        video_session = self.get_jingle_session(jid, media='video')
+        if video_session is not None:
+            return video_session.sid
         jingle = self.get_jingle_session(jid, media='audio')
         if jingle:
             video = JingleVideo(jingle)
@@ -179,9 +163,11 @@ class Jingle(BaseModule):
             jingle.start_session()
         return jingle.sid
 
-    def start_audio_video(self, jid):
-        if self.get_jingle_session(jid, media='video'):
-            return self.get_jingle_session(jid, media='video').sid
+    def start_audio_video(self, jid: str) -> str:
+        video_session = self.get_jingle_session(jid, media='video')
+        if video_session is not None:
+            return video_session.sid
+
         audio_session = self.get_jingle_session(jid, media='audio')
         video_session = self.get_jingle_session(jid, media='video')
         if audio_session and video_session:
@@ -204,10 +190,13 @@ class Jingle(BaseModule):
         jingle_session.start_session()
         return jingle_session.sid
 
-    def start_file_transfer(self, jid, file_props, request=False):
-        logger.info("start file transfer with file: %s", file_props)
+    def start_file_transfer(self,
+                            jid: str,
+                            file_props: FileProp,
+                            request: bool = False
+                            ) -> str | None:
+        logger.info('start file transfer with file: %s', file_props)
         contact = self._con.get_module('Contacts').get_contact(jid)
-        use_security = contact.supports(Namespace.JINGLE_XTLS)
         jingle = JingleSession(self._con,
                                weinitiate=True,
                                jid=jid,
@@ -222,7 +211,9 @@ class Jingle(BaseModule):
         elif contact.supports(Namespace.JINGLE_IBB):
             transport = JingleTransportIBB()
         else:
-            transport = None
+            logger.error('No suitable transport method available for %s',
+                         contact.jid)
+            return None
 
         senders = 'initiator'
         if request:
@@ -230,7 +221,6 @@ class Jingle(BaseModule):
         transfer = JingleFileTransfer(jingle,
                                       transport=transport,
                                       file_props=file_props,
-                                      use_security=use_security,
                                       senders=senders)
         file_props.transport_sid = transport.sid
         file_props.algo = self.__hash_support(contact)
@@ -239,7 +229,7 @@ class Jingle(BaseModule):
         return transfer.transport.sid
 
     @staticmethod
-    def __hash_support(contact):
+    def __hash_support(contact: types.ResourceContact) -> str | None:
         if contact.supports(Namespace.HASHES_2):
             if contact.supports(Namespace.HASHES_BLAKE2B_512):
                 return 'blake2b-512'
@@ -255,7 +245,11 @@ class Jingle(BaseModule):
                 return 'sha-256'
         return None
 
-    def get_jingle_sessions(self, jid, sid=None, media=None):
+    def get_jingle_sessions(self,
+                            jid: str | None,
+                            sid: str | None = None,
+                            media: str | None = None
+                            ) -> list[JingleSession]:
         if sid:
             return [se for se in self._sessions.values() if se.sid == sid]
 
@@ -266,15 +260,20 @@ class Jingle(BaseModule):
             return [se for se in sessions if se.get_content(media)]
         return sessions
 
-    def set_file_info(self, file_):
+    def set_file_info(self, file_: dict[str, Any]) -> None:
         # Saves information about the files we have transferred
         # in case they need to be requested again.
         self.files.append(file_)
 
-    def get_file_info(self, peerjid, hash_=None, name=None, _account=None):
+    def get_file_info(self,
+                      peerjid: str,
+                      hash_: str | None = None,
+                      name: str | None = None,
+                      _account: str | None = None
+                      ) -> dict[str, Any] | None:
         if hash_:
-            for file in self.files: # DEBUG
-                #if f['hash'] == '1294809248109223':
+            for file in self.files:  # DEBUG
+                # if f['hash'] == '1294809248109223':
                 if file['hash'] == hash_ and file['peerjid'] == peerjid:
                     return file
         elif name:
@@ -283,12 +282,16 @@ class Jingle(BaseModule):
                     return file
         return None
 
-    def get_jingle_session(self, jid, sid=None, media=None):
-        if sid:
+    def get_jingle_session(self,
+                           jid: str,
+                           sid: str | None = None,
+                           media: str | None = None
+                           ) -> JingleSession | None:
+        if sid is not None:
             if sid in self._sessions:
                 return self._sessions[sid]
             return None
-        if media:
+        if media is not None:
             if media not in ('audio', 'video', 'file'):
                 return None
             for session in self._sessions.values():

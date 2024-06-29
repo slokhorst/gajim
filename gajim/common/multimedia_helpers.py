@@ -2,21 +2,9 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
-from typing import Dict
-from typing import Optional
 
 import logging
 
@@ -32,19 +20,19 @@ log = logging.getLogger('gajim.c.multimedia_helpers')
 
 class DeviceManager:
     def __init__(self) -> None:
-        self.devices: Dict[str, str] = {}
+        self.devices: dict[str, str] = {}
 
     def detect(self) -> None:
         self.devices = {}
 
-    def get_devices(self) -> Dict[str, str]:
+    def get_devices(self) -> dict[str, str]:
         if not self.devices:
             self.detect()
         return self.devices
 
     def detect_element(self, name: str, text: str, pipe: str = '%s') -> None:
         if Gst.ElementFactory.find(name):
-            element: Optional[Gst.Element] = Gst.ElementFactory.make(
+            element: Gst.Element | None = Gst.ElementFactory.make(
                 name, f'{name}presencetest')
             if element is None:
                 log.warning('could not create %spresencetest', name)
@@ -73,24 +61,28 @@ class DeviceManager:
 
 class AudioInputManager(DeviceManager):
     def detect(self) -> None:
-        self.devices: Dict[str, str] = {}
+        self.devices: dict[str, str] = {}
         # Test src
-        self.detect_element('audiotestsrc', _('Audio test'),
-            '%s is-live=true name=gajim_vol')
+        self.detect_element('audiotestsrc',
+                            _('Audio test'),
+                            '%s is-live=true name=gajim_vol')
         # Auto src
-        self.detect_element('autoaudiosrc', _('Autodetect'),
-            '%s ! volume name=gajim_vol')
+        self.detect_element('autoaudiosrc',
+                            _('Autodetect'),
+                            '%s ! volume name=gajim_vol')
         # Alsa src
-        self.detect_element('alsasrc', _('ALSA: %s'),
-            '%s ! volume name=gajim_vol')
+        self.detect_element('alsasrc',
+                            _('ALSA: %s'),
+                            '%s ! volume name=gajim_vol')
         # Pulseaudio src
-        self.detect_element('pulsesrc', _('Pulse: %s'),
-            '%s ! volume name=gajim_vol')
+        self.detect_element('pulsesrc',
+                            _('Pulse: %s'),
+                            '%s ! volume name=gajim_vol')
 
 
 class AudioOutputManager(DeviceManager):
     def detect(self) -> None:
-        self.devices: Dict[str, str] = {}
+        self.devices: dict[str, str] = {}
         # Fake sink
         self.detect_element('fakesink', _('Fake audio output'))
         # Auto sink
@@ -103,9 +95,11 @@ class AudioOutputManager(DeviceManager):
 
 class VideoInputManager(DeviceManager):
     def detect(self) -> None:
-        self.devices: Dict[str, str] = {}
+        self.devices: dict[str, str] = {}
         # Test src
-        self.detect_element('videotestsrc', _('Video test'),
+        self.detect_element(
+            'videotestsrc',
+            _('Video test'),
             '%s is-live=true ! video/x-raw,framerate=10/1 ! videoconvert')
         # Auto src
         self.detect_element('autovideosrc', _('Autodetect'))

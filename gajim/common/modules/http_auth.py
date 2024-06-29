@@ -1,30 +1,27 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 # XEP-0070: Verifying HTTP Requests via XMPP
 
+from __future__ import annotations
+
 import nbxmpp
-from nbxmpp.structs import StanzaHandler
 from nbxmpp.namespaces import Namespace
+from nbxmpp.protocol import Iq
+from nbxmpp.protocol import Message
+from nbxmpp.structs import IqProperties
+from nbxmpp.structs import MessageProperties
+from nbxmpp.structs import StanzaHandler
 
 from gajim.common import app
-from gajim.common.events import HttpAuthReceived
+from gajim.common import types
+from gajim.common.events import HttpAuth
 from gajim.common.modules.base import BaseModule
 
 
 class HTTPAuth(BaseModule):
-    def __init__(self, con):
+    def __init__(self, con: types.Client) -> None:
         BaseModule.__init__(self, con)
 
         self.handlers = [
@@ -39,7 +36,11 @@ class HTTPAuth(BaseModule):
                           priority=45)
         ]
 
-    def _http_auth(self, _con, stanza, properties):
+    def _http_auth(self,
+                   _con: types.xmppClient,
+                   stanza: Iq | Message,
+                   properties: IqProperties | MessageProperties
+                   ) -> None:
         if not properties.is_http_auth:
             return
 
@@ -51,15 +52,15 @@ class HTTPAuth(BaseModule):
             raise nbxmpp.NodeProcessed
 
         app.ged.raise_event(
-            HttpAuthReceived(conn=self._con,
-                             iq_id=properties.http_auth.id,
-                             method=properties.http_auth.method,
-                             url=properties.http_auth.url,
-                             msg=properties.http_auth.body,
-                             stanza=stanza))
+            HttpAuth(client=self._con,
+                     data=properties.http_auth,
+                     stanza=stanza))
         raise nbxmpp.NodeProcessed
 
-    def build_http_auth_answer(self, stanza, answer):
+    def build_http_auth_answer(self,
+                               stanza: Iq | Message,
+                               answer: str
+                               ) -> None:
         if answer == 'yes':
             self._log.info('Auth request approved')
             confirm = stanza.getTag('confirm')

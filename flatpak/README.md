@@ -36,16 +36,16 @@ flatpak remote-ls gajim-nightly
 
 respectively.
 
-To install the stable/nightly version of OMEMO, for example, run
+To install the stable/nightly version of PGP, for example, run
 
 ```bash
-flatpak install --user flathub org.gajim.Gajim.Plugin.omemo
+flatpak install --user flathub org.gajim.Gajim.Plugin.pgp
 ```
 
 or
 
 ```bash
-flatpak install --user gajim-nightly org.gajim.Gajim.Devel.Plugin.omemo
+flatpak install --user gajim-nightly org.gajim.Gajim.Devel.Plugin.pgp
 ```
 
 respectively.
@@ -64,7 +64,7 @@ In this example, we do a `git clone` of the repository, so you need to have `git
 Alternatively, you can also download the sources from our Gitlab via web browser.
 
 ```bash
-git clone https://dev.gajim.org/gajim/gajim.git ~/Gajim
+git clone --recurse-submodules https://dev.gajim.org/gajim/gajim.git ~/Gajim
 cd ~/Gajim
 ```
 
@@ -78,7 +78,7 @@ Replace install path `~/Gajim/gajim_flatpak` with an install path of your choice
 
 ```bash
 flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak-builder --repo=gajim_flatpak_repo --install-deps-from=flathub --force-clean ~/Gajim/gajim_flatpak ~/Gajim/flatpak/org.gajim.Gajim.yaml
+flatpak-builder --user --repo=gajim_flatpak_repo --install-deps-from=flathub --force-clean ~/Gajim/gajim_flatpak ~/Gajim/flatpak/org.gajim.Gajim.yaml
 flatpak --user remote-add --no-gpg-verify gajim_flatpak_repo gajim_flatpak_repo
 flatpak --user install gajim_flatpak_repo org.gajim.Gajim
 flatpak run org.gajim.Gajim
@@ -113,6 +113,6 @@ Gajim is now updated.
 
 When switching to Flatpak you might want to migrate your user data (accounts, history, ...) from your previous installation. Just copy your user data from/to the following directories:
 
-Copy `.local/share/gajim` -> `.var/app/org.gajim.Gajim/data/gajim`
+Copy `~/.local/share/gajim` -> `~/.var/app/org.gajim.Gajim/data/gajim`
 
-Copy `.config/gajim` -> `.var/app/org.gajim.Gajim/config/gajim`
+Copy `~/.config/gajim` -> `~/.var/app/org.gajim.Gajim/config/gajim`

@@ -4,31 +4,21 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-import socket
-import struct
 import errno
 import logging
+import socket
+import struct
 
 import nbxmpp
-from nbxmpp.namespaces import Namespace
 from nbxmpp.idlequeue import IdleObject
+from nbxmpp.namespaces import Namespace
 
 from gajim.common import app
 from gajim.common import helpers
-from gajim.common.socks5 import Socks5
 from gajim.common.file_props import FilesProp
+from gajim.common.socks5 import Socks5
 
 log = logging.getLogger('gajim.c.proxy65_manager')
 
@@ -40,13 +30,14 @@ S_FINISHED = 4
 
 CONNECT_TIMEOUT = 20
 
+
 class Proxy65Manager:
-    """
+    '''
     Keep records for file transfer proxies. Each time account establishes a
     connection to its server call proxy65manger.resolve(proxy) for every proxy
     that is configured within the account. The class takes care to resolve and
     test each proxy only once
-    """
+    '''
 
     def __init__(self, idlequeue):
         # dict {proxy: proxy properties}
@@ -56,14 +47,12 @@ class Proxy65Manager:
         self.default_proxies = {}
 
     def resolve(self, proxy, connection, sender_jid, default=None,
-    testit=True):
-        """
+                testit=True):
+        '''
         Start
         if testit=False, Gajim won't try to resolve it
-        """
-        if proxy in self.proxies:
-            resolver = self.proxies[proxy]
-        else:
+        '''
+        if proxy not in self.proxies:
             # proxy is being resolved for the first time
             resolver = ProxyResolver(proxy, sender_jid, testit)
             self.proxies[proxy] = resolver
@@ -113,11 +102,12 @@ class Proxy65Manager:
                 return (resolver.host, resolver.port, resolver.jid)
         return (None, 0, None)
 
+
 class ProxyResolver:
     def resolve_result(self, host, port, jid):
-        """
+        '''
         Test if host has a real proxy65 listening on port
-        """
+        '''
         self.host = str(host)
         self.port = int(port)
         self.jid = str(jid)
@@ -126,17 +116,19 @@ class ProxyResolver:
             return
         self.state = S_INITIAL
         log.info('start resolving %s:%s', self.host, self.port)
-        self.receiver_tester = ReceiverTester(self.host, self.port, self.jid,
-                self.sid, self.sender_jid, self._on_receiver_success,
-                self._on_connect_failure)
+        self.receiver_tester = ReceiverTester(
+            self.host, self.port, self.jid,
+            self.sid, self.sender_jid, self._on_receiver_success,
+            self._on_connect_failure)
         self.receiver_tester.connect()
 
     def _on_receiver_success(self):
         log.debug('Receiver successfully connected %s:%s',
                   self.host, self.port)
-        self.host_tester = HostTester(self.host, self.port, self.jid,
-                self.sid, self.sender_jid, self._on_connect_success,
-                self._on_connect_failure)
+        self.host_tester = HostTester(
+            self.host, self.port, self.jid,
+            self.sid, self.sender_jid, self._on_connect_success,
+            self._on_connect_failure)
         self.host_tester.connect()
 
     def _on_connect_success(self):
@@ -151,8 +143,8 @@ class ProxyResolver:
 
         if self.active_connection:
             log.debug('Activating bytestream on %s:%s', self.host, self.port)
-            self.active_connection.SendAndCallForResponse(iq,
-                     self._result_received)
+            self.active_connection.SendAndCallForResponse(
+                iq, self._result_received)
             self.state = S_ACTIVATED
         else:
             self.state = S_INITIAL
@@ -195,25 +187,25 @@ class ProxyResolver:
                 self.try_next_connection()
 
     def try_next_connection(self):
-        """
+        '''
         Try to resolve proxy with the next possible connection
-        """
+        '''
         if self.connections:
             connection = self.connections.pop(0)
             self.start_resolve(connection)
 
     def add_connection(self, connection):
-        """
+        '''
         Add a new connection in case the first fails
-        """
+        '''
         self.connections.append(connection)
         if self.state == S_INITIAL:
             self.start_resolve(connection)
 
     def start_resolve(self, connection):
-        """
+        '''
         Request network address from proxy
-        """
+        '''
         self.state = S_STARTED
         self.active_connection = connection
         iq = nbxmpp.Protocol(name='iq', to=self.proxy, typ='get')
@@ -222,9 +214,9 @@ class ProxyResolver:
         connection.send(iq)
 
     def __init__(self, proxy, sender_jid, testit):
-        """
+        '''
         if testit is False, don't test it, only get IP/port
-        """
+        '''
         self.proxy = proxy
         self.state = S_INITIAL
         self.active_connection = None
@@ -238,17 +230,26 @@ class ProxyResolver:
         self.sender_jid = sender_jid
         self.testit = testit
 
-class HostTester(Socks5, IdleObject):
-    """
-    Fake proxy tester
-    """
 
-    def __init__(self, host, port, jid, sid, sender_jid, on_success, on_failure):
-        """
+class HostTester(Socks5, IdleObject):
+    '''
+    Fake proxy tester
+    '''
+
+    def __init__(self,
+                 host,
+                 port,
+                 jid,
+                 sid,
+                 sender_jid,
+                 on_success,
+                 on_failure):
+        '''
         Try to establish and auth to proxy at (host, port)
 
         Calls on_success, or on_failure according to the result.
-        """
+        '''
+        IdleObject.__init__(self)
         self.host = host
         self.port = port
         self.jid = jid
@@ -263,16 +264,16 @@ class HostTester(Socks5, IdleObject):
         self.sid = sid
 
     def connect(self):
-        """
+        '''
         Create the socket and plug it to the idlequeue
-        """
+        '''
         if self.host is None:
             self.on_failure()
             return None
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setblocking(False)
         self.fd = self._sock.fileno()
-        self.state = 0 # about to be connected
+        self.state = 0  # about to be connected
         app.idlequeue.plug_idle(self, True, False)
         self.do_connect()
         self.idlequeue.set_read_timeout(self.fd, CONNECT_TIMEOUT)
@@ -291,7 +292,7 @@ class HostTester(Socks5, IdleObject):
         if self.state == 0:
             self.do_connect()
             return
-        if self.state == 1: # send initially: version and auth types
+        if self.state == 1:  # send initially: version and auth types
             data = self._get_auth_buff()
             self.send_raw(data)
         else:
@@ -328,7 +329,7 @@ class HostTester(Socks5, IdleObject):
             self.disconnect()
             self.state += 1
         else:
-            assert False, 'unexpected state: %d' % self.state
+            raise AssertionError('unexpected state: %d' % self.state)
 
     def do_connect(self):
         try:
@@ -353,22 +354,31 @@ class HostTester(Socks5, IdleObject):
             self._send = self._sock.send
             self._recv = self._sock.recv
         self.buff = b''
-        self.state = 1 # connected
+        self.state = 1  # connected
         log.debug('Host connected to %s:%s', self.host, self.port)
         self.idlequeue.plug_idle(self, True, False)
         return
 
-class ReceiverTester(Socks5, IdleObject):
-    """
-    Fake proxy tester
-    """
 
-    def __init__(self, host, port, jid, sid, sender_jid, on_success, on_failure):
-        """
+class ReceiverTester(Socks5, IdleObject):
+    '''
+    Fake proxy tester
+    '''
+
+    def __init__(self,
+                 host,
+                 port,
+                 jid,
+                 sid,
+                 sender_jid,
+                 on_success,
+                 on_failure):
+        '''
         Try to establish and auth to proxy at (host, port)
 
         Call on_success, or on_failure according to the result.
-        """
+        '''
+        IdleObject.__init__(self)
         self.host = host
         self.port = port
         self.jid = jid
@@ -383,16 +393,16 @@ class ReceiverTester(Socks5, IdleObject):
         self.sid = sid
 
     def connect(self):
-        """
+        '''
         Create the socket and plug it to the idlequeue
-        """
+        '''
         if self.host is None:
             self.on_failure()
             return None
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setblocking(False)
         self.fd = self._sock.fileno()
-        self.state = 0 # about to be connected
+        self.state = 0  # about to be connected
         app.idlequeue.plug_idle(self, True, False)
         self.do_connect()
         self.idlequeue.set_read_timeout(self.fd, CONNECT_TIMEOUT)
@@ -411,7 +421,7 @@ class ReceiverTester(Socks5, IdleObject):
         if self.state == 0:
             self.do_connect()
             return
-        if self.state == 1: # send initially: version and auth types
+        if self.state == 1:  # send initially: version and auth types
             data = self._get_auth_buff()
             self.send_raw(data)
         else:
@@ -456,7 +466,7 @@ class ReceiverTester(Socks5, IdleObject):
             self.disconnect()
             self.state += 1
         else:
-            assert False, 'unexpected state: %d' % self.state
+            raise AssertionError('unexpected state: %d' % self.state)
 
     def do_connect(self):
         try:
@@ -481,6 +491,6 @@ class ReceiverTester(Socks5, IdleObject):
             self._send = self._sock.send
             self._recv = self._sock.recv
         self.buff = ''
-        self.state = 1 # connected
+        self.state = 1  # connected
         log.debug('Receiver connected to %s:%s', self.host, self.port)
         self.idlequeue.plug_idle(self, True, False)

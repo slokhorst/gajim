@@ -1,39 +1,26 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from typing import Any
-from typing import Optional
 
-from gi.repository import Gtk
 from gi.repository import Gdk
+from gi.repository import Gtk
 
 from gajim.common import app
 from gajim.common.const import AvatarSize
 from gajim.common.i18n import _
 
-from .avatar import make_workspace_avatar
-from .avatar_selector import AvatarSelector
-from .dialogs import ConfirmationDialog
-from .dialogs import DialogButton
-from .builder import get_builder
-from .util import rgba_to_float
-from .util import make_rgba
-from .const import DEFAULT_WORKSPACE_COLOR
+from gajim.gtk.avatar import make_workspace_avatar
+from gajim.gtk.avatar_selector import AvatarSelector
+from gajim.gtk.builder import get_builder
+from gajim.gtk.const import DEFAULT_WORKSPACE_COLOR
+from gajim.gtk.util import make_rgba
+from gajim.gtk.util import rgba_to_float
 
 
 class WorkspaceDialog(Gtk.ApplicationWindow):
-    def __init__(self, workspace_id: Optional[str] = None) -> None:
+    def __init__(self, workspace_id: str | None = None) -> None:
         Gtk.ApplicationWindow.__init__(self)
         self.set_name('WorkspaceDialog')
         self.set_application(app.app)
@@ -41,7 +28,7 @@ class WorkspaceDialog(Gtk.ApplicationWindow):
         self.set_show_menubar(False)
         self.set_title(_('Workspace Settings'))
         self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
-        self.set_size_request(350, -1)
+        self.set_size_request(500, 600)
 
         self._workspace_id = workspace_id
 
@@ -53,10 +40,15 @@ class WorkspaceDialog(Gtk.ApplicationWindow):
         self._ui.image_box.add(self._avatar_selector)
 
         name: str = _('My Workspace')
-        color: Optional[str] = None
-        self._avatar_sha: Optional[str] = None
+        color: str | None = None
+        self._avatar_sha: str | None = None
+
+        if app.settings.get_workspace_count() == 1:
+            # Don't allow to remove last workspace
+            self._ui.remove_workspace_button.set_sensitive(False)
 
         if workspace_id is None:
+            # This is a new workspace
             self._ui.remove_workspace_button.set_sensitive(False)
         else:
             name = app.settings.get_workspace_setting(
@@ -88,25 +80,9 @@ class WorkspaceDialog(Gtk.ApplicationWindow):
             self.destroy()
 
     def _on_remove_workspace(self, _button: Gtk.Button) -> None:
-        def _on_remove():
-            assert self._workspace_id is not None
-            app.window.remove_workspace(self._workspace_id)
-            self.destroy()
         assert self._workspace_id is not None
-        chat_list = app.window.get_chat_list(self._workspace_id)
-        open_chats = chat_list.get_open_chats()
-        if len(open_chats) > 0:
-            ConfirmationDialog(
-                _('Remove Workspace'),
-                _('Remove Workspace'),
-                _('This workspace contains chats. Remove anyway?'),
-                [DialogButton.make('Cancel',
-                                   text=_('_No')),
-                 DialogButton.make('Remove',
-                                   callback=_on_remove)]).show()
-            return
-        # No chats in chat list, it is save to remove workspace
-        _on_remove()
+        app.window.remove_workspace(self._workspace_id)
+        self.destroy()
 
     def _on_cancel(self, _button: Gtk.Button) -> None:
         self.destroy()
@@ -129,6 +105,7 @@ class WorkspaceDialog(Gtk.ApplicationWindow):
         else:
             self._ui.style_stack.set_visible_child_name('color')
             self._avatar_sha = None
+            self._avatar_selector.reset()
         self._update_avatar()
 
     def _update_avatar(self) -> None:
@@ -137,19 +114,19 @@ class WorkspaceDialog(Gtk.ApplicationWindow):
         scale = self.get_scale_factor()
         if self._avatar_sha is not None:
             assert self._workspace_id is not None
-            surface = app.interface.avatar_storage.get_workspace_surface(
+            surface = app.app.avatar_storage.get_workspace_surface(
                 self._workspace_id,
                 AvatarSize.WORKSPACE_EDIT,
                 scale)
         else:
             surface = make_workspace_avatar(
-                name[:1].upper(),
+                name,
                 rgba_to_float(rgba),
                 AvatarSize.WORKSPACE_EDIT,
                 scale)
         self._ui.preview.set_from_surface(surface)
 
-    def _get_avatar_data(self) -> Optional[bytes]:
+    def _get_avatar_data(self) -> bytes | None:
         if not self._avatar_selector.get_prepared():
             return None
 
@@ -166,7 +143,7 @@ class WorkspaceDialog(Gtk.ApplicationWindow):
         if use_image:
             data = self._get_avatar_data()
             if data is not None:
-                self._avatar_sha = app.interface.save_avatar(data)
+                self._avatar_sha = app.app.avatar_storage.save_avatar(data)
 
         if self._workspace_id is not None:
             app.settings.set_workspace_setting(

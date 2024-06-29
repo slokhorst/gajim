@@ -1,24 +1,14 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from gi.repository import GLib
 from gi.repository import Gtk
 
 from gajim.common import app
 
-from .app_page import AppPage
-from .util import load_icon_surface
+from gajim.gtk.app_page import AppPage
+from gajim.gtk.util import load_icon_surface
 
 
 class AppSideBar(Gtk.ListBox):
@@ -54,6 +44,7 @@ class AppRow(Gtk.ListBoxRow):
     def __init__(self) -> None:
         Gtk.ListBoxRow.__init__(self)
         self.get_style_context().add_class('workspace-sidebar-item')
+        self.get_style_context().add_class('app-sidebar-item')
 
         self._unread_label = Gtk.Label()
         self._unread_label.get_style_context().add_class(
@@ -64,7 +55,6 @@ class AppRow(Gtk.ListBoxRow):
 
         surface = load_icon_surface('org.gajim.Gajim', 32)
         image = Gtk.Image.new_from_surface(surface)
-        image.get_style_context().add_class('app-sidebar-image')
 
         selection_bar = Gtk.Box()
         selection_bar.set_size_request(6, -1)

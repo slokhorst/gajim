@@ -13,95 +13,96 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 from typing import Any
-from typing import Callable
-from typing import Dict
-from typing import Optional
-from typing import List
-from typing import Tuple
-from typing import Union
+from typing import TYPE_CHECKING
 
-import sys
-import re
-import os
-import subprocess
-import base64
-import hashlib
-import shlex
-import socket
-import logging
-import json
-import copy
-import collections
-import platform
 import functools
-from collections import defaultdict
-import random
-import weakref
+import hashlib
+import importlib.metadata
 import inspect
+import json
+import logging
+import os
+import platform
+import random
+import re
+import socket
 import string
+import sys
+import unicodedata
+import uuid
+import weakref
 import webbrowser
-from string import Template
-import urllib
+from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
-from urllib.parse import unquote
-from encodings.punycode import punycode_encode
+from datetime import timezone
 from functools import wraps
 from pathlib import Path
-from packaging.version import Version as V
+from string import Template
+from urllib.parse import unquote
+from urllib.parse import urlparse
 
-from nbxmpp.namespaces import Namespace
-from nbxmpp.const import Role
-from nbxmpp.const import ConnectionProtocol
-from nbxmpp.const import ConnectionType
-from nbxmpp.const import Affiliation
-from nbxmpp.errors import StanzaError
-from nbxmpp.structs import ProxyData
-from nbxmpp.protocol import JID
-from nbxmpp.protocol import InvalidJid
-from OpenSSL.crypto import X509, load_certificate
-from OpenSSL.crypto import FILETYPE_PEM
+import precis_i18n.codec  # noqa: F401
+import qrcode
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+from gi.repository import GdkPixbuf
 from gi.repository import Gio
 from gi.repository import GLib
-import precis_i18n.codec  # pylint: disable=unused-import
+from gi.repository import GObject
+from gi.repository import Soup
+from nbxmpp.const import Affiliation
+from nbxmpp.const import Chatstate
+from nbxmpp.const import ConnectionProtocol
+from nbxmpp.const import ConnectionType
+from nbxmpp.const import Role
+from nbxmpp.errors import StanzaError
+from nbxmpp.namespaces import Namespace
+from nbxmpp.protocol import InvalidJid
+from nbxmpp.protocol import Iq
+from nbxmpp.protocol import JID
+from nbxmpp.structs import CommonError
+from nbxmpp.structs import ProxyData
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version as V
+from qrcode.image.pil import PilImage as QrcPilImage
 
 from gajim.common import app
 from gajim.common import configpaths
-from gajim.common.i18n import Q_
-from gajim.common.i18n import _
-from gajim.common.i18n import ngettext
-from gajim.common.i18n import get_rfc5646_lang
-from gajim.common.const import ShowConstant
-from gajim.common.const import URIType
-from gajim.common.const import URIAction
-from gajim.common.const import GIO_TLS_ERRORS
-from gajim.common.const import SHOW_LIST
-from gajim.common.regex import INVALID_XML_CHARS_REGEX
-from gajim.common.regex import STH_AT_STH_DOT_STH_REGEX
-from gajim.common.structs import URI
+from gajim.common import iana
 from gajim.common import types
+from gajim.common.const import CONSONANTS
+from gajim.common.const import GIO_TLS_ERRORS
+from gajim.common.const import NONREGISTERED_URI_SCHEMES
+from gajim.common.const import SHOW_LIST
+from gajim.common.const import SHOW_STRING
+from gajim.common.const import SHOW_STRING_MNEMONIC
+from gajim.common.const import URIType
+from gajim.common.const import VOWELS
+from gajim.common.const import XmppUriQuery
+from gajim.common.dbus.file_manager import DBusFileManager
+from gajim.common.i18n import _
+from gajim.common.i18n import get_rfc5646_lang
+from gajim.common.i18n import ngettext
+from gajim.common.i18n import p_
+from gajim.common.structs import URI
+
+if TYPE_CHECKING:
+    from gajim.common.modules.util import LogAdapter
 
 HAS_PYWIN32 = False
 if os.name == 'nt':
     try:
-        import win32file
-        import win32con
         import pywintypes
+        import win32con
+        import win32file
         HAS_PYWIN32 = True
     except ImportError:
         pass
@@ -110,6 +111,7 @@ log = logging.getLogger('gajim.c.helpers')
 
 URL_REGEX = re.compile(
     r"(www\.(?!\.)|[a-z][a-z0-9+.-]*://)[^\s<>'\"]+[^!,\.\s<>\)'\"\]]")
+CURRENT_PYTHON_VERSION = platform.python_version()
 
 
 class InvalidFormat(Exception):
@@ -122,11 +124,12 @@ def parse_jid(jidstring: str) -> str:
     except Exception as error:
         raise InvalidFormat(error)
 
+
 def idn_to_ascii(host: str) -> str:
-    """
+    '''
     Convert IDN (Internationalized Domain Names) to ACE (ASCII-compatible
     encoding)
-    """
+    '''
     from encodings import idna
     labels = idna.dots.split(host)
     converted_labels: list[str] = []
@@ -135,36 +138,26 @@ def idn_to_ascii(host: str) -> str:
             converted_labels.append(idna.ToASCII(label).decode('utf-8'))
         else:
             converted_labels.append('')
-    return ".".join(converted_labels)
+    return '.'.join(converted_labels)
+
 
 def ascii_to_idn(host: str) -> str:
-    """
+    '''
     Convert ACE (ASCII-compatible encoding) to IDN (Internationalized Domain
     Names)
-    """
+    '''
     from encodings import idna
     labels = idna.dots.split(host)
     converted_labels: list[str] = []
     for label in labels:
         converted_labels.append(idna.ToUnicode(label))
-    return ".".join(converted_labels)
+    return '.'.join(converted_labels)
 
-def puny_encode_url(url: str) -> Optional[str]:
-    _url = url
-    if '//' not in _url:
-        _url = '//' + _url
-    try:
-        o = urllib.parse.urlparse(_url)
-        p_loc = idn_to_ascii(o.hostname)
-    except Exception:
-        log.debug('urlparse failed: %s', url)
-        return None
-    return url.replace(o.hostname, p_loc)
 
-def parse_resource(resource: str) -> Optional[str]:
-    """
+def parse_resource(resource: str) -> str | None:
+    '''
     Perform stringprep on resource and return it
-    """
+    '''
     if not resource:
         return None
 
@@ -173,109 +166,62 @@ def parse_resource(resource: str) -> Optional[str]:
     except UnicodeError:
         raise InvalidFormat('Invalid character in resource.')
 
-def windowsify(word: str) -> str:
-    if os.name == 'nt':
-        return word.capitalize()
-    return word
 
-def get_uf_show(show: Union[ShowConstant, str],
-                use_mnemonic: bool = False) -> str:
-    """
-    Return a userfriendly string for dnd/xa/chat and make all strings
-    translatable
+def get_uf_show(show: str, use_mnemonic: bool = False) -> str:
+    if use_mnemonic:
+        return SHOW_STRING_MNEMONIC[show]
+    return SHOW_STRING[show]
 
-    If use_mnemonic is True, it adds _ so GUI should call with True for
-    accessibility issues
-    """
-    if isinstance(show, ShowConstant):
-        show = show.name.lower()
-
-    if show == 'dnd':
-        if use_mnemonic:
-            uf_show = _('_Busy')
-        else:
-            uf_show = _('Busy')
-    elif show == 'xa':
-        if use_mnemonic:
-            uf_show = _('_Not Available')
-        else:
-            uf_show = _('Not Available')
-    elif show == 'chat':
-        if use_mnemonic:
-            uf_show = _('_Free for Chat')
-        else:
-            uf_show = _('Free for Chat')
-    elif show == 'online':
-        if use_mnemonic:
-            uf_show = Q_('?user status:_Available')
-        else:
-            uf_show = Q_('?user status:Available')
-    elif show == 'connecting':
-        uf_show = _('Connecting')
-    elif show == 'away':
-        if use_mnemonic:
-            uf_show = _('A_way')
-        else:
-            uf_show = _('Away')
-    elif show == 'offline':
-        if use_mnemonic:
-            uf_show = _('_Offline')
-        else:
-            uf_show = _('Offline')
-    elif show == 'not in roster':
-        uf_show = _('Not in contact list')
-    elif show == 'requested':
-        uf_show = Q_('?contact has status:Unknown')
-    else:
-        uf_show = Q_('?contact has status:Has errors')
-    return uf_show
 
 def get_uf_sub(sub: str) -> str:
     if sub == 'none':
-        uf_sub = Q_('?Subscription we already have:None')
-    elif sub == 'to':
-        uf_sub = _('To')
-    elif sub == 'from':
-        uf_sub = _('From')
-    elif sub == 'both':
-        uf_sub = _('Both')
-    else:
-        uf_sub = _('Unknown')
+        return p_('Contact subscription', 'None')
 
-    return uf_sub
+    if sub == 'to':
+        return p_('Contact subscription', 'To')
 
-def get_uf_ask(ask: Union[str, None]) -> str:
+    if sub == 'from':
+        return p_('Contact subscription', 'From')
+
+    if sub == 'both':
+        return p_('Contact subscription', 'Both')
+
+    return p_('Contact subscription', 'Unknown')
+
+
+def get_uf_ask(ask: str | None) -> str:
     if ask is None:
-        uf_ask = Q_('?Ask (for Subscription):None')
-    elif ask == 'subscribe':
-        uf_ask = _('Subscribe')
-    else:
-        uf_ask = ask
+        return p_('Contact subscription', 'None')
 
-    return uf_ask
+    if ask == 'subscribe':
+        return p_('Contact subscription', 'Subscribe')
 
-def get_uf_role(role: Union[Role, str], plural: bool = False) -> str:
+    return ask
+
+
+def get_uf_role(role: Role | str, plural: bool = False) -> str:
     ''' plural determines if you get Moderators or Moderator'''
     if not isinstance(role, str):
         role = role.value
 
     if role == 'none':
-        return Q_('?Group Chat Contact Role:None')
+        return p_('Group chat contact role', 'None')
     if role == 'moderator':
         if plural:
-            return _('Moderators')
-        return _('Moderator')
+            return p_('Group chat contact role', 'Moderators')
+        return p_('Group chat contact role', 'Moderator')
     if role == 'participant':
         if plural:
-            return _('Participants')
-        return _('Participant')
+            return p_('Group chat contact role', 'Participants')
+        return p_('Group chat contact role', 'Participant')
     if role == 'visitor':
         if plural:
-            return _('Visitors')
-        return _('Visitor')
+            return p_('Group chat contact role', 'Visitors')
+        return p_('Group chat contact role', 'Visitor')
     return ''
 
-def get_uf_affiliation(affiliation: Union[Affiliation, str],
+
+def get_uf_affiliation(affiliation: Affiliation | str,
                        plural: bool = False
                        ) -> str:
     '''Get a nice and translated affilition for muc'''
@@ -283,58 +229,57 @@ def get_uf_affiliation(affiliation: Union[Affiliation, str],
         affiliation = affiliation.value
 
     if affiliation == 'none':
-        return Q_('?Group Chat Contact Affiliation:None')
+        return p_('Group chat contact affiliation', 'None')
     if affiliation == 'owner':
         if plural:
-            return _('Owners')
-        return _('Owner')
+            return p_('Group chat contact affiliation', 'Owners')
+        return p_('Group chat contact affiliation', 'Owner')
     if affiliation == 'admin':
         if plural:
-            return _('Administrators')
-        return _('Administrator')
+            return p_('Group chat contact affiliation', 'Administrators')
+        return p_('Group chat contact affiliation', 'Administrator')
     if affiliation == 'member':
         if plural:
-            return _('Members')
-        return _('Member')
+            return p_('Group chat contact affiliation', 'Members')
+        return p_('Group chat contact affiliation', 'Member')
     return ''
 
-def get_uf_relative_time(timestamp: float) -> str:
-    date_time = datetime.fromtimestamp(timestamp)
-    now = datetime.now()
+
+def get_uf_relative_time(date_time: datetime,
+                         now: datetime | None = None
+                         ) -> str:
+
+    if now is None:  # used by unittest
+        now = datetime.now()
     timespan = now - date_time
 
-    if timespan > timedelta(days=365):
-        return str(date_time.year)
-    if timespan > timedelta(days=7):
-        return date_time.strftime('%b %d')
-    if timespan > timedelta(days=2):
-        return date_time.strftime('%a')
-    if date_time.strftime('%d') != now.strftime('%d'):
-        return _('Yesterday')
-    if timespan > timedelta(minutes=15):
-        return date_time.strftime('%H:%M')
-    if timespan > timedelta(minutes=1):
+    if timespan < timedelta(minutes=1):
+        return _('Just now')
+    if timespan < timedelta(minutes=15):
         minutes = int(timespan.seconds / 60)
-        return ngettext('%i min ago',
-                        '%i mins ago',
+        return ngettext('%s min ago',
+                        '%s mins ago',
                         minutes,
-                        minutes,
-                        minutes)
-    return _('Just now')
+                        str(minutes),
+                        str(minutes))
+    today = now.date()
+    if date_time.date() == today:
+        format_string = app.settings.get('time_format')
+        return date_time.strftime(format_string)
+    yesterday = now.date() - timedelta(days=1)
+    if date_time.date() == yesterday:
+        return _('Yesterday')
+    if timespan < timedelta(days=7):  # this week
+        return date_time.strftime('%a')  # weekday
+    if timespan < timedelta(days=365):  # this year
+        return date_time.strftime('%b %d')
+    return str(date_time.year)
 
-def get_sorted_keys(adict):
-    keys = sorted(adict.keys())
-    return keys
 
 def to_one_line(msg: str) -> str:
     msg = msg.replace('\\', '\\\\')
-    msg = msg.replace('\n', '\\n')
-    # s1 = 'test\ntest\\ntest'
-    # s11 = s1.replace('\\', '\\\\')
-    # s12 = s11.replace('\n', '\\n')
-    # s12
-    # 'test\\ntest\\\\ntest'
-    return msg
+    return msg.replace('\n', '\\n')
+
 
 def from_one_line(msg: str) -> str:
     # (?<!\\) is a lookbehind assertion which asks anything but '\'
@@ -343,121 +288,71 @@ def from_one_line(msg: str) -> str:
     # So here match '\\n' but not if you have a '\' before that
     expr = re.compile(r'(?<!\\)\\n')
     msg = expr.sub('\n', msg)
-    msg = msg.replace('\\\\', '\\')
-    # s12 = 'test\\ntest\\\\ntest'
-    # s13 = re.sub('\n', s12)
-    # s14 s13.replace('\\\\', '\\')
-    # s14
-    # 'test\ntest\\ntest'
-    return msg
+    return msg.replace('\\\\', '\\')
 
-def get_uf_chatstate(chatstate: str) -> str:
-    """
-    Remove chatstate jargon and returns user friendly messages
-    """
-    if chatstate == 'active':
-        return _('is paying attention to the conversation')
-    if chatstate == 'inactive':
-        return _('is doing something else')
-    if chatstate == 'composing':
+
+def chatstate_to_string(chatstate: Chatstate | None) -> str:
+    if chatstate is None:
+        return ''
+
+    if chatstate == Chatstate.ACTIVE:
+        return ''
+
+    if chatstate == Chatstate.COMPOSING:
         return _('is composing a message…')
-    if chatstate == 'paused':
-        #paused means he or she was composing but has stopped for a while
+
+    if chatstate in (Chatstate.INACTIVE, Chatstate.GONE):
+        return _('is doing something else')
+
+    if chatstate == Chatstate.PAUSED:
         return _('paused composing a message')
-    if chatstate == 'gone':
-        return _('has closed the chat window or tab')
-    return ''
 
-def exec_command(command: str,
-                 use_shell: bool = False,
-                 posix: bool = True
-                 ) -> None:
-    """
-    execute a command. if use_shell is True, we run the command as is it was
-    typed in a console. So it may be dangerous if you are not sure about what
-    is executed.
-    """
-    if use_shell:
-        subprocess.Popen(f'{command} &', shell=True).wait()
-    else:
-        args = shlex.split(command, posix=posix)
-        process = subprocess.Popen(args)
-        app.thread_interface(process.wait)
+    raise ValueError('unknown value: %s' % chatstate)
 
-def build_command(executable: str, parameter: str) -> str:
-    # we add to the parameter (can hold path with spaces)
-    # "" so we have good parsing from shell
-    parameter = parameter.replace('"', '\\"')  # but first escape "
-    command = f'{executable} "{parameter}"'
-    return command
-
-def get_file_path_from_dnd_dropped_uri(uri: str) -> str:
-    path = urllib.parse.unquote(uri)  # escape special chars
-    path = path.strip('\r\n\x00')  # remove \r\n and NULL
-    # get the path to file
-    if re.match('^file:///[a-zA-Z]:/', path):  # windows
-        path = path[8:]  # 8 is len('file:///')
-    elif path.startswith('file://'):  # nautilus, rox
-        path = path[7:]  # 7 is len('file://')
-    elif path.startswith('file:'):  # xffm
-        path = path[5:]  # 5 is len('file:')
-    return path
 
 def sanitize_filename(filename: str) -> str:
-    """
-    Make sure the filename we will write does contain only acceptable and latin
-    characters, and is not too long (in that case hash it)
-    """
-    # 48 is the limit
-    if len(filename) > 48:
-        hash_ = hashlib.md5(filename.encode('utf-8'))
-        filename = base64.b64encode(hash_.digest()).decode('utf-8')
+    '''
+    Sanitize filename of elements not allowed on Windows
+    https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+    Limit filename length to 50 chars on all systems
+    '''
+    if sys.platform == 'win32':
+        blacklist = ['\\', '/', ':', '*', '?', '"', '<', '>', '|', '\0']
+        reserved_filenames = [
+            'CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5',
+            'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4',
+            'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+        ]
+        filename = ''.join(char for char in filename if char not in blacklist)
 
-    # make it latin chars only
-    filename = punycode_encode(filename).decode('utf-8')
-    filename = filename.replace('/', '_')
-    if os.name == 'nt':
-        filename = filename.replace('?', '_').replace(':', '_')\
-                .replace('\\', '_').replace('"', "'").replace('|', '_')\
-                .replace('*', '_').replace('<', '_').replace('>', '_')
+        filename = ''.join(char for char in filename if ord(char) > 31)
 
-    return filename
+        filename = unicodedata.normalize('NFKD', filename)
+        filename = filename.rstrip('. ')
+        filename = filename.strip()
 
-def reduce_chars_newlines(text: str, max_chars: int = 0,
-                          max_lines: int = 0) -> str:
-    """
-    Cut the chars after 'max_chars' on each line and show only the first
-    'max_lines'
+        if all(char == '.' for char in filename):
+            filename = f'__{filename}'
+        if filename.upper() in reserved_filenames:
+            filename = f'__{filename}'
+        if len(filename) == 0:
+            filename = '__'
 
-    If any of the params is not present (None or 0) the action on it is not
-    performed
-    """
-    def _cut_if_long(string_: str) -> str:
-        if len(string_) > max_chars:
-            string_ = string_[:max_chars - 3] + '…'
-        return string_
+    extension = Path(filename).suffix[:10]
+    filename = Path(filename).stem
+    final_length = 50 - len(extension)
 
-    if max_lines == 0:
-        lines = text.split('\n')
-    else:
-        lines = text.split('\n', max_lines)[:max_lines]
-    if max_chars > 0:
-        if lines:
-            lines = [_cut_if_long(e) for e in lines]
-    if lines:
-        reduced_text = '\n'.join(lines)
-        if reduced_text != text:
-            reduced_text += '…'
-    else:
-        reduced_text = ''
-    return reduced_text
+    # Many Filesystems have a limit on filename length: keep it short
+    filename = filename[:final_length]
+
+    return f'{filename}{extension}'
 
 
 def get_contact_dict_for_account(account: str) -> dict[str, types.BareContact]:
-    """
+    '''
     Creates a dict of jid -> contact with all contacts of account
     Can be used for completion lists
-    """
+    '''
     contacts_dict: dict[str, types.BareContact] = {}
     client = app.get_client(account)
     for contact in client.get_module('Roster').iter_contacts():
@@ -465,8 +360,23 @@ def get_contact_dict_for_account(account: str) -> dict[str, types.BareContact]:
     return contacts_dict
 
 
+def generate_qr_code(content: str) -> GdkPixbuf.Pixbuf | None:
+    qr = qrcode.QRCode(version=None,
+                       error_correction=qrcode.constants.ERROR_CORRECT_L,
+                       box_size=6,
+                       border=4)
+    qr.add_data(content)
+    qr.make(fit=True)
+
+    img = qr.make_image(image_factory=QrcPilImage).convert('RGB')
+    return GdkPixbuf.Pixbuf.new_from_bytes(
+        GLib.Bytes.new(img.tobytes()),
+        GdkPixbuf.Colorspace.RGB, False, 8,
+        img.width, img.height, img.width*3)
+
+
 def play_sound(sound_event: str,
-               account: Optional[str] = None,
+               account: str | None = None,
                force: bool = False,
                loop: bool = False) -> None:
 
@@ -478,15 +388,17 @@ def play_sound(sound_event: str,
             app.settings.get_soundevent_settings(sound_event)['path'], loop)
 
 
-def check_soundfile_path(file_, dirs=None):
-    """
+def check_soundfile_path(file_: str,
+                         dirs: list[Path] | None = None
+                         ) -> Path | None:
+    '''
     Check if the sound file exists
 
     :param file_: the file to check, absolute or relative to 'dirs' path
     :param dirs: list of knows paths to fallback if the file doesn't exists
                                      (eg: ~/.gajim/sounds/, DATADIR/sounds...).
     :return      the path to file or None if it doesn't exists.
-    """
+    '''
     if not file_:
         return None
     if Path(file_).exists():
@@ -502,8 +414,11 @@ def check_soundfile_path(file_, dirs=None):
             return dir_
     return None
 
-def strip_soundfile_path(file_, dirs=None, abs_=True):
-    """
+
+def strip_soundfile_path(file_: Path | str,
+                         dirs: list[Path] | None = None,
+                         abs_: bool = True):
+    '''
     Remove knowns paths from a sound file
 
     Filechooser returns an absolute path.
@@ -513,7 +428,7 @@ def strip_soundfile_path(file_, dirs=None, abs_=True):
     param: file_: the filename to strip
     param: dirs: list of knowns paths from which the filename should be stripped
     param: abs_: force absolute path on dirs
-    """
+    '''
 
     if not file_:
         return None
@@ -532,105 +447,112 @@ def strip_soundfile_path(file_, dirs=None, abs_=True):
             return name
     return file_
 
-def play_sound_file(path_to_soundfile: str, loop: bool = False) -> None:
-    path_to_soundfile = check_soundfile_path(path_to_soundfile)
+
+def play_sound_file(str_path_to_soundfile: str, loop: bool = False) -> None:
+    path_to_soundfile = check_soundfile_path(str_path_to_soundfile)
     if path_to_soundfile is None:
         return
 
     from gajim.common import sound
     sound.play(path_to_soundfile, loop)
 
-def get_connection_status(account: str) -> str:
-    if not app.account_is_available(account):
-        return 'error'
-    con = app.connections[account]
-    if con.state.is_reconnect_scheduled:
-        return 'error'
 
-    if con.state.is_connecting or con.state.is_connected:
+def get_client_status(account: str) -> str:
+    client = app.get_client(account)
+    if client.state.is_disconnected:
+        return 'offline'
+
+    if (client.state.is_reconnect_scheduled or
+            client.state.is_connecting or
+            client.state.is_connected):
         return 'connecting'
 
-    if con.state.is_disconnected:
-        return 'offline'
-    return con.status
+    return client.status
+
 
 def get_global_show() -> str:
     maxi = 0
-    for account in app.connections:
-        if not app.settings.get_account_setting(account,
+    for client in app.get_clients():
+        if not app.settings.get_account_setting(client.account,
                                                 'sync_with_global_status'):
             continue
-        status = get_connection_status(account)
+        status = get_client_status(client.account)
         index = SHOW_LIST.index(status)
         if index > maxi:
             maxi = index
     return SHOW_LIST[maxi]
 
+
 def get_global_status_message() -> str:
     maxi = 0
     status_message = ''
-    for account, con in app.connections.items():
-        if not app.settings.get_account_setting(account,
+    for client in app.get_clients():
+        if not app.settings.get_account_setting(client.account,
                                                 'sync_with_global_status'):
             continue
-        index = SHOW_LIST.index(con.status)
+        index = SHOW_LIST.index(client.status)
         if index > maxi:
             maxi = index
-            status_message = con.status_message
+            status_message = client.status_message
     return status_message
 
+
 def statuses_unified() -> bool:
-    """
+    '''
     Test if all statuses are the same
-    """
+    '''
     reference = None
-    for account, con in app.connections.items():
+    for client in app.get_clients():
+        account = client.account
         if not app.settings.get_account_setting(account,
                                                 'sync_with_global_status'):
             continue
+
         if reference is None:
-            reference = con.status
-        elif reference != con.status:
+            reference = get_client_status(account)
+
+        elif reference != get_client_status(account):
             return False
     return True
 
 
-def get_full_jid_from_iq(iq_obj):
-    """
+def get_full_jid_from_iq(iq_obj: Iq) -> str | None:
+    '''
     Return the full jid (with resource) from an iq
-    """
+    '''
     jid = iq_obj.getFrom()
     if jid is None:
         return None
     return parse_jid(str(iq_obj.getFrom()))
 
-def get_jid_from_iq(iq_obj):
-    """
+
+def get_jid_from_iq(iq_obj: Iq) -> str | None:
+    '''
     Return the jid (without resource) from an iq
-    """
+    '''
     jid = get_full_jid_from_iq(iq_obj)
+    if jid is None:
+        return None
     return app.get_jid_without_resource(jid)
 
-def get_auth_sha(sid: str, initiator: str, target: str) -> str:
-    """
-    Return sha of sid + initiator + target used for proxy auth
-    """
-    return hashlib.sha1(
-        (f'{sid}{initiator}{target}').encode('utf-8')).hexdigest()
 
-def remove_invalid_xml_chars(string_: str) -> str:
-    if string_:
-        string_ = re.sub(INVALID_XML_CHARS_REGEX, '', string_)
-    return string_
+def get_auth_sha(sid: str, initiator: str, target: str) -> str:
+    '''
+    Return sha of sid + initiator + target used for proxy auth
+    '''
+    return hashlib.sha1(
+        (f'{sid}{initiator}{target}').encode()).hexdigest()
+
 
 def get_random_string(count: int = 16) -> str:
-    """
+    '''
     Create random string of count length
 
     WARNING: Don't use this for security purposes
-    """
+    '''
     allowed = string.ascii_uppercase + string.digits
     return ''.join(random.choice(allowed) for char in range(count))
+
 
 @functools.lru_cache(maxsize=1)
 def get_os_info() -> str:
@@ -648,30 +570,46 @@ def get_os_info() -> str:
 
 
 def message_needs_highlight(text: str, nickname: str, own_jid: str) -> bool:
-    """
-    Check text to see whether any of the words in (muc_highlight_words and
-    nick) appear
-    """
-    special_words = app.settings.get('muc_highlight_words').split(';')
-    special_words.append(nickname)
-    special_words.append(own_jid)
-    # Strip empties: ''.split(';') == [''] and would highlight everything.
-    # Also lowercase everything for case insensitive compare.
-    special_words = [word.lower() for word in special_words if word]
+    '''
+    Check whether 'text' contains 'nickname', 'own_jid', or any string of the
+    'muc_highlight_words' setting.
+    '''
+
+    search_strings = app.settings.get('muc_highlight_words').split(';')
+    search_strings.append(nickname)
+    search_strings.append(own_jid)
+
+    search_strings = [word.lower() for word in search_strings if word]
     text = text.lower()
 
-    for special_word in special_words:
-        found_here = text.find(special_word)
-        while found_here > -1:
-            end_here = found_here + len(special_word)
-            if ((found_here == 0 or not text[found_here - 1].isalpha()) and
-                    (end_here == len(text) or not text[end_here].isalpha())):
-                # It is beginning of text or char before is not alpha AND
-                # it is end of text or char after is not alpha
+    for search_string in search_strings:
+        match = text.find(search_string)
+
+        while match > -1:
+            search_end = match + len(search_string)
+
+            if match == 0 and search_end == len(text):
+                # Text contains search_string only (exact match)
                 return True
-            # continue searching
-            start = found_here + 1
-            found_here = text.find(special_word, start)
+
+            char_before_allowed = bool(
+                match == 0 or
+                (not text[match - 1].isalpha() and
+                text[match - 1] not in ('/', '-')))
+
+            if char_before_allowed and search_end == len(text):
+                # search_string found at the end of text and
+                # char before search_string is allowed.
+                return True
+
+            if char_before_allowed and not text[search_end].isalpha():
+                # char_before search_string is allowed and
+                # char_after search_string is not alpha.
+                return True
+
+            start = match + 1
+            match = text.find(search_string, start)
+
     return False
 
 
@@ -697,8 +635,8 @@ def allow_sound_notification(account: str, sound_event: str) -> bool:
     return False
 
 
-def get_optional_features(account: str) -> List[Namespace]:
-    features = []
+def get_optional_features(account: str) -> list[str]:
+    features: list[str] = []
 
     if app.settings.get_account_setting(account, 'request_user_data'):
         features.append(Namespace.TUNE + '+notify')
@@ -706,9 +644,11 @@ def get_optional_features(account: str) -> List[Namespace]:
 
     features.append(Namespace.NICK + '+notify')
 
-    if app.connections[account].get_module('Bookmarks').nativ_bookmarks_used:
+    client = app.get_client(account)
+
+    if client.get_module('Bookmarks').nativ_bookmarks_used:
         features.append(Namespace.BOOKMARKS_1 + '+notify')
-    elif app.connections[account].get_module('Bookmarks').pep_bookmarks_used:
+    elif client.get_module('Bookmarks').pep_bookmarks_used:
         features.append(Namespace.BOOKMARKS + '+notify')
     if app.is_installed('AV'):
         features.append(Namespace.JINGLE_RTP)
@@ -720,14 +660,15 @@ def get_optional_features(account: str) -> List[Namespace]:
     app.plugin_manager.extension_point('update_caps', account, features)
     return features
 
-def jid_is_blocked(account: str, jid: str) -> bool:
-    con = app.connections[account]
-    return jid in con.get_module('Blocking').blocked
 
-def get_subscription_request_msg(account: Optional[str] = None) -> str:
-    message = _('I would like to add you to my contact list.')
+def jid_is_blocked(account: str, jid: str) -> bool:
+    client = app.get_client(account)
+    return jid in client.get_module('Blocking').blocked
+
+
+def get_subscription_request_msg(account: str | None = None) -> str:
     if account is None:
-        return message
+        return _('I would like to add you to my contact list.')
 
     message = app.settings.get_account_setting(
         account, 'subscription_request_msg')
@@ -737,23 +678,37 @@ def get_subscription_request_msg(account: Optional[str] = None) -> str:
     message = _('Hello, I am $name. %s') % message
     return Template(message).safe_substitute({'name': app.nicks[account]})
 
-def get_retraction_text(account: str, moderator_jid: str,
-                        reason: Optional[str]) -> str:
-    client = app.get_client(account)
-    contact = client.get_module('Contacts').get_contact(
-        moderator_jid, groupchat=True)
-    text = _('This message has been retracted by %s.') % contact.name
+
+def get_moderation_text(by: str | JID | None,
+                        reason: str | None) -> str:
+
+    by_text = ''
+    if by is not None:
+        by_text = (' by %s') % by
+    text = _('This message has been moderated%s.') % by_text
     if reason is not None:
         text += ' ' + _('Reason: %s') % reason
     return text
 
-def get_user_proxy(account: str) -> Optional[ProxyData]:
-    proxy_name = app.settings.get_account_setting(account, 'proxy')
+
+def get_global_proxy() -> ProxyData | None:
+    proxy_name = app.settings.get('global_proxy')
     if not proxy_name:
         return None
     return get_proxy(proxy_name)
 
-def get_proxy(proxy_name: str) -> Optional[ProxyData]:
+
+def get_account_proxy(account: str, fallback=True) -> ProxyData | None:
+    proxy_name = app.settings.get_account_setting(account, 'proxy')
+    if proxy_name:
+        return get_proxy(proxy_name)
+
+    if fallback:
+        return get_global_proxy()
+    return None
+
+
+def get_proxy(proxy_name: str) -> ProxyData | None:
     try:
         settings = app.settings.get_proxy_settings(proxy_name)
     except ValueError:
@@ -764,29 +719,36 @@ def get_proxy(proxy_name: str) -> Optional[ProxyData]:
         username, password = settings['user'], settings['pass']
 
     return ProxyData(type=settings['type'],
-                     host='%s:%s' % (settings['host'], settings['port']),
+                     host=f"{settings['host']}:{settings['port']}",
                      username=username,
                      password=password)
+
+
+def determine_proxy() -> ProxyData | None:
+    # Use this method to find a proxy for non-account related http requests
+    # When there is no global proxy and at least one active account does
+    # not use a proxy, we assume no proxy is necessary.
+
+    global_proxy = get_global_proxy()
+    if global_proxy is not None:
+        return global_proxy
+
+    proxies: list[ProxyData] = []
+    for client in app.get_clients():
+        account_proxy = get_account_proxy(client.account, fallback=False)
+        if account_proxy is None:
+            return None
+
+        proxies.append(account_proxy)
+
+    return proxies[0] if proxies else None
+
 
 def version_condition(current_version: str, required_version: str) -> bool:
     if V(current_version) < V(required_version):
         return False
     return True
 
-def get_available_emoticon_themes() -> List[str]:
-    files = []
-    for folder in configpaths.get('EMOTICONS').iterdir():
-        if not folder.is_dir():
-            continue
-        files += [theme for theme in folder.iterdir() if theme.is_file()]
-
-    my_emots = configpaths.get('MY_EMOTS')
-    if my_emots.is_dir():
-        files += list(my_emots.iterdir())
-
-    emoticons_themes = ['font']
-    emoticons_themes += [file.stem for file in files if file.suffix == '.png']
-    return sorted(emoticons_themes)
 
 def call_counter(func):
     def helper(self, restart=False):
@@ -796,11 +758,12 @@ def call_counter(func):
         return func(self)
     return helper
 
+
 def load_json(path: Path,
-              key: Optional[str] = None,
-              default: Optional[Any] = None) -> Any:
+              key: str | None = None,
+              default: Any | None = None) -> Any:
     try:
-        with path.open('r') as file:
+        with path.open('r', encoding='utf8') as file:
             json_dict = json.loads(file.read())
     except Exception:
         log.exception('Parsing error')
@@ -809,82 +772,6 @@ def load_json(path: Path,
     if key is None:
         return json_dict
     return json_dict.get(key, default)
-
-
-def ignore_contact(account: str, jid: JID) -> bool:
-    client = app.get_client(account)
-    contact = client.get_module('Contacts').get_contact(jid)
-
-    ignore_unknown = app.settings.get_account_setting(
-        account, 'ignore_unknown_contacts')
-    if ignore_unknown and not contact.is_in_roster:
-        log.info('Ignore unknown contact %s', str(jid))
-        return True
-    return False
-
-
-class AdditionalDataDict(collections.UserDict):
-    data: dict[str, Any]
-
-    @staticmethod
-    def _get_path_childs(full_path: str) -> list[str]:
-        path_childs = [full_path]
-        if ':' in full_path:
-            path_childs = full_path.split(':')
-        return path_childs
-
-    def set_value(self, full_path: str, key: str, value: Optional[str]) -> None:
-        path_childs = self._get_path_childs(full_path)
-        _dict = self.data
-        for path in path_childs:
-            try:
-                _dict = _dict[path]
-            except KeyError:
-                _dict[path] = {}
-                _dict = _dict[path]
-        _dict[key] = value
-
-    def get_value(self,
-                  full_path: str,
-                  key: str,
-                  default: Optional[str] = None) -> Optional[str]:
-
-        path_childs = self._get_path_childs(full_path)
-        _dict = self.data
-        for path in path_childs:
-            try:
-                _dict = _dict[path]
-            except KeyError:
-                return default
-        try:
-            return _dict[key]
-        except KeyError:
-            return default
-
-    def remove_value(self, full_path: str, key: str) -> None:
-        path_childs = self._get_path_childs(full_path)
-        _dict = self.data
-        for path in path_childs:
-            try:
-                _dict = _dict[path]
-            except KeyError:
-                return
-        try:
-            del _dict[key]
-        except KeyError:
-            return
-
-    def copy(self) -> AdditionalDataDict:
-        return copy.deepcopy(self)
-
-
-class Singleton(type):
-    _instances = {}  # type: Dict[Any, Any]
-    def __call__(cls, *args, **kwargs):
-        if cls not in cls._instances:
-            cls._instances[cls] = super(Singleton, cls).__call__(
-                *args, **kwargs)
-        return cls._instances[cls]
 
 
 def delay_execution(milliseconds):
@@ -905,10 +792,10 @@ def delay_execution(milliseconds):
     return delay_execution_decorator
 
 
-def event_filter(filter_):
-    def event_filter_decorator(func):
+def event_filter(filter_: Any):
+    def event_filter_decorator(func: Any) -> Any:
         @wraps(func)
-        def func_wrapper(self, event, *args, **kwargs):
+        def func_wrapper(self, event: Any, *args: Any, **kwargs: Any) -> Any:
             for attr in filter_:
                 if '=' in attr:
                     attr1, attr2 = attr.split('=')
@@ -938,138 +825,270 @@ def catch_exceptions(func):
     return func_wrapper
 
 
-def parse_uri_actions(uri: str) -> Tuple[str, Dict[str, str]]:
-    uri = uri[5:]
-    if '?' not in uri:
-        return 'message', {'jid': uri}
+def is_known_uri_scheme(scheme: str) -> bool:
+    '''
+    `scheme` is lower-case
+    '''
+    if scheme in iana.URI_SCHEMES:
+        return True
+    if scheme in NONREGISTERED_URI_SCHEMES:
+        return True
+    return scheme in app.settings.get('additional_uri_schemes').split()
 
-    jid, action = uri.split('?', 1)
-    data = {'jid': jid}
-    if ';' in action:
-        action, keys = action.split(';', 1)
-        action_keys = keys.split(';')
-        for key in action_keys:
-            if key.startswith('subject='):
-                data['subject'] = unquote(key[8:])
 
-            elif key.startswith('body='):
-                data['body'] = unquote(key[5:])
+def parse_xmpp_uri_query(pct_iquerycomp: str) -> tuple[str, dict[str, str]]:
+    '''
+    Parses 'mess%61ge;b%6Fdy=Hello%20%F0%9F%8C%90%EF%B8%8F' into
+    ('message', {'body': 'Hello 🌐️'}), empty string into ('', {}).
+    '''
+    # Syntax and terminology from
+    # <https://rfc-editor.org/rfc/rfc5122#section-2.2>; the pct_ prefix means
+    # percent encoding not being undone yet.
 
-            elif key.startswith('thread='):
-                data['thread'] = key[7:]
-    return action, data
+    if not pct_iquerycomp:
+        return '', {}
+
+    pct_iquerytype, _, pct_ipairs = pct_iquerycomp.partition(';')
+    iquerytype = unquote(pct_iquerytype, errors='strict')
+    if not pct_ipairs:
+        return iquerytype, {}
+
+    pairs: dict[str, str] = {}
+    for pct_ipair in pct_ipairs.split(';'):
+        pct_ikey, _, pct_ival = pct_ipair.partition('=')
+        pairs[
+            unquote(pct_ikey, errors='strict')
+        ] = unquote(pct_ival, errors='replace')
+    return iquerytype, pairs
 
 
 def parse_uri(uri: str) -> URI:
-    if uri.startswith('xmpp:'):
-        action, data = parse_uri_actions(uri)
+    try:
+        urlparts = urlparse(uri)
+    except Exception as err:
+        return URI(URIType.INVALID, uri, data={'error': str(err)})
+
+    if not urlparts.scheme:
+        return URI(URIType.INVALID, uri, data={'error': 'Relative URI'})
+
+    scheme = urlparts.scheme  # urlparse is expected to return it in lower case
+
+    if not is_known_uri_scheme(scheme):
+        return URI(URIType.INVALID, uri, data={'error': 'Unknown scheme'})
+
+    if scheme in ('https', 'http'):
+        if not urlparts.netloc:
+            err = f'No host or empty host in an {scheme} URI'
+            return URI(URIType.INVALID, uri, data={'error': err})
+        return URI(URIType.WEB, uri)
+
+    if scheme == 'xmpp':
+        if not urlparts.path.startswith('/'):
+            pct_jid = urlparts.path
+        else:
+            pct_jid = urlparts.path[1:]
+
+        data: dict[str, str] = {}
         try:
+            data['jid'] = unquote(pct_jid, errors='strict')
             validate_jid(data['jid'])
-            return URI(type=URIType.XMPP,
-                       action=URIAction(action),
-                       data=data)
-        except ValueError:
-            # Unknown action
-            return URI(type=URIType.UNKNOWN)
+            qtype, qparams = parse_xmpp_uri_query(urlparts.query)
+        except ValueError as err:
+            data['error'] = str(err)
+            return URI(URIType.INVALID, uri, data=data)
 
-    if uri.startswith('mailto:'):
-        uri = uri[7:]
-        return URI(type=URIType.MAIL, data=uri)
+        return URI(URIType.XMPP, uri,
+                   query_type=qtype,
+                   query_params=qparams,
+                   data=data)
 
-    if uri.startswith('tel:'):
-        uri = uri[4:]
-        return URI(type=URIType.TEL, data=uri)
+    if scheme == 'mailto':
+        data: dict[str, str] = {}
+        try:
+            data['addr'] = unquote(urlparts.path, errors='strict')
+            validate_jid(data['addr'], 'bare')  # meh, good enough
+        except ValueError as err:
+            data['error'] = str(err)
+            return URI(URIType.INVALID, uri, data=data)
+        return URI(URIType.MAIL, uri, data=data)
 
-    if STH_AT_STH_DOT_STH_REGEX.match(uri):
-        return URI(type=URIType.AT, data=uri)
+    if scheme == 'tel':
+        # https://rfc-editor.org/rfc/rfc3966#section-3
+        # TODO: extract number
+        return URI(URIType.TEL, uri)
 
-    if uri.startswith('geo:'):
-        location = uri[4:]
-        lat, _, lon = location.partition(',')
+    if scheme == 'geo':
+        # TODO: unify with .preview_helpers.split_geo_uri
+        # https://rfc-editor.org/rfc/rfc5870#section-3.3
+        lat, _, lon_alt = urlparts.path.partition(',')
+        if not lat or not lon_alt:
+            return URI(URIType.INVALID, uri, data={
+                       'error': 'No latitude or longitude'})
+        lon, _, alt = lon_alt.partition(',')
         if not lon:
-            return URI(type=URIType.UNKNOWN, data=uri)
+            return URI(URIType.INVALID, uri, data={'error': 'No longitude'})
 
-        if Gio.AppInfo.get_default_for_uri_scheme('geo'):
-            return URI(type=URIType.GEO, data=uri)
+        data = {'lat': lat, 'lon': lon, 'alt': alt}
+        return URI(URIType.GEO, uri, data=data)
 
-        uri = geo_provider_from_location(lat, lon)
-        return URI(type=URIType.GEO, data=uri)
+    if scheme == 'file':
+        # https://rfc-editor.org/rfc/rfc8089.html#section-2
+        data: dict[str, str] = {}
+        try:
+            data['netloc'] = urlparts.netloc
+            data['path'] = Gio.File.new_for_uri(uri).get_path()
+            assert data['path']
+        except Exception as err:
+            data['error'] = str(err)
+            return URI(URIType.INVALID, uri, data=data)
+        return URI(URIType.FILE, uri, data=data)
 
-    if uri.startswith('file://'):
-        return URI(type=URIType.FILE, data=uri)
+    if scheme == 'about':
+        # https://rfc-editor.org/rfc/rfc6694#section-2.1
+        data: dict[str, str] = {}
+        try:
+            token = unquote(urlparts.path, errors='strict')
+            if token == 'ambiguous-address':  # noqa: S105
+                data['addr'] = unquote(urlparts.query, errors='strict')
+                validate_jid(data['addr'], 'bare')
+                return URI(URIType.AT, uri, data=data)
+            raise Exception(f'Unrecognized about-token "{token}"')
+        except Exception as err:
+            data['error'] = str(err)
+            return URI(URIType.INVALID, uri, data=data)
 
-    return URI(type=URIType.WEB, data=uri)
+    return URI(URIType.OTHER, uri)
+
+
+def _handle_message_qtype(
+        jid: str, params: dict[str, str], account: str) -> None:
+    body = params.get('body')
+    # ^ For JOIN, this is a non-standard, but nice extension
+    app.window.start_chat_from_jid(account, jid, message=body)
+
+
+_xmpp_query_type_handlers = {
+    XmppUriQuery.NONE: _handle_message_qtype,
+    XmppUriQuery.MESSAGE: _handle_message_qtype,
+    XmppUriQuery.JOIN: _handle_message_qtype,
+}
 
 
 @catch_exceptions
-def open_uri(uri: Union[URI, str], account: Optional[str] = None) -> None:
+def open_uri(uri: URI | str, account: str | None = None) -> None:
     if not isinstance(uri, URI):
         uri = parse_uri(uri)
 
     if uri.type == URIType.FILE:
-        open_file(uri.data)
-
-    elif uri.type == URIType.TEL:
-        if sys.platform == 'win32':
-            webbrowser.open(f'tel:{uri.data}')
+        opt_name = 'allow_open_file_uris'
+        if app.settings.get(opt_name):
+            open_file_uri(uri.source)
         else:
-            Gio.AppInfo.launch_default_for_uri(f'tel:{uri.data}')
+            log.info('Blocked opening a file URI, see %s option', opt_name)
 
-    elif uri.type == URIType.MAIL:
-        if sys.platform == 'win32':
-            webbrowser.open(f'mailto:{uri.data}')
+    elif uri.type in (URIType.MAIL, URIType.TEL, URIType.WEB, URIType.OTHER):
+        open_uri_externally(uri.source)
+
+    elif uri.type == URIType.GEO:
+        if Gio.AppInfo.get_default_for_uri_scheme('geo'):
+            open_uri_externally(uri.source)
         else:
-            Gio.AppInfo.launch_default_for_uri(f'mailto:{uri.data}')
+            open_uri(
+                geo_provider_from_location(uri.data['lat'], uri.data['lon']))
 
-    elif uri.type in (URIType.WEB, URIType.GEO):
-        if sys.platform == 'win32':
-            webbrowser.open(uri.data)
-        else:
-            Gio.AppInfo.launch_default_for_uri(uri.data)
-
-    elif uri.type == URIType.AT:
-        app.interface.start_chat_from_jid(account, uri.data)
-
-    elif uri.type == URIType.XMPP:
+    elif uri.type in (URIType.XMPP, URIType.AT):
         if account is None:
             log.warning('Account must be specified to open XMPP uri')
             return
 
-        if isinstance(uri.data, dict):
+        if uri.type == URIType.XMPP:
             jid = uri.data['jid']
-            message = uri.data.get('body')
         else:
-            log.warning('Cant open URI: %s', uri)
-        if uri.action == URIAction.JOIN:
-            app.app.activate_action(
-                'groupchat-join',
-                GLib.Variant('as', [account, jid]))
-        elif uri.action == URIAction.MESSAGE:
-            app.interface.start_chat_from_jid(account, jid, message=message)
-        else:
-            log.warning('Cant open URI: %s', uri)
+            jid = uri.data['addr']
+
+        qtype, qparams = XmppUriQuery.from_str(uri.query_type), uri.query_params
+        if not qtype:
+            log.info('open_uri: can\'t "%s": '
+                     'unsupported query type in %s', uri.query_type, uri)
+            # From <rfc5122#section-2.5>:
+            # > If the processing application does not understand [...] the
+            # > specified query type, it MUST ignore the query component and
+            # > treat the IRI/URI as consisting of, for example,
+            # > <xmpp:example-node@example.com> rather than
+            # > <xmpp:example-node@example.com?query>."
+            qtype, qparams = XmppUriQuery.NONE, {}
+        _xmpp_query_type_handlers[qtype](jid, qparams, account)
+
+    elif uri.type == URIType.INVALID:
+        log.warning('open_uri: Invalid %s', uri)
+        # TODO: UI error instead
 
     else:
-        log.warning('Cant open URI: %s', uri)
+        log.error('open_uri: No handler for %s', uri)
+        # TODO: this is a bug, so, `raise` maybe?
+
+
+def open_uri_externally(uri: str) -> None:
+    if sys.platform == 'win32':
+        webbrowser.open(uri, new=2)
+    else:
+        try:
+            Gio.AppInfo.launch_default_for_uri(uri)
+        except GLib.Error as err:
+            log.info('open_uri_externally: '
+                     "Couldn't launch default for %s: %s", uri, err)
+
+
+def open_file_uri(uri: str) -> None:
+    try:
+        if sys.platform != 'win32':
+            Gio.AppInfo.launch_default_for_uri(uri)
+        else:
+            os.startfile(uri, 'open')  # noqa: S606
+    except Exception as err:
+        log.info("Couldn't open file URI %s: %s", uri, err)
 
 
 @catch_exceptions
-def open_file(path: Union[str, Path]) -> None:
-    if os.name == 'nt':
-        os.startfile(path)
-    else:
-        # Call str() to make it work with pathlib.Path
-        path = str(path)
-        if not path.startswith('file://'):
-            path = 'file://' + path
-        Gio.AppInfo.launch_default_for_uri(path)
+def open_file(path: Path) -> None:
+    if not path.exists():
+        log.warning('Unable to open file, path %s does not exist', path)
+        return
+
+    open_file_uri(path.as_uri())
 
 
-def file_is_locked(path_to_file):
-    """
+def open_directory(path: Path) -> None:
+    return open_file(path)
+
+
+def show_in_folder(path: Path) -> None:
+    if not DBusFileManager().show_items_sync([path.as_uri()]):
+        # Fall back to just opening the containing folder
+        open_directory(path.parent)
+
+
+def filesystem_path_from_uri(uri: str) -> Path | None:
+    puri = parse_uri(uri)
+    if puri.type != URIType.FILE:
+        return None
+
+    netloc = puri.data['netloc']
+    if netloc and netloc.lower() != 'localhost' and sys.platform != 'win32':
+        return None
+    return Path(puri.data['path'])
+
+
+def get_file_path_from_dnd_dropped_uri(text: str) -> Path | None:
+    uri = text.strip('\r\n\x00')  # remove \r\n and NULL
+    return filesystem_path_from_uri(uri)
+
+
+def file_is_locked(path_to_file: str) -> bool:
+    '''
     Return True if file is locked
     NOTE: Windows only.
-    """
+    '''
     if os.name != 'nt':
         return False
 
@@ -1100,7 +1119,7 @@ def geo_provider_from_location(lat: str, lon: str) -> str:
     return f'https://www.openstreetmap.org/?mlat={lat}&mlon={lon}&zoom=16'
 
 
-def get_resource(account: str) -> Optional[str]:
+def get_resource(account: str) -> str | None:
     resource = app.settings.get_account_setting(account, 'resource')
     if not resource:
         return None
@@ -1112,27 +1131,34 @@ def get_resource(account: str) -> Optional[str]:
     return resource
 
 
-def get_default_muc_config() -> Dict[str, Union[bool, str]]:
+def get_default_muc_config() -> dict[str, bool | str]:
     return {
         # XEP-0045 options
+        # https://xmpp.org/registrar/formtypes.html
+
         'muc#roomconfig_allowinvites': True,
-        'muc#roomconfig_publicroom': False,
+        'muc#roomconfig_allowpm': 'anyone',
+        'muc#roomconfig_changesubject': False,
+        'muc#roomconfig_enablelogging': False,
         'muc#roomconfig_membersonly': True,
-        'muc#roomconfig_persistentroom': True,
-        'muc#roomconfig_whois': 'anyone',
         'muc#roomconfig_moderatedroom': False,
+        'muc#roomconfig_passwordprotectedroom': False,
+        'muc#roomconfig_persistentroom': True,
+        'muc#roomconfig_publicroom': False,
+        'muc#roomconfig_whois': 'moderators',
 
         # Ejabberd options
         'allow_voice_requests': False,
         'public_list': False,
+        'mam': True,
 
         # Prosody options
-        '{http://prosody.im/protocol/muc}roomconfig_allowmemberinvites': True,
+        '{http://prosody.im/protocol/muc}roomconfig_allowmemberinvites': False,
         'muc#roomconfig_enablearchiving': True,
     }
 
 
-def validate_jid(jid: Union[str, JID], type_: Optional[str] = None) -> JID:
+def validate_jid(jid: str | JID, type_: str | None = None) -> JID:
     try:
         jid = JID.from_string(str(jid))
     except InvalidJid as error:
@@ -1147,10 +1173,10 @@ def validate_jid(jid: Union[str, JID], type_: Optional[str] = None) -> JID:
     if type_ == 'domain' and jid.is_domain:
         return jid
 
-    raise ValueError('Not a %s JID' % type_)
+    raise ValueError(f'Not a {type_} JID')
 
 
-def to_user_string(error: StanzaError) -> str:
+def to_user_string(error: CommonError | StanzaError) -> str:
     text = error.get_text(get_rfc5646_lang())
     if text:
         return text
@@ -1161,7 +1187,7 @@ def to_user_string(error: StanzaError) -> str:
     return condition
 
 
-def get_groupchat_name(client: types.Client, jid: Union[str, JID]) -> str:
+def get_groupchat_name(client: types.Client, jid: JID) -> str:
     name = client.get_module('Bookmarks').get_name_from_bookmark(jid)
     if name:
         return name
@@ -1176,7 +1202,7 @@ def get_groupchat_name(client: types.Client, jid: Union[str, JID]) -> str:
 
 def is_affiliation_change_allowed(self_contact: types.GroupchatParticipant,
                                   contact: types.GroupchatParticipant,
-                                  target_aff: Union[str, Affiliation]) -> bool:
+                                  target_aff: str | Affiliation) -> bool:
     if isinstance(target_aff, str):
         target_aff = Affiliation(target_aff)
 
@@ -1205,7 +1231,7 @@ def is_role_change_allowed(self_contact: types.GroupchatParticipant,
     return self_contact.affiliation >= contact.affiliation
 
 
-def is_retraction_allowed(self_contact: types.GroupchatParticipant,
+def is_moderation_allowed(self_contact: types.GroupchatParticipant,
                           contact: types.GroupchatParticipant) -> bool:
 
     if self_contact.role < Role.MODERATOR:
@@ -1213,30 +1239,60 @@ def is_retraction_allowed(self_contact: types.GroupchatParticipant,
     return self_contact.affiliation >= contact.affiliation
 
 
-def get_tls_error_phrase(tls_error: Gio.TlsCertificateFlags) -> str:
-    phrase = GIO_TLS_ERRORS.get(tls_error)
-    if phrase is None:
-        return GIO_TLS_ERRORS[Gio.TlsCertificateFlags.GENERIC_ERROR]
-    return phrase
+def get_tls_error_phrases(tls_errors: set[Gio.TlsCertificateFlags]
+                          ) -> list[str]:
+    return [GIO_TLS_ERRORS[err] for err in tls_errors]
 
 
 class Observable:
-    def __init__(self, log_: Optional[logging.Logger] = None):
+    def __init__(self, log_: logging.Logger | LogAdapter | None = None):
         self._log = log_
         self._callbacks: types.ObservableCbDict = defaultdict(list)
+
+    def __disconnect(self,
+                     obj: Any,
+                     signals: set[str] | None = None
+                     ) -> None:
+
+        def _remove(handlers: list[weakref.WeakMethod[types.AnyCallableT]]
+                    ) -> None:
+
+            for handler in list(handlers):
+                func = handler()
+                # Don’t remove dead weakrefs from the handler list
+                # notify() will remove dead refs, and __disconnect()
+                # can be called from inside notify(), this can lead
+                # to race conditions where later notfiy tries to remove
+                # a dead ref which is not anymore in the list.
+                if func is not None and func.__self__ is obj:
+                    handlers.remove(handler)
+
+        if signals is None:
+            for handlers in self._callbacks.values():
+                _remove(handlers)
+
+        else:
+            for signal in signals:
+                _remove(self._callbacks.get(signal, []))
 
     def disconnect_signals(self) -> None:
         self._callbacks = defaultdict(list)
 
+    def multi_disconnect(self,
+                         obj: Any,
+                         signals: set[str] | None
+                         ) -> None:
+
+        self.__disconnect(obj, signals)
+
     def disconnect_all_from_obj(self, obj: Any) -> None:
-        for handlers in self._callbacks.values():
-            for handler in list(handlers):
-                func = handler()
-                if func is None or func.__self__ is obj:
-                    handlers.remove(handler)
+        self.__disconnect(obj)
 
     def disconnect(self, obj: Any) -> None:
         self.disconnect_all_from_obj(obj)
+
+    def disconnect_signal(self, obj: Any, signal: str) -> None:
+        self.__disconnect(obj, {signal})
 
     def connect_signal(self,
                        signal_name: str,
@@ -1245,6 +1301,10 @@ class Observable:
             raise ValueError('Only bound methods allowed')
 
         weak_func = weakref.WeakMethod(func)
+
+        if weak_func in self._callbacks[signal_name]:
+            # Don’t register handler multiple times
+            return
 
         self._callbacks[signal_name].append(weak_func)
 
@@ -1276,11 +1336,12 @@ class Observable:
 def write_file_async(
         path: Path,
         data: bytes,
-        callback: Callable[[bool, Optional[GLib.Error], Any], Any],
-        user_data: Optional[Any] = None):
+        callback: Callable[[bool, GLib.Error | None, Any], Any],
+        user_data: Any | None = None):
 
     def _on_write_finished(outputstream: Gio.OutputStream,
-                           result: Gio.AsyncResult) -> None:
+                           result: Gio.AsyncResult,
+                           _data: bytes) -> None:
         try:
             successful, _bytes_written = outputstream.write_all_finish(result)
         except GLib.Error as error:
@@ -1295,10 +1356,14 @@ def write_file_async(
             callback(False, error, user_data)
             return
 
+        # Pass data as user_data to the callback, because
+        # write_all_async() takes no reference to the data
+        # and python gc collects it before the data is written
         outputstream.write_all_async(data,
                                      GLib.PRIORITY_DEFAULT,
                                      None,
-                                     _on_write_finished)
+                                     _on_write_finished,
+                                     data)
 
     file = Gio.File.new_for_path(str(path))
     file.create_async(Gio.FileCreateFlags.PRIVATE,
@@ -1308,10 +1373,10 @@ def write_file_async(
 
 
 def load_file_async(path: Path,
-                    callback: Callable[[Optional[bytes],
-                                        Optional[GLib.Error],
-                                        Optional[Any]], Any],
-                    user_data: Optional[Any] = None) -> None:
+                    callback: Callable[[bytes | None,
+                                        GLib.Error | None,
+                                        Any | None], Any],
+                    user_data: Any | None = None) -> None:
 
     def _on_load_finished(file: Gio.File,
                           result: Gio.AsyncResult) -> None:
@@ -1327,20 +1392,23 @@ def load_file_async(path: Path,
     file.load_contents_async(None, _on_load_finished)
 
 
-def convert_gio_to_openssl_cert(cert: Gio.TlsCertificate) -> X509:
-    return load_certificate(FILETYPE_PEM, cert.props.certificate_pem.encode())
+def get_x509_cert_from_gio_cert(cert: Gio.TlsCertificate) -> x509.Certificate:
+    glib_bytes = GLib.ByteArray.free_to_bytes(cert.props.certificate)
+    return x509.load_der_x509_certificate(
+        glib_bytes.get_data(), default_backend())
 
 
-def get_custom_host(account: str) -> Optional[Tuple[str,
-                                                    ConnectionProtocol,
-                                                    ConnectionType]]:
+def get_custom_host(
+    account: str
+) -> tuple[str, ConnectionProtocol, ConnectionType] | None:
+
     if not app.settings.get_account_setting(account, 'use_custom_host'):
         return None
     host = app.settings.get_account_setting(account, 'custom_host')
     port = app.settings.get_account_setting(account, 'custom_port')
     type_ = app.settings.get_account_setting(account, 'custom_type')
 
-    if host.startswith('ws://') or host.startswith('wss://'):
+    if host.startswith(('ws://', 'wss://')):
         protocol = ConnectionProtocol.WEBSOCKET
     else:
         host = f'{host}:{port}'
@@ -1350,79 +1418,48 @@ def get_custom_host(account: str) -> Optional[Tuple[str,
 
 
 def warn_about_plain_connection(account: str,
-                                connection_types: List[ConnectionType]
+                                connection_types: list[ConnectionType]
                                 ) -> bool:
     warn = app.settings.get_account_setting(
         account, 'confirm_unencrypted_connection')
-    for type_ in connection_types:
-        if type_.is_plain and warn:
-            return True
-    return False
+    return any(type_.is_plain and warn for type_ in connection_types)
 
 
 def get_idle_status_message(state: str, status_message: str) -> str:
     message = app.settings.get(f'auto{state}_message')
     if not message:
-        message = status_message
-    else:
-        message = message.replace('$S', '%(status)s')
-        message = message.replace('$T', '%(time)s')
-        message = message % {
-            'status': status_message,
-            'time': app.settings.get(f'auto{state}time')
-        }
-    return message
+        return status_message
+
+    message = message.replace('$S', '%(status)s')
+    message = message.replace('$T', '%(time)s')
+    return message % {
+        'status': status_message,
+        'time': app.settings.get(f'auto{state}time')
+    }
 
 
-def should_log(account: str, jid: str) -> bool:
-    """
-    Should conversations between a local account and a remote jid be logged?
-    """
-    no_log_for = app.settings.get_account_setting(account, 'no_log_for')
-
-    if not no_log_for:
-        no_log_for = ''
-
-    no_log_for = no_log_for.split()
-
-    return (account not in no_log_for) and (jid not in no_log_for)
-
-
-def ask_for_status_message(status: str, signin: bool = False) -> bool:
-    if status is None:
-        # We try to change the message
-        return True
-
-    if signin:
-        return app.settings.get('ask_online_status')
-
-    if status == 'offline':
-        return app.settings.get('ask_offline_status')
-
-    return app.settings.get('always_ask_for_status_message')
-
-
-def get_group_chat_nick(account: str, room_jid: Union[JID, str]) -> str:
-    nick = app.nicks[account]
-
+def get_group_chat_nick(account: str, room_jid: JID | str) -> str:
     client = app.get_client(account)
 
     bookmark = client.get_module('Bookmarks').get_bookmark(room_jid)
     if bookmark is not None:
         if bookmark.nick is not None:
-            nick = bookmark.nick
+            return bookmark.nick
 
-    return nick
+    return app.nicks[account]
 
 
-def get_muc_context(jid: JID) -> Optional[str]:
-    disco_info = app.storage.cache.get_last_disco_info(jid)
-    if disco_info is None:
-        return None
-
-    if (disco_info.muc_is_members_only and disco_info.muc_is_nonanonymous):
-        return 'private'
-    return 'public'
+def get_random_muc_localpart() -> str:
+    rand = random.randrange(4)
+    is_vowel = bool(random.getrandbits(1))
+    result = ''
+    for _n in range(rand * 2 + (5 - rand)):
+        if is_vowel:
+            result = f'{result}{VOWELS[random.randrange(len(VOWELS))]}'
+        else:
+            result = f'{result}{CONSONANTS[random.randrange(len(CONSONANTS))]}'
+        is_vowel = not is_vowel
+    return result
 
 
 def get_start_of_day(date_time: datetime) -> datetime:
@@ -1430,3 +1467,93 @@ def get_start_of_day(date_time: datetime) -> datetime:
                              minute=0,
                              second=0,
                              microsecond=0)
+
+
+def get_os_name() -> str:
+    if sys.platform in ('win32', 'darwin'):
+        return platform.system()
+    if os.name == 'posix':
+        try:
+            import distro
+            return distro.name(pretty=True)
+        except ImportError:
+            return platform.system()
+    return ''
+
+
+def get_os_version() -> str:
+    if sys.platform in ('win32', 'darwin'):
+        return platform.version()
+    if os.name == 'posix':
+        try:
+            import distro
+            return distro.version(pretty=True)
+        except ImportError:
+            return platform.release()
+    return ''
+
+
+def get_gobject_version() -> str:
+    return '.'.join(map(str, GObject.pygobject_version))
+
+
+def get_glib_version() -> str:
+    return '.'.join(map(str, [GLib.MAJOR_VERSION,
+                              GLib.MINOR_VERSION,
+                              GLib.MICRO_VERSION]))
+
+
+def get_soup_version() -> str:
+    return '.'.join(map(str, [Soup.get_major_version(),
+                              Soup.get_minor_version(),
+                              Soup.get_micro_version()]))
+
+
+def package_version(requirement: str) -> bool:
+    req = Requirement(requirement)
+
+    try:
+        installed_version = importlib.metadata.version(req.name)
+    except importlib.metadata.PackageNotFoundError:
+        return False
+
+    return installed_version in req.specifier
+
+
+def python_version(specifier_set: str) -> bool:
+    spec = SpecifierSet(specifier_set)
+    return CURRENT_PYTHON_VERSION in spec
+
+
+def make_path_from_jid(base_path: Path, jid: JID) -> Path:
+    assert jid.domain is not None
+    domain = jid.domain[:50]
+
+    if jid.localpart is None:
+        return base_path / domain
+
+    path = base_path / domain / jid.localpart[:50]
+    if jid.resource is not None:
+        return path / jid.resource[:30]
+    return path
+
+
+def format_idle_time(idle_time: datetime) -> str:
+    now = datetime.now(timezone.utc)
+
+    now_date = now.date()
+    idle_date = idle_time.date()
+
+    if idle_date == now_date:
+        return idle_time.strftime(app.settings.get('time_format'))
+    if idle_date == now_date - timedelta(days=1):
+        return _('Yesterday (%s)') % idle_time.strftime(
+            app.settings.get('time_format'))
+    if idle_date >= now_date - timedelta(days=6):
+        return idle_time.strftime(f'%a {app.settings.get("time_format")}')
+
+    return idle_date.strftime(app.settings.get('date_format'))
+
+
+def get_uuid() -> str:
+    return str(uuid.uuid4())

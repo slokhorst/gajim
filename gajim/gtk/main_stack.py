@@ -1,36 +1,20 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
-from typing import Union
-from typing import cast
-
+from gi.repository import Gtk
 from nbxmpp.protocol import JID
 
-from gi.repository import Gtk
-
 from gajim.common import app
-from gajim.common.events import ApplicationEvent
 
-from .app_page import AppPage
-from .chat_list import ChatList
-from .chat_page import ChatPage
-from .account_page import AccountPage
+from gajim.gtk.account_page import AccountPage
+from gajim.gtk.app_page import AppPage
+from gajim.gtk.chat_list import ChatList
+from gajim.gtk.chat_page import ChatPage
 
-
-PageT = Union[ChatPage, AccountPage, AppPage]
+PageT = ChatPage | AccountPage | AppPage
 
 
 class MainStack(Gtk.Stack):
@@ -46,7 +30,7 @@ class MainStack(Gtk.Stack):
         self._chat_page.connect('chat-selected', self._on_chat_selected)
         self.add_named(self._chat_page, 'chats')
 
-        for account in list(app.connections.keys()):
+        for account in app.settings.get_active_accounts():
             self.add_account_page(account)
 
     def add_account_page(self, account: str) -> None:
@@ -55,10 +39,14 @@ class MainStack(Gtk.Stack):
 
     def remove_account_page(self, account: str) -> None:
         account_page = self.get_child_by_name(account)
+        assert account_page is not None
         account_page.destroy()
 
     def remove_chats_for_account(self, account: str) -> None:
         self._chat_page.remove_chats_for_account(account)
+
+    def get_visible_page_name(self) -> str | None:
+        return self.get_visible_child_name()
 
     def show_app_page(self) -> None:
         self.set_visible_child_name('app')
@@ -87,14 +75,6 @@ class MainStack(Gtk.Stack):
         chat_page = self.get_child_by_name('chats')
         assert isinstance(chat_page, ChatPage)
         return chat_page
-
-    def process_event(self, event: ApplicationEvent) -> None:
-        empty_box = self.get_child_by_name('empty')
-        pages = cast(list[PageT], self.get_children())
-        for page in pages:
-            if page is empty_box:
-                continue
-            page.process_event(event)
 
     def _on_chat_selected(self,
                           _chat_list: ChatList,

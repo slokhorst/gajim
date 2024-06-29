@@ -1,18 +1,10 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-from typing import Optional
+from __future__ import annotations
+
+import typing
 
 import logging
 
@@ -22,33 +14,38 @@ from gi.repository import Gtk
 from gajim.common import app
 from gajim.common.i18n import _
 
-from .builder import get_builder
-from .gstreamer import create_gtk_widget
+from gajim.gtk.builder import get_builder
+from gajim.gtk.gstreamer import create_gtk_widget
 
 try:
-    from gi.repository import Gst  # pylint: disable=ungrouped-imports
+    from gi.repository import Gst
 except Exception:
-    pass
+    if typing.TYPE_CHECKING:
+        from gi.repository import Gst
 
 
-log = logging.getLogger('gajim.gui.preview')
+log = logging.getLogger('gajim.gtk.preview')
 
 
-class VideoPreview:
+class VideoPreview(Gtk.Box):
     def __init__(self) -> None:
-
-        self._ui = get_builder('video_preview.ui')
+        Gtk.Box.__init__(self)
 
         self._active = False
 
-        self._av_pipeline: Optional[Gst.Pipeline] = None
-        self._av_src: Optional[Gst.Bin] = None
-        self._av_sink: Optional[Gst.Element] = None
-        self._av_widget: Optional[Gtk.Widget] = None
+        self._av_pipeline: Gst.Pipeline | None = None
+        self._av_src: Gst.Bin | None = None
+        self._av_sink: Gst.Element | None = None
+        self._av_widget: Gtk.Widget | None = None
 
-    @property
-    def widget(self) -> Gtk.Box:
-        return self._ui.video_preview_box
+        self._ui = get_builder('video_preview.ui')
+        self.add(self._ui.video_preview_box)
+        self.show_all()
+
+        self.connect('destroy', self._on_destroy)
+
+    def _on_destroy(self, widget: VideoPreview) -> None:
+        self._disable_preview()
 
     @property
     def is_active(self) -> bool:
@@ -118,16 +115,19 @@ class VideoPreview:
         self._av_pipeline = None
 
     def _set_sink_text(self, sink_name: str) -> None:
-        text = ''
+        label_markup = '<span color="%s" font-weight="bold">%s</span>'
+        color = 'black'
+        label_text = ''
         if sink_name == 'gtkglsink':
-            text = _('<span color="green" font-weight="bold">'
-                     'OpenGL</span> accelerated')
+            color = 'green'
+            label_text = _('OpenGL accelerated')
 
         elif sink_name == 'gtksink':
-            text = _('<span color="yellow" font-weight="bold">'
-                     'Not accelerated</span>')
+            color = 'orange'
+            label_text = _('Not accelerated')
 
-        self._ui.video_source_label.set_markup(text)
+        label_markup = label_markup % (color, label_text)
+        self._ui.video_source_label.set_markup(label_markup)
 
     def _set_error_text(self) -> None:
         self._ui.video_source_label.set_text(

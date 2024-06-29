@@ -1,15 +1,5 @@
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
@@ -22,6 +12,9 @@ from gi.repository import Pango
 from gajim.common import app
 from gajim.common.const import AvatarSize
 from gajim.common.i18n import _
+from gajim.common.modules.contacts import BareContact
+from gajim.common.modules.contacts import GroupchatContact
+from gajim.common.modules.contacts import GroupchatParticipant
 
 
 class ContactItem(Gtk.FlowBoxChild):
@@ -39,13 +32,15 @@ class ContactItem(Gtk.FlowBoxChild):
         name_label.get_style_context().add_class('bold')
 
         if is_new:
-            avatar_image =  Gtk.Image.new_from_icon_name(
+            avatar_image = Gtk.Image.new_from_icon_name(
                 'avatar-default', Gtk.IconSize.DND)
             name_label.set_text(jid)
             name_label.set_tooltip_text(jid)
         else:
             client = app.get_client(account)
             contact = client.get_module('Contacts').get_contact(jid)
+            assert isinstance(
+                contact, BareContact | GroupchatContact | GroupchatParticipant)
             surface = contact.get_avatar(
                 AvatarSize.ROSTER, self.get_scale_factor())
             avatar_image = Gtk.Image.new_from_surface(surface)

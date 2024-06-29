@@ -1,30 +1,17 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
-
-from typing import Union
 
 from gi.repository import GObject
 from gi.repository import Gtk
 
+from gajim.common.modules.contacts import BareContact
 from gajim.common.modules.contacts import GroupchatContact
 from gajim.common.modules.contacts import GroupchatParticipant
-from gajim.common.modules.contacts import BareContact
 
-
-ContactT = Union[BareContact, GroupchatContact, GroupchatParticipant]
+ContactT = BareContact | GroupchatContact | GroupchatParticipant
 
 
 class JumpToEndButton(Gtk.Overlay):
@@ -36,14 +23,12 @@ class JumpToEndButton(Gtk.Overlay):
             ()),
     }
 
-    def __init__(self, contact: ContactT) -> None:
+    def __init__(self) -> None:
         Gtk.Overlay.__init__(self)
         self.set_halign(Gtk.Align.END)
         self.set_valign(Gtk.Align.END)
         self.set_margin_end(6)
         self.set_margin_bottom(12)
-
-        self._contact = contact
 
         icon = Gtk.Image.new_from_icon_name(
             'go-bottom-symbolic', Gtk.IconSize.BUTTON)
@@ -59,13 +44,7 @@ class JumpToEndButton(Gtk.Overlay):
         self.add(button)
 
         self._unread_label = Gtk.Label()
-        self._unread_label.get_style_context().add_class(
-            'unread-counter')
-
-        if isinstance(contact, GroupchatContact) and not contact.can_notify():
-            self._unread_label.get_style_context().add_class(
-                'unread-counter-silent')
-
+        self._unread_label.get_style_context().add_class('unread-counter')
         self._unread_label.set_no_show_all(True)
         self._unread_label.set_halign(Gtk.Align.END)
         self._unread_label.set_valign(Gtk.Align.START)
@@ -76,7 +55,16 @@ class JumpToEndButton(Gtk.Overlay):
         self._count = 0
         self.set_no_show_all(True)
 
+    def switch_contact(self, contact: ContactT) -> None:
+        if isinstance(contact, GroupchatContact) and not contact.can_notify():
+            self._unread_label.get_style_context().add_class(
+                'unread-counter-silent')
+        else:
+            self._unread_label.get_style_context().remove_class(
+                'unread-counter-silent')
+
     def _on_jump_clicked(self, _button: Gtk.Button) -> None:
+        self.reset_unread_count()
         self.emit('clicked')
 
     def toggle(self, visible: bool) -> None:

@@ -2,43 +2,32 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
-from typing import NamedTuple
-from typing import Optional
+
 from typing import Any
-from typing import Union
 from typing import cast
+from typing import NamedTuple
 
 from enum import IntEnum
 
-from gi.repository import Gtk
 from gi.repository import Gdk
+from gi.repository import Gtk
 from gi.repository import Pango
 
 from gajim.common import app
-from gajim.common.i18n import _
 from gajim.common.const import StyleAttr
 from gajim.common.events import StyleChanged
 from gajim.common.events import ThemeUpdate
+from gajim.common.i18n import _
 
-from .dialogs import ErrorDialog
-from .dialogs import DialogButton
-from .dialogs import ConfirmationDialog
-from .builder import get_builder
-from .preferences import Preferences
-from .util import get_app_window
+from gajim.gtk.builder import get_builder
+from gajim.gtk.dialogs import ConfirmationDialog
+from gajim.gtk.dialogs import DialogButton
+from gajim.gtk.dialogs import ErrorDialog
+from gajim.gtk.preferences import Preferences
+from gajim.gtk.util import get_app_window
 
 
 class StyleOption(NamedTuple):
@@ -79,10 +68,6 @@ CSS_STYLE_OPTIONS: list[StyleOption] = [
     StyleOption(_('Status Message: Text Font'),
                 '.gajim-status-message',
                 StyleAttr.FONT),
-
-    StyleOption(_('Message Correction: Background Color'),
-                '.gajim-msg-correcting text',
-                StyleAttr.BACKGROUND),
 
     StyleOption(_('Chat Banner: Foreground Color'),
                 '.gajim-banner',
@@ -194,14 +179,13 @@ class Themes(Gtk.ApplicationWindow):
             ErrorDialog(
                 _('Invalid Name'),
                 _('Name <b>default</b> is not allowed'),
-                transient_for=self)
+                secondary_use_markup=True)
             return
 
         if ' ' in new_name:
             ErrorDialog(
                 _('Invalid Name'),
-                _('Spaces are not allowed'),
-                transient_for=self)
+                _('Spaces are not allowed'))
             return
 
         if new_name == '':
@@ -301,7 +285,7 @@ class Themes(Gtk.ApplicationWindow):
 
     @staticmethod
     def _update_preferences_window() -> None:
-        window = cast(Optional[Preferences], get_app_window('Preferences'))
+        window = cast(Preferences | None, get_app_window('Preferences'))
         if window is not None:
             window.update_theme_list()
 
@@ -326,7 +310,7 @@ class Themes(Gtk.ApplicationWindow):
 
             app.css_config.remove_theme(theme)
             self._update_preferences_window()
-            assert isinstance(store, Gtk.TreeStore)
+            assert isinstance(store, Gtk.ListStore)
             assert iter_ is not None
             store.remove(iter_)
 
@@ -353,7 +337,7 @@ class Themes(Gtk.ApplicationWindow):
 class Option(Gtk.ListBoxRow):
     def __init__(self,
                  option: StyleOption,
-                 value: Union[str, Pango.FontDescription, None]
+                 value: str | Pango.FontDescription | None
                  ) -> None:
         Gtk.ListBoxRow.__init__(self)
         self.option = option
@@ -382,7 +366,7 @@ class Option(Gtk.ListBoxRow):
         self.add(self._box)
         self.show_all()
 
-    def _init_color(self, color: Optional[str]) -> None:
+    def _init_color(self, color: str | None) -> None:
         color_button = Gtk.ColorButton()
         if color is not None:
             rgba = Gdk.RGBA()
@@ -392,7 +376,7 @@ class Option(Gtk.ListBoxRow):
         color_button.connect('color-set', self._on_color_set)
         self._box.add(color_button)
 
-    def _init_font(self, desc: Optional[Pango.FontDescription]) -> None:
+    def _init_font(self, desc: Pango.FontDescription | None) -> None:
         font_button = Gtk.FontButton()
         if desc is not None:
             font_button.set_font_desc(desc)

@@ -1,35 +1,23 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 from typing import Any
-from typing import Dict
+from typing import cast
 from typing import NamedTuple
-from typing import List
-from typing import Optional
 
-from gi.repository import Gtk
 from gi.repository import GdkPixbuf
+from gi.repository import Gtk
 from gi.repository import Pango
 
 from gajim.common import app
-from gajim.common.i18n import _
 from gajim.common.const import ButtonAction
+from gajim.common.i18n import _
 
-from .builder import get_builder
-from .util import get_thumbnail_size
+from gajim.gtk.builder import get_builder
+from gajim.gtk.util import get_thumbnail_size
 
 
 class DialogButton(NamedTuple):
@@ -38,12 +26,11 @@ class DialogButton(NamedTuple):
     callback: Any
     args: Any
     kwargs: Any
-    action: ButtonAction
+    action: ButtonAction | None
     is_default: bool
 
-
     @classmethod
-    def make(cls, type_: Optional[str] = None, **kwargs: Any) -> DialogButton:
+    def make(cls, type_: str | None = None, **kwargs: Any) -> DialogButton:
         # Defaults
         default_kwargs: dict[str, Any] = {
             'response': None,
@@ -80,146 +67,68 @@ class DialogButton(NamedTuple):
                 default_kwargs['text'] = _('_Remove')
                 default_kwargs['action'] = ButtonAction.DESTRUCTIVE
             else:
-                raise ValueError('Unknown button type: %s ' % type_)
+                raise ValueError(f'Unknown button type: {type_} ')
 
         default_kwargs.update(kwargs)
         return cls(**default_kwargs)
 
 
 class HigDialog(Gtk.MessageDialog):
-    def __init__(self,
-                 parent,
-                 type_,
-                 buttons,
-                 pritext,
-                 sectext,
-                 on_response_ok=None,
-                 on_response_cancel=None,
-                 on_response_yes=None,
-                 on_response_no=None):
-        self.call_cancel_on_destroy = True
-        Gtk.MessageDialog.__init__(self,
-                                   transient_for=parent,
-                                   modal=True,
-                                   destroy_with_parent=True,
-                                   message_type=type_,
-                                   buttons=buttons,
-                                   text=pritext)
 
-        self.format_secondary_markup(sectext)
-
-        self.possible_responses = {
-            Gtk.ResponseType.OK: on_response_ok,
-            Gtk.ResponseType.CANCEL: on_response_cancel,
-            Gtk.ResponseType.YES: on_response_yes,
-            Gtk.ResponseType.NO: on_response_no
-        }
-
-        self.connect('response', self.on_response)
-        self.connect('destroy', self.on_dialog_destroy)
-
-    def on_response(self, dialog, response_id):
-        if response_id not in self.possible_responses:
-            return
-        if not self.possible_responses[response_id]:
-            self.destroy()
-        elif isinstance(self.possible_responses[response_id], tuple):
-            if len(self.possible_responses[response_id]) == 1:
-                self.possible_responses[response_id][0](dialog)
-            else:
-                self.possible_responses[response_id][0](
-                    dialog, *self.possible_responses[response_id][1:])
-        else:
-            self.possible_responses[response_id](dialog)
-
-    def on_dialog_destroy(self, _widget):
-        if not self.call_cancel_on_destroy:
-            return None
-        cancel_handler = self.possible_responses[Gtk.ResponseType.CANCEL]
-        if not cancel_handler:
-            return False
-        if isinstance(cancel_handler, tuple):
-            cancel_handler[0](None, *cancel_handler[1:])
-        else:
-            cancel_handler(None)
-        return None
-
-    def popup(self):
-        """
-        Show dialog
-        """
-        vb = self.get_children()[0].get_children()[0]  # Give focus to top vbox
-        # vb.set_flags(Gtk.CAN_FOCUS)
-        vb.grab_focus()
-        self.show_all()
-
-
-class WarningDialog(HigDialog):
-    """
-    HIG compliant warning dialog
-    """
+    _message_type = Gtk.MessageType.INFO
+    _buttons_type = Gtk.ButtonsType.OK
+    _modal = True
 
     def __init__(self,
-                 pritext: str,
-                 sectext: str = '',
-                 transient_for: Optional[Gtk.Window] = None
+                 text: str,
+                 secondary_text: str | None = None,
+                 *,
+                 use_markup: bool = False,
+                 secondary_use_markup: bool = False,
+                 transient_for: Gtk.Window | None = None,
                  ) -> None:
+
         if transient_for is None:
             transient_for = app.app.get_active_window()
-        HigDialog.__init__(self,
-                           transient_for,
-                           Gtk.MessageType.WARNING,
-                           Gtk.ButtonsType.OK,
-                           pritext,
-                           sectext)
-        self.set_modal(False)
-        self.popup()
+            assert transient_for is not None
+
+        Gtk.MessageDialog.__init__(self,
+                                   transient_for=transient_for,
+                                   modal=self._modal,
+                                   destroy_with_parent=True,
+                                   message_type=self._message_type,
+                                   buttons=self._buttons_type,
+                                   text=text,
+                                   use_markup=use_markup,
+                                   secondary_text=secondary_text or '',
+                                   secondary_use_markup=secondary_use_markup)
+
+        self.connect('response', self.on_response)
+        self.show()
+
+    def on_response(self,
+                    _dialog: Gtk.MessageDialog,
+                    _response_id: Gtk.ResponseType
+                    ) -> None:
+        self.destroy()
 
 
 class InformationDialog(HigDialog):
-    """
-    HIG compliant info dialog
-    """
 
-    def __init__(self,
-                 pritext: str,
-                 sectext: str = '',
-                 transient_for: Optional[Gtk.Window] = None
-                 ) -> None:
-        if transient_for is None:
-            transient_for = app.app.get_active_window()
-        HigDialog.__init__(self,
-                           transient_for,
-                           Gtk.MessageType.INFO,
-                           Gtk.ButtonsType.OK,
-                           pritext,
-                           sectext)
-        self.set_modal(False)
-        self.popup()
+    _message_type = Gtk.MessageType.INFO
+    _modal = False
+
+
+class WarningDialog(HigDialog):
+
+    _message_type = Gtk.MessageType.WARNING
+    _modal = False
 
 
 class ErrorDialog(HigDialog):
-    """
-    HIG compliant error dialog
-    """
 
-    def __init__(self,
-                 pritext,
-                 sectext='',
-                 on_response_ok=None,
-                 on_response_cancel=None,
-                 transient_for=None):
-        if transient_for is None:
-            transient_for = app.app.get_active_window()
-        HigDialog.__init__(self,
-                           transient_for,
-                           Gtk.MessageType.ERROR,
-                           Gtk.ButtonsType.OK,
-                           pritext,
-                           sectext,
-                           on_response_ok=on_response_ok,
-                           on_response_cancel=on_response_cancel)
-        self.popup()
+    _message_type = Gtk.MessageType.ERROR
+    _modal = True
 
 
 class ConfirmationDialog(Gtk.MessageDialog):
@@ -227,9 +136,9 @@ class ConfirmationDialog(Gtk.MessageDialog):
                  title: str,
                  text: str,
                  sec_text: str,
-                 buttons: List[DialogButton],
+                 buttons: list[DialogButton],
                  modal: bool = True,
-                 transient_for: Optional[Gtk.Window] = None
+                 transient_for: Gtk.Window | None = None
                  ) -> None:
         if transient_for is None:
             transient_for = app.app.get_active_window()
@@ -242,15 +151,21 @@ class ConfirmationDialog(Gtk.MessageDialog):
 
         self.get_style_context().add_class('confirmation-dialog')
 
-        self._buttons: Dict[Gtk.ResponseType, DialogButton] = {}
+        self._buttons: dict[Gtk.ResponseType, DialogButton] = {}
 
         for button in buttons:
+            if button.response == Gtk.ResponseType.CANCEL:
+                # Map CANCEL to DELETE_EVENT. Otherwise, button args for
+                # CANCEL will not be propagated (i.e. checkbutton state)
+                self._buttons[Gtk.ResponseType.DELETE_EVENT] = button
+
             self._buttons[button.response] = button
             self.add_button(button.text, button.response)
             if button.is_default:
                 self.set_default_response(button.response)
             if button.action is not None:
-                widget = self.get_widget_for_response(button.response)
+                widget = cast(
+                    Gtk.Button, self.get_widget_for_response(button.response))
                 widget.get_style_context().add_class(button.action.value)
 
         self.format_secondary_markup(sec_text)
@@ -263,8 +178,8 @@ class ConfirmationDialog(Gtk.MessageDialog):
                      ) -> None:
         if response == Gtk.ResponseType.DELETE_EVENT:
             # Look if DELETE_EVENT is mapped to another response
-            response = self._buttons.get(response, None)
-            if response is None:
+            button = self._buttons.get(response, None)
+            if button is None:
                 # If DELETE_EVENT was not mapped we assume CANCEL
                 response = Gtk.ResponseType.CANCEL
 
@@ -281,18 +196,15 @@ class ConfirmationDialog(Gtk.MessageDialog):
         self.show_all()
 
 
-NewConfirmationDialog = ConfirmationDialog
-
-
 class ConfirmationCheckDialog(ConfirmationDialog):
     def __init__(self,
                  title: str,
                  text: str,
                  sec_text: str,
                  check_text: str,
-                 buttons: List[DialogButton],
+                 buttons: list[DialogButton],
                  modal: bool = True,
-                 transient_for: Optional[Gtk.Window] = None
+                 transient_for: Gtk.Window | None = None
                  ) -> None:
         ConfirmationDialog.__init__(self,
                                     title,
@@ -307,6 +219,7 @@ class ConfirmationCheckDialog(ConfirmationDialog):
         self._checkbutton.set_margin_start(30)
         self._checkbutton.set_margin_end(30)
         label = self._checkbutton.get_child()
+        assert isinstance(label, Gtk.Label)
         label.set_line_wrap(True)
         label.set_max_width_chars(50)
         label.set_halign(Gtk.Align.START)
@@ -325,28 +238,24 @@ class ConfirmationCheckDialog(ConfirmationDialog):
         super()._on_response(_dialog, response)
 
 
-NewConfirmationCheckDialog = ConfirmationCheckDialog
-
-
-class PastePreviewDialog(ConfirmationCheckDialog):
+class PastePreviewDialog(ConfirmationDialog):
     def __init__(self,
                  title: str,
                  text: str,
                  sec_text: str,
                  check_text: str,
                  image: GdkPixbuf.Pixbuf,
-                 buttons: List[DialogButton],
+                 buttons: list[DialogButton],
                  modal: bool = True,
-                 transient_for: Optional[Gtk.Window] = None
+                 transient_for: Gtk.Window | None = None
                  ) -> None:
-        ConfirmationCheckDialog.__init__(self,
-                                         title,
-                                         text,
-                                         sec_text,
-                                         check_text,
-                                         buttons,
-                                         transient_for=transient_for,
-                                         modal=modal)
+        ConfirmationDialog.__init__(self,
+                                    title,
+                                    text,
+                                    sec_text,
+                                    buttons,
+                                    transient_for=transient_for,
+                                    modal=modal)
 
         preview = Gtk.Image()
         preview.set_halign(Gtk.Align.CENTER)
@@ -373,10 +282,10 @@ class InputDialog(ConfirmationDialog):
                  title: str,
                  text: str,
                  sec_text: str,
-                 buttons: List[DialogButton],
-                 input_str: Optional[str] = None,
+                 buttons: list[DialogButton],
+                 input_str: str | None = None,
                  modal: bool = True,
-                 transient_for: Optional[Gtk.Window] = None,
+                 transient_for: Gtk.Window | None = None,
                  ) -> None:
         ConfirmationDialog.__init__(self,
                                     title,
@@ -410,12 +319,13 @@ class InputDialog(ConfirmationDialog):
 class ShortcutsWindow:
     def __init__(self):
         transient = app.app.get_active_window()
+        assert transient
         builder = get_builder('shortcuts_window.ui')
-        self.window = builder.get_object('shortcuts_window')
+        self.window = cast(Gtk.Window, builder.get_object('shortcuts_window'))
         self.window.connect('destroy', self._on_window_destroy)
         self.window.set_transient_for(transient)
         self.window.show_all()
         self.window.present()
 
-    def _on_window_destroy(self, _widget):
+    def _on_window_destroy(self, _widget: Gtk.Widget) -> None:
         self.window = None

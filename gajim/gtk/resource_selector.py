@@ -1,19 +1,9 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
-from typing import Optional
+
 from typing import cast
 
 import locale
@@ -21,7 +11,6 @@ import logging
 
 from gi.repository import GObject
 from gi.repository import Gtk
-
 from nbxmpp import JID
 from nbxmpp.structs import DiscoInfo
 
@@ -31,7 +20,7 @@ from gajim.common.i18n import _
 from gajim.common.modules.contacts import BareContact
 from gajim.common.modules.contacts import ResourceContact
 
-log = logging.getLogger('gajim.gui.resource_selector')
+log = logging.getLogger('gajim.gtk.resource_selector')
 
 
 class ResourceSelector(Gtk.ScrolledWindow):
@@ -45,7 +34,7 @@ class ResourceSelector(Gtk.ScrolledWindow):
 
     def __init__(self,
                  contact: BareContact,
-                 constraints: Optional[list[str]] = None) -> None:
+                 constraints: list[str] | None = None) -> None:
         Gtk.ScrolledWindow.__init__(self)
         self.set_shadow_type(Gtk.ShadowType.IN)
         self.set_size_request(-1, 200)
@@ -75,7 +64,7 @@ class ResourceSelector(Gtk.ScrolledWindow):
 
     def _on_row_selected(self,
                          _listbox: Gtk.ListBox,
-                         row: ResourceRow
+                         row: ResourceRow | None
                          ) -> None:
         state = bool(row is not None)
         self.emit('selection-changed', state)
@@ -147,14 +136,14 @@ class ResourceRow(Gtk.ListBoxRow):
         for constraint in constraints:
             if not resource_contact.supports(constraint):
                 self.set_sensitive(False)
-                self.set_tooltip_text(_('This devices is not compatible.'))
+                self.set_tooltip_text(_('This device is not compatible.'))
 
         self.add(box)
         self.show_all()
 
     @staticmethod
     def _get_client_identity(disco_info: DiscoInfo
-                             ) -> tuple[Optional[str], Optional[str]]:
+                             ) -> tuple[str | None, str | None]:
         for identity in disco_info.identities:
             if identity.category == 'client':
                 return identity.name, identity.type

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Generated with glade 3.38.2 -->
+<!-- Generated with glade 3.40.0 -->
 <interface>
   <requires lib="gtk+" version="3.24"/>
   <!-- n-columns=2 n-rows=6 -->
@@ -239,7 +239,7 @@
                     <property name="valign">center</property>
                     <signal name="toggled" handler="_on_edit_name_toggled" swapped="no"/>
                     <child>
-                      <object class="GtkImage">
+                      <object class="GtkImage" id="edit_name_button_image">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
                         <property name="icon-name">document-edit-symbolic</property>
@@ -302,8 +302,9 @@
                         <child>
                           <object class="GtkLabel" id="contact_name_label">
                             <property name="visible">True</property>
-                            <property name="can-focus">False</property>
+                            <property name="can-focus">True</property>
                             <property name="halign">center</property>
+                            <property name="selectable">True</property>
                             <property name="ellipsize">end</property>
                             <property name="single-line-mode">True</property>
                             <property name="max-width-chars">20</property>
@@ -320,7 +321,7 @@
                         <child>
                           <object class="GtkLabel" id="contact_jid_label">
                             <property name="visible">True</property>
-                            <property name="can-focus">False</property>
+                            <property name="can-focus">True</property>
                             <property name="margin-bottom">6</property>
                             <property name="selectable">True</property>
                             <property name="ellipsize">end</property>
@@ -409,6 +410,9 @@
                     </child>
                   </object>
                 </child>
+                <style>
+                  <class name="padding-18"/>
+                </style>
               </object>
               <packing>
                 <property name="name">information</property>
@@ -417,35 +421,36 @@
               </packing>
             </child>
             <child>
-              <object class="GtkBox" id="settings_box">
+              <object class="GtkScrolledWindow" id="settings_scrolled">
                 <property name="visible">True</property>
-                <property name="can-focus">False</property>
-                <property name="orientation">vertical</property>
-                <property name="spacing">18</property>
+                <property name="can-focus">True</property>
+                <property name="hscrollbar-policy">never</property>
                 <child>
-                  <object class="GtkListBox" id="subscription_listbox">
-                    <property name="width-request">400</property>
+                  <object class="GtkViewport">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
-                    <property name="no-show-all">True</property>
-                    <property name="halign">center</property>
-                    <property name="selection-mode">none</property>
                     <child>
-                      <object class="GtkListBoxRow">
+                      <object class="GtkBox" id="settings_box">
                         <property name="visible">True</property>
-                        <property name="can-focus">True</property>
-                        <property name="activatable">False</property>
-                        <property name="selectable">False</property>
+                        <property name="can-focus">False</property>
+                        <property name="halign">center</property>
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">24</property>
                         <child>
                           <object class="GtkBox">
                             <property name="visible">True</property>
                             <property name="can-focus">False</property>
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">12</property>
                             <child>
                               <object class="GtkLabel">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
-                                <property name="halign">end</property>
-                                <property name="label" translatable="yes">Share my online status</property>
+                                <property name="halign">start</property>
+                                <property name="label" translatable="yes">Status</property>
+                                <style>
+                                  <class name="bold"/>
+                                </style>
                               </object>
                               <packing>
                                 <property name="expand">False</property>
@@ -454,97 +459,28 @@
                               </packing>
                             </child>
                             <child>
-                              <object class="GtkSwitch" id="from_subscription_switch">
-                                <property name="visible">True</property>
-                                <property name="can-focus">True</property>
-                                <property name="halign">end</property>
-                                <property name="valign">center</property>
-                                <signal name="state-set" handler="_on_from_subscription_switch_toggled" swapped="no"/>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="pack-type">end</property>
-                                <property name="position">1</property>
-                              </packing>
-                            </child>
-                          </object>
-                        </child>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkListBoxRow">
-                        <property name="visible">True</property>
-                        <property name="can-focus">True</property>
-                        <property name="activatable">False</property>
-                        <property name="selectable">False</property>
-                        <child>
-                          <object class="GtkBox">
-                            <property name="visible">True</property>
-                            <property name="can-focus">False</property>
-                            <child>
-                              <object class="GtkLabel">
+                              <object class="GtkListBox" id="subscription_listbox">
+                                <property name="width-request">400</property>
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
-                                <property name="halign">end</property>
-                                <property name="margin-end">24</property>
-                                <property name="label" translatable="yes">I can see contact's online status</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">0</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkBox">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="halign">end</property>
-                                <property name="spacing">12</property>
+                                <property name="no-show-all">True</property>
+                                <property name="selection-mode">none</property>
                                 <child>
-                                  <object class="GtkStack" id="to_subscription_stack">
+                                  <object class="GtkListBoxRow">
                                     <property name="visible">True</property>
-                                    <property name="can-focus">False</property>
-                                    <property name="no-show-all">True</property>
-                                    <property name="halign">end</property>
-                                    <property name="valign">center</property>
-                                    <property name="transition-type">crossfade</property>
+                                    <property name="can-focus">True</property>
+                                    <property name="activatable">False</property>
+                                    <property name="selectable">False</property>
                                     <child>
                                       <object class="GtkBox">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
-                                        <property name="halign">end</property>
-                                        <property name="spacing">12</property>
                                         <child>
-                                          <object class="GtkStack" id="request_stack">
+                                          <object class="GtkLabel">
                                             <property name="visible">True</property>
                                             <property name="can-focus">False</property>
-                                            <property name="transition-type">crossfade</property>
-                                            <child>
-                                              <object class="GtkImage">
-                                                <property name="visible">True</property>
-                                                <property name="can-focus">False</property>
-                                                <property name="tooltip-text" translatable="yes">You cannot see this contact's online status</property>
-                                                <property name="halign">center</property>
-                                                <property name="icon-name">window-close-symbolic</property>
-                                              </object>
-                                              <packing>
-                                                <property name="name">cross</property>
-                                              </packing>
-                                            </child>
-                                            <child>
-                                              <object class="GtkImage">
-                                                <property name="visible">True</property>
-                                                <property name="can-focus">False</property>
-                                                <property name="tooltip-text" translatable="yes">You requested to see this contact's online status</property>
-                                                <property name="icon-name">document-open-recent-symbolic</property>
-                                              </object>
-                                              <packing>
-                                                <property name="name">requested</property>
-                                                <property name="position">1</property>
-                                              </packing>
-                                            </child>
+                                            <property name="halign">end</property>
+                                            <property name="label" translatable="yes">Share my online status</property>
                                           </object>
                                           <packing>
                                             <property name="expand">False</property>
@@ -553,69 +489,231 @@
                                           </packing>
                                         </child>
                                         <child>
-                                          <object class="GtkButton" id="to_subscription_button">
-                                            <property name="label" translatable="yes">_Request</property>
+                                          <object class="GtkSwitch" id="from_subscription_switch">
                                             <property name="visible">True</property>
                                             <property name="can-focus">True</property>
-                                            <property name="receives-default">True</property>
-                                            <property name="no-show-all">True</property>
-                                            <property name="tooltip-text" translatable="yes">Request to see this contact's online status</property>
+                                            <property name="halign">end</property>
                                             <property name="valign">center</property>
-                                            <property name="use-underline">True</property>
-                                            <signal name="clicked" handler="_on_to_subscription_button_clicked" swapped="no"/>
+                                            <signal name="state-set" handler="_on_from_subscription_switch_toggled" swapped="no"/>
                                           </object>
                                           <packing>
                                             <property name="expand">False</property>
                                             <property name="fill">True</property>
+                                            <property name="pack-type">end</property>
                                             <property name="position">1</property>
                                           </packing>
                                         </child>
                                       </object>
-                                      <packing>
-                                        <property name="name">request</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkImage">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">False</property>
-                                        <property name="tooltip-text" translatable="yes">You can see the contact's online status</property>
-                                        <property name="halign">end</property>
-                                        <property name="icon-name">object-select-symbolic</property>
-                                      </object>
-                                      <packing>
-                                        <property name="name">checkmark</property>
-                                        <property name="position">1</property>
-                                      </packing>
                                     </child>
                                   </object>
-                                  <packing>
-                                    <property name="expand">False</property>
-                                    <property name="fill">True</property>
-                                    <property name="position">1</property>
-                                  </packing>
                                 </child>
+                                <child>
+                                  <object class="GtkListBoxRow">
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">True</property>
+                                    <property name="activatable">False</property>
+                                    <property name="selectable">False</property>
+                                    <child>
+                                      <object class="GtkBox">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="halign">end</property>
+                                            <property name="margin-end">24</property>
+                                            <property name="label" translatable="yes">I can see contact's online status</property>
+                                          </object>
+                                          <packing>
+                                            <property name="expand">False</property>
+                                            <property name="fill">True</property>
+                                            <property name="position">0</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkBox">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="halign">end</property>
+                                            <property name="spacing">12</property>
+                                            <child>
+                                              <object class="GtkStack" id="to_subscription_stack">
+                                                <property name="visible">True</property>
+                                                <property name="can-focus">False</property>
+                                                <property name="no-show-all">True</property>
+                                                <property name="halign">end</property>
+                                                <property name="valign">center</property>
+                                                <property name="transition-type">crossfade</property>
+                                                <child>
+                                                  <object class="GtkBox">
+                                                    <property name="visible">True</property>
+                                                    <property name="can-focus">False</property>
+                                                    <property name="halign">end</property>
+                                                    <property name="spacing">12</property>
+                                                    <child>
+                                                      <object class="GtkStack" id="request_stack">
+                                                        <property name="visible">True</property>
+                                                        <property name="can-focus">False</property>
+                                                        <property name="transition-type">crossfade</property>
+                                                        <child>
+                                                          <object class="GtkImage">
+                                                            <property name="visible">True</property>
+                                                            <property name="can-focus">False</property>
+                                                            <property name="tooltip-text" translatable="yes">You cannot see this contact's online status</property>
+                                                            <property name="halign">center</property>
+                                                            <property name="icon-name">window-close-symbolic</property>
+                                                          </object>
+                                                          <packing>
+                                                            <property name="name">cross</property>
+                                                          </packing>
+                                                        </child>
+                                                        <child>
+                                                          <object class="GtkImage">
+                                                            <property name="visible">True</property>
+                                                            <property name="can-focus">False</property>
+                                                            <property name="tooltip-text" translatable="yes">You requested to see this contact's online status</property>
+                                                            <property name="icon-name">document-open-recent-symbolic</property>
+                                                          </object>
+                                                          <packing>
+                                                            <property name="name">requested</property>
+                                                            <property name="position">1</property>
+                                                          </packing>
+                                                        </child>
+                                                      </object>
+                                                      <packing>
+                                                        <property name="expand">False</property>
+                                                        <property name="fill">True</property>
+                                                        <property name="position">0</property>
+                                                      </packing>
+                                                    </child>
+                                                    <child>
+                                                      <object class="GtkButton" id="to_subscription_button">
+                                                        <property name="label" translatable="yes">_Request</property>
+                                                        <property name="visible">True</property>
+                                                        <property name="can-focus">True</property>
+                                                        <property name="receives-default">True</property>
+                                                        <property name="no-show-all">True</property>
+                                                        <property name="tooltip-text" translatable="yes">Request to see this contact's online status</property>
+                                                        <property name="valign">center</property>
+                                                        <property name="use-underline">True</property>
+                                                        <signal name="clicked" handler="_on_to_subscription_button_clicked" swapped="no"/>
+                                                      </object>
+                                                      <packing>
+                                                        <property name="expand">False</property>
+                                                        <property name="fill">True</property>
+                                                        <property name="position">1</property>
+                                                      </packing>
+                                                    </child>
+                                                  </object>
+                                                  <packing>
+                                                    <property name="name">request</property>
+                                                  </packing>
+                                                </child>
+                                                <child>
+                                                  <object class="GtkImage">
+                                                    <property name="visible">True</property>
+                                                    <property name="can-focus">False</property>
+                                                    <property name="tooltip-text" translatable="yes">You can see the contact's online status</property>
+                                                    <property name="halign">end</property>
+                                                    <property name="icon-name">object-select-symbolic</property>
+                                                  </object>
+                                                  <packing>
+                                                    <property name="name">checkmark</property>
+                                                    <property name="position">1</property>
+                                                  </packing>
+                                                </child>
+                                              </object>
+                                              <packing>
+                                                <property name="expand">False</property>
+                                                <property name="fill">True</property>
+                                                <property name="position">1</property>
+                                              </packing>
+                                            </child>
+                                          </object>
+                                          <packing>
+                                            <property name="expand">False</property>
+                                            <property name="fill">True</property>
+                                            <property name="pack-type">end</property>
+                                            <property name="position">1</property>
+                                          </packing>
+                                        </child>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                                <style>
+                                  <class name="settings"/>
+                                </style>
                               </object>
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="pack-type">end</property>
                                 <property name="position">1</property>
                               </packing>
                             </child>
                           </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">0</property>
+                          </packing>
                         </child>
+                        <child>
+                          <object class="GtkBox" id="contact_settings_box">
+                            <property name="visible">True</property>
+                            <property name="can-focus">False</property>
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">12</property>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="halign">start</property>
+                                <property name="label" translatable="yes">Privacy</property>
+                                <style>
+                                  <class name="bold"/>
+                                </style>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">0</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <placeholder/>
+                            </child>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">1</property>
+                          </packing>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="remove_history_button">
+                            <property name="label" translatable="yes">Remove History…</property>
+                            <property name="visible">True</property>
+                            <property name="can-focus">True</property>
+                            <property name="receives-default">False</property>
+                            <property name="halign">start</property>
+                            <style>
+                              <class name="destructive-action"/>
+                            </style>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">2</property>
+                          </packing>
+                        </child>
+                        <style>
+                          <class name="padding-18"/>
+                        </style>
                       </object>
                     </child>
-                    <style>
-                      <class name="settings"/>
-                    </style>
                   </object>
-                  <packing>
-                    <property name="expand">False</property>
-                    <property name="fill">True</property>
-                    <property name="position">1</property>
-                  </packing>
                 </child>
                 <style>
                   <class name="padding-18"/>
@@ -629,134 +727,179 @@
               </packing>
             </child>
             <child>
-              <object class="GtkBox" id="groups_page_box">
+              <object class="GtkScrolledWindow" id="encryption_scrolled">
+                <property name="visible">True</property>
+                <property name="can-focus">True</property>
+                <property name="hscrollbar-policy">never</property>
+                <child>
+                  <object class="GtkViewport">
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <child>
+                      <object class="GtkBox" id="encryption_box">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="margin-start">36</property>
+                        <property name="margin-end">36</property>
+                        <property name="margin-top">36</property>
+                        <property name="margin-bottom">36</property>
+                        <property name="orientation">vertical</property>
+                        <child>
+                          <placeholder/>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+              <packing>
+                <property name="name">encryption-omemo</property>
+                <property name="title" translatable="yes">Encryption (OMEMO)</property>
+                <property name="icon-name">channel-secure-symbolic</property>
+                <property name="position">2</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkStack" id="groups_page_stack">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
-                <property name="no-show-all">True</property>
-                <property name="margin-start">18</property>
-                <property name="margin-end">18</property>
-                <property name="margin-top">24</property>
-                <property name="margin-bottom">36</property>
-                <property name="orientation">vertical</property>
-                <property name="spacing">12</property>
-                <child>
-                  <object class="GtkLabel">
-                    <property name="visible">True</property>
-                    <property name="can-focus">False</property>
-                    <property name="label" translatable="yes">Choose the contact's groups</property>
-                    <property name="wrap">True</property>
-                    <style>
-                      <class name="dim-label"/>
-                    </style>
-                  </object>
-                  <packing>
-                    <property name="expand">False</property>
-                    <property name="fill">True</property>
-                    <property name="position">0</property>
-                  </packing>
-                </child>
+                <property name="transition-type">crossfade</property>
                 <child>
                   <object class="GtkBox">
-                    <property name="width-request">400</property>
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
-                    <property name="halign">center</property>
+                    <property name="no-show-all">True</property>
+                    <property name="margin-start">18</property>
+                    <property name="margin-end">18</property>
+                    <property name="margin-top">24</property>
+                    <property name="margin-bottom">36</property>
                     <property name="orientation">vertical</property>
+                    <property name="spacing">12</property>
                     <child>
-                      <object class="GtkScrolledWindow">
-                        <property name="height-request">250</property>
+                      <object class="GtkLabel">
                         <property name="visible">True</property>
-                        <property name="can-focus">True</property>
-                        <property name="vexpand">True</property>
-                        <property name="shadow-type">in</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Choose the contact's groups</property>
+                        <property name="wrap">True</property>
+                        <style>
+                          <class name="dim-label"/>
+                        </style>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">0</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="width-request">400</property>
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="halign">center</property>
+                        <property name="orientation">vertical</property>
                         <child>
-                          <object class="GtkViewport">
+                          <object class="GtkScrolledWindow">
+                            <property name="height-request">250</property>
                             <property name="visible">True</property>
-                            <property name="can-focus">False</property>
+                            <property name="can-focus">True</property>
+                            <property name="vexpand">True</property>
+                            <property name="shadow-type">in</property>
                             <child>
-                              <object class="GtkTreeView" id="groups_treeview">
+                              <object class="GtkViewport">
                                 <property name="visible">True</property>
-                                <property name="can-focus">True</property>
-                                <property name="model">groups_model</property>
-                                <property name="headers-visible">False</property>
-                                <child internal-child="selection">
-                                  <object class="GtkTreeSelection" id="tree_selection"/>
-                                </child>
+                                <property name="can-focus">False</property>
                                 <child>
-                                  <object class="GtkTreeViewColumn">
-                                    <child>
-                                      <object class="GtkCellRendererToggle" id="toggle_renderer">
-                                        <property name="xpad">12</property>
-                                      </object>
-                                      <attributes>
-                                        <attribute name="active">0</attribute>
-                                      </attributes>
+                                  <object class="GtkTreeView" id="groups_treeview">
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">True</property>
+                                    <property name="model">groups_model</property>
+                                    <property name="headers-visible">False</property>
+                                    <child internal-child="selection">
+                                      <object class="GtkTreeSelection" id="tree_selection"/>
                                     </child>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkTreeViewColumn">
-                                    <property name="title" translatable="yes">column</property>
-                                    <property name="sort-column-id">1</property>
                                     <child>
-                                      <object class="GtkCellRendererText" id="text_renderer">
-                                        <property name="height">42</property>
-                                        <property name="editable">True</property>
+                                      <object class="GtkTreeViewColumn">
+                                        <child>
+                                          <object class="GtkCellRendererToggle" id="toggle_renderer">
+                                            <property name="xpad">12</property>
+                                          </object>
+                                          <attributes>
+                                            <attribute name="active">0</attribute>
+                                          </attributes>
+                                        </child>
                                       </object>
-                                      <attributes>
-                                        <attribute name="text">1</attribute>
-                                      </attributes>
+                                    </child>
+                                    <child>
+                                      <object class="GtkTreeViewColumn">
+                                        <property name="title" translatable="yes">column</property>
+                                        <property name="sort-column-id">1</property>
+                                        <child>
+                                          <object class="GtkCellRendererText" id="text_renderer">
+                                            <property name="height">42</property>
+                                            <property name="editable">True</property>
+                                          </object>
+                                          <attributes>
+                                            <attribute name="text">1</attribute>
+                                          </attributes>
+                                        </child>
+                                      </object>
                                     </child>
                                   </object>
                                 </child>
                               </object>
                             </child>
                           </object>
-                        </child>
-                      </object>
-                      <packing>
-                        <property name="expand">False</property>
-                        <property name="fill">True</property>
-                        <property name="position">1</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkToolbar">
-                        <property name="visible">True</property>
-                        <property name="can-focus">False</property>
-                        <property name="icon_size">1</property>
-                        <child>
-                          <object class="GtkToolButton" id="group_add_button">
-                            <property name="visible">True</property>
-                            <property name="can-focus">False</property>
-                            <property name="tooltip-text" translatable="yes">Add Group…</property>
-                            <property name="use-underline">True</property>
-                            <property name="icon-name">list-add-symbolic</property>
-                            <signal name="clicked" handler="_on_group_add_button_clicked" swapped="no"/>
-                          </object>
                           <packing>
                             <property name="expand">False</property>
-                            <property name="homogeneous">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">1</property>
                           </packing>
                         </child>
                         <child>
-                          <object class="GtkToolButton" id="group_remove_button">
+                          <object class="GtkToolbar">
                             <property name="visible">True</property>
-                            <property name="sensitive">False</property>
                             <property name="can-focus">False</property>
-                            <property name="tooltip-text" translatable="yes">Remove Group...</property>
-                            <property name="use-underline">True</property>
-                            <property name="icon-name">list-remove-symbolic</property>
-                            <signal name="clicked" handler="_on_group_remove_button_clicked" swapped="no"/>
+                            <property name="icon_size">1</property>
+                            <child>
+                              <object class="GtkToolButton" id="group_add_button">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="tooltip-text" translatable="yes">Add Group…</property>
+                                <property name="use-underline">True</property>
+                                <property name="icon-name">list-add-symbolic</property>
+                                <signal name="clicked" handler="_on_group_add_button_clicked" swapped="no"/>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="homogeneous">False</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkToolButton" id="group_remove_button">
+                                <property name="visible">True</property>
+                                <property name="sensitive">False</property>
+                                <property name="can-focus">False</property>
+                                <property name="tooltip-text" translatable="yes">Remove Group...</property>
+                                <property name="use-underline">True</property>
+                                <property name="icon-name">list-remove-symbolic</property>
+                                <signal name="clicked" handler="_on_group_remove_button_clicked" swapped="no"/>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="homogeneous">False</property>
+                              </packing>
+                            </child>
+                            <style>
+                              <class name="inline-toolbar"/>
+                            </style>
                           </object>
                           <packing>
                             <property name="expand">False</property>
-                            <property name="homogeneous">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">2</property>
                           </packing>
                         </child>
-                        <style>
-                          <class name="inline-toolbar"/>
-                        </style>
                       </object>
                       <packing>
                         <property name="expand">False</property>
@@ -766,9 +909,21 @@
                     </child>
                   </object>
                   <packing>
-                    <property name="expand">False</property>
-                    <property name="fill">True</property>
-                    <property name="position">2</property>
+                    <property name="name">groups</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkLabel">
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="label" translatable="yes">You are offline.</property>
+                    <style>
+                      <class name="dim-label"/>
+                    </style>
+                  </object>
+                  <packing>
+                    <property name="name">offline</property>
+                    <property name="position">1</property>
                   </packing>
                 </child>
               </object>
@@ -776,60 +931,84 @@
                 <property name="name">groups</property>
                 <property name="title" translatable="yes">Groups</property>
                 <property name="icon-name">view-pin-symbolic</property>
-                <property name="position">2</property>
+                <property name="position">3</property>
               </packing>
             </child>
             <child>
-              <object class="GtkBox" id="notes_page_box">
+              <object class="GtkStack" id="notes_page_stack">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
-                <property name="no-show-all">True</property>
-                <property name="margin-start">18</property>
-                <property name="margin-end">18</property>
-                <property name="margin-top">24</property>
-                <property name="margin-bottom">36</property>
-                <property name="orientation">vertical</property>
-                <property name="spacing">12</property>
+                <property name="transition-type">crossfade</property>
+                <child>
+                  <object class="GtkBox">
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="no-show-all">True</property>
+                    <property name="margin-start">18</property>
+                    <property name="margin-end">18</property>
+                    <property name="margin-top">24</property>
+                    <property name="margin-bottom">36</property>
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">12</property>
+                    <child>
+                      <object class="GtkLabel">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Personal notes about this contact</property>
+                        <property name="wrap">True</property>
+                        <property name="max-width-chars">42</property>
+                        <style>
+                          <class name="dim-label"/>
+                        </style>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">0</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkScrolledWindow" id="scrolledwindow_annotation">
+                        <property name="height-request">70</property>
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="vexpand">True</property>
+                        <property name="shadow-type">in</property>
+                        <child>
+                          <object class="GtkTextView" id="textview_annotation">
+                            <property name="visible">True</property>
+                            <property name="can-focus">True</property>
+                            <property name="wrap-mode">word</property>
+                            <property name="left-margin">6</property>
+                            <property name="right-margin">6</property>
+                            <property name="top-margin">6</property>
+                            <property name="bottom-margin">6</property>
+                          </object>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">2</property>
+                      </packing>
+                    </child>
+                  </object>
+                  <packing>
+                    <property name="name">notes</property>
+                  </packing>
+                </child>
                 <child>
                   <object class="GtkLabel">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
-                    <property name="label" translatable="yes">Personal notes about this contact</property>
-                    <property name="wrap">True</property>
-                    <property name="max-width-chars">42</property>
+                    <property name="label" translatable="yes">You are offline.</property>
                     <style>
                       <class name="dim-label"/>
                     </style>
                   </object>
                   <packing>
-                    <property name="expand">False</property>
-                    <property name="fill">True</property>
-                    <property name="position">0</property>
-                  </packing>
-                </child>
-                <child>
-                  <object class="GtkScrolledWindow" id="scrolledwindow_annotation">
-                    <property name="height-request">70</property>
-                    <property name="visible">True</property>
-                    <property name="can-focus">True</property>
-                    <property name="vexpand">True</property>
-                    <property name="shadow-type">in</property>
-                    <child>
-                      <object class="GtkTextView" id="textview_annotation">
-                        <property name="visible">True</property>
-                        <property name="can-focus">True</property>
-                        <property name="wrap-mode">word</property>
-                        <property name="left-margin">6</property>
-                        <property name="right-margin">6</property>
-                        <property name="top-margin">6</property>
-                        <property name="bottom-margin">6</property>
-                      </object>
-                    </child>
-                  </object>
-                  <packing>
-                    <property name="expand">False</property>
-                    <property name="fill">True</property>
-                    <property name="position">2</property>
+                    <property name="name">offline</property>
+                    <property name="position">1</property>
                   </packing>
                 </child>
               </object>
@@ -837,7 +1016,7 @@
                 <property name="name">notes</property>
                 <property name="title" translatable="yes">Notes</property>
                 <property name="icon-name">x-office-address-book-symbolic</property>
-                <property name="position">3</property>
+                <property name="position">4</property>
               </packing>
             </child>
             <child>
@@ -907,7 +1086,7 @@
                 <property name="name">devices</property>
                 <property name="title" translatable="yes">Devices</property>
                 <property name="icon-name">computer-symbolic</property>
-                <property name="position">4</property>
+                <property name="position">5</property>
               </packing>
             </child>
             <style>

@@ -1,29 +1,19 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 from typing import Any
-from typing import Callable
-from typing import Optional
 
-import sys
-import inspect
 import functools
+import inspect
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from gi.repository import GLib, Gio
 
+from gi.repository import Gio
+from gi.repository import GLib
 from nbxmpp.protocol import JID
 
 from gajim.common.structs import VariantMixin
@@ -31,20 +21,16 @@ from gajim.common.structs import VariantMixin
 
 @dataclass
 class OpenEventActionParams(VariantMixin):
+    # Event which is used for Notifications and gets sent over DBus
+    # Don’t use Optional types here because DBus does not support "None"
     type: str
-    sub_type: Optional[str]
+    sub_type: str
     account: str
-    jid: Optional[JID]
+    jid: str
 
 
 @dataclass
 class RemoveHistoryActionParams(VariantMixin):
-    account: str
-    jid: Optional[JID] = None
-
-
-@dataclass
-class ForgetGroupchatActionParams(VariantMixin):
     account: str
     jid: JID
 
@@ -58,10 +44,39 @@ class AddChatActionParams(VariantMixin):
 
 
 @dataclass
-class MoveChatToWorkspaceAP(VariantMixin):
+class ChatListEntryParam(VariantMixin):
     workspace_id: str
+    source_workspace_id: str
     account: str
     jid: JID
+
+
+@dataclass
+class MuteContactParam(VariantMixin):
+    account: str
+    jid: JID
+    state: int
+
+
+@dataclass
+class AccountJidParam(VariantMixin):
+    account: str
+    jid: JID
+
+
+@dataclass
+class ModerateMessageParam(VariantMixin):
+    account: str
+    jid: JID
+    stanza_id: str
+    namespace: str
+
+
+@dataclass
+class DeleteMessageParam(VariantMixin):
+    account: str
+    jid: JID
+    pk: int
 
 
 def get_params_class(func: Callable[..., Any]) -> Any:

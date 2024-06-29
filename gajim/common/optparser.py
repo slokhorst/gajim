@@ -11,27 +11,17 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-import os
-import sys
-import re
 import logging
+import os
+import re
+import sys
 from pathlib import Path
-from packaging.version import Version as V
 
 from gi.repository import Gdk
 from nbxmpp.util import text_to_color
+from packaging.version import Version as V
 
 from gajim.common import app
 from gajim.common.i18n import _
@@ -200,7 +190,8 @@ class OptionsParser:
 
     def update_config_to_1194(self):
         # Delete all BOSH proxies
-        for name in self.old_values['proxies']:
+        proxies = self.old_values.get('proxies', [])
+        for name in proxies:
             if self.old_values['proxies'][name]['type'] == 'bosh':
                 app.config.del_per('proxies', name)
                 for account in self.old_values['accounts']:
@@ -218,7 +209,7 @@ class OptionsParser:
                 account_string = '%s@%s' % (username, domain)
                 # We cannot get the preferred theme at this point
                 background = (1, 1, 1)
-                col_r, col_g, col_b = text_to_color(account_string, background)
+                col_r, col_g, col_b = text_to_color(account_string, 100, 40)
                 rgba = Gdk.RGBA(red=col_r, green=col_g, blue=col_b)
                 color = rgba.to_string()
                 app.config.set_per('accounts', account, 'account_color', color)

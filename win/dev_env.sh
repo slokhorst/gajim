@@ -5,36 +5,61 @@ set -e
 function main {
     pacman --noconfirm -S --needed \
         git \
-        mingw-w64-x86_64-python \
-        mingw-w64-x86_64-python-gobject \
-        mingw-w64-x86_64-python-pip \
-        mingw-w64-x86_64-toolchain \
-        mingw-w64-x86_64-adwaita-icon-theme \
-        mingw-w64-x86_64-gtk3 \
-        mingw-w64-x86_64-python-setuptools-scm \
-        mingw-w64-x86_64-python-cryptography \
-        mingw-w64-x86_64-python-certifi \
-        mingw-w64-x86_64-python-pyopenssl \
-        mingw-w64-x86_64-python-pillow \
-        mingw-w64-x86_64-python-six \
-        mingw-w64-x86_64-python-pygments \
-        mingw-w64-x86_64-libwebp \
-        mingw-w64-x86_64-goocanvas \
-        mingw-w64-x86_64-gspell \
-        mingw-w64-x86_64-hunspell \
-        mingw-w64-x86_64-libsoup \
+        p7zip \
+        wget \
+        intltool \
+        ${MINGW_PACKAGE_PREFIX}-toolchain \
+        ${MINGW_PACKAGE_PREFIX}-python \
+        ${MINGW_PACKAGE_PREFIX}-python-pip \
+        ${MINGW_PACKAGE_PREFIX}-python-gobject \
+        ${MINGW_PACKAGE_PREFIX}-python-certifi \
+        ${MINGW_PACKAGE_PREFIX}-python-cryptography \
+        ${MINGW_PACKAGE_PREFIX}-python-gssapi \
+        ${MINGW_PACKAGE_PREFIX}-python-idna \
+        ${MINGW_PACKAGE_PREFIX}-python-keyring \
+        ${MINGW_PACKAGE_PREFIX}-python-packaging \
+        ${MINGW_PACKAGE_PREFIX}-python-pillow \
+        ${MINGW_PACKAGE_PREFIX}-python-protobuf \
+        ${MINGW_PACKAGE_PREFIX}-python-pygments \
+        ${MINGW_PACKAGE_PREFIX}-python-setuptools \
+        ${MINGW_PACKAGE_PREFIX}-python-setuptools-scm \
+        ${MINGW_PACKAGE_PREFIX}-python-six \
+        ${MINGW_PACKAGE_PREFIX}-python-sqlalchemy \
+        ${MINGW_PACKAGE_PREFIX}-gtk3 \
+        ${MINGW_PACKAGE_PREFIX}-gtksourceview4 \
+        ${MINGW_PACKAGE_PREFIX}-gstreamer \
+        ${MINGW_PACKAGE_PREFIX}-gst-plugins-base \
+        ${MINGW_PACKAGE_PREFIX}-gst-plugins-good \
+        ${MINGW_PACKAGE_PREFIX}-gst-libav \
+        ${MINGW_PACKAGE_PREFIX}-gst-python \
+        ${MINGW_PACKAGE_PREFIX}-adwaita-icon-theme \
+        ${MINGW_PACKAGE_PREFIX}-farstream \
+        ${MINGW_PACKAGE_PREFIX}-gspell \
+        ${MINGW_PACKAGE_PREFIX}-hunspell \
+        ${MINGW_PACKAGE_PREFIX}-libheif \
+        ${MINGW_PACKAGE_PREFIX}-libnice \
+        ${MINGW_PACKAGE_PREFIX}-libsoup3 \
+        ${MINGW_PACKAGE_PREFIX}-libwebp \
+        ${MINGW_PACKAGE_PREFIX}-sqlite3
 
     PIP_REQUIREMENTS="\
 git+https://dev.gajim.org/gajim/python-nbxmpp.git
-git+https://dev.gajim.org/lovetox/pybonjour-python3.git
-python-axolotl
+git+https://dev.gajim.org/gajim/omemo-dr.git
+pygobject-stubs --no-cache-dir --config-settings=config=Gtk3,Gdk3,GtkSource4
 python-gnupg
-keyring
-css_parser
 qrcode
+css_parser
+sentry-sdk
+emoji
+winrt-Windows.Foundation
+winrt-Windows.UI
+winrt-Windows.UI.ViewManagement
+windows-toasts
 "
-pip3 install precis-i18n
-pip3 install $(echo "$PIP_REQUIREMENTS" | tr ["\\n"] [" "])
+# Workaround for https://dev.gajim.org/gajim/gajim/-/issues/11490
+# Env variable described in https://www.msys2.org/docs/python/
+SETUPTOOLS_USE_DISTUTILS=stdlib pip3 install --upgrade precis-i18n
+SETUPTOOLS_USE_DISTUTILS=stdlib pip3 install --upgrade $(echo "$PIP_REQUIREMENTS" | tr ["\\n"] [" "])
 
 }
 

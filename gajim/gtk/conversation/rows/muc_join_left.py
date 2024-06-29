@@ -1,41 +1,37 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-from typing import Optional
-
-import time
 from datetime import datetime
 
 from gi.repository import Gtk
 
-from gajim.common.i18n import _
 from gajim.common.const import AvatarSize
+from gajim.common.i18n import _
+from gajim.common.util.datetime import utc_now
 
-from .widgets import SimpleLabel
-from .base import BaseRow
+from gajim.gtk.conversation.rows.base import BaseRow
+from gajim.gtk.conversation.rows.widgets import DateTimeLabel
+from gajim.gtk.conversation.rows.widgets import SimpleLabel
 
 
 class MUCJoinLeft(BaseRow):
-    def __init__(self, type_: str, account: str, nick: str,
-                 reason: Optional[str] = None,
-                 error: bool = False):
+    def __init__(self,
+                 type_: str,
+                 account: str,
+                 nick: str,
+                 reason: str | None = None,
+                 error: bool = False,
+                 timestamp: datetime | None = None
+                 ) -> None:
+
         BaseRow.__init__(self, account)
 
         self.type = type_
-        timestamp = time.time()
-        self.timestamp = datetime.fromtimestamp(timestamp)
-        self.db_timestamp = timestamp
+        if timestamp is None:
+            timestamp = utc_now()
+        self.timestamp = timestamp.astimezone()
+        self.db_timestamp = timestamp.timestamp()
 
         avatar_placeholder = Gtk.Box()
         avatar_placeholder.set_size_request(AvatarSize.ROSTER, -1)
@@ -59,16 +55,15 @@ class MUCJoinLeft(BaseRow):
         self._label.get_style_context().add_class('gajim-status-message')
         self.grid.attach(self._label, 2, 0, 1, 1)
 
-        timestamp_widget = self.create_timestamp_widget(self.timestamp)
-        timestamp_widget.set_hexpand(True)
-        timestamp_widget.set_halign(Gtk.Align.END)
-        timestamp_widget.set_valign(Gtk.Align.START)
+        timestamp_widget = DateTimeLabel(self.timestamp)
+        timestamp_widget.set_halign(Gtk.Align.START)
+        timestamp_widget.set_valign(Gtk.Align.FILL)
         self.grid.attach(timestamp_widget, 3, 0, 1, 1)
 
         self.show_all()
 
     @staticmethod
-    def _make_left_message(nick: str, reason: Optional[str],
+    def _make_left_message(nick: str, reason: str | None,
                            error: bool) -> str:
         reason = '' if reason is None else f': {reason}'
 

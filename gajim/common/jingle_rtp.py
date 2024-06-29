@@ -1,31 +1,24 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-"""
-Handles Jingle RTP sessions (XEP 0167)
-"""
 
-import os
+# Handles Jingle RTP sessions (XEP 0167)
+
+
+from __future__ import annotations
+
+from typing import Any
+
 import logging
-import socket
 from collections import deque
+from collections.abc import Callable
+from collections.abc import Iterator
 from datetime import datetime
 
 import nbxmpp
-from nbxmpp.namespaces import Namespace
-
 from gi.repository import GLib
+from nbxmpp.namespaces import Namespace
 
 try:
     from gi.repository import Farstream
@@ -34,19 +27,25 @@ except Exception:
     pass
 
 from gajim.common import app
+from gajim.common import configpaths
 from gajim.common.i18n import _
-from gajim.common.jingle_transport import JingleTransportICEUDP
 from gajim.common.jingle_content import contents
 from gajim.common.jingle_content import JingleContent
 from gajim.common.jingle_content import JingleContentSetupException
 from gajim.common.jingle_session import FailedApplication
-
+from gajim.common.jingle_session import JingleSession
+from gajim.common.jingle_transport import JingleTransport
+from gajim.common.jingle_transport import JingleTransportICEUDP
 
 log = logging.getLogger('gajim.c.jingle_rtp')
 
 
 class JingleRTPContent(JingleContent):
-    def __init__(self, session, media, transport=None):
+    def __init__(self,
+                 session: JingleSession,
+                 media: str,
+                 transport: JingleTransport | None = None
+                 ) -> None:
         if transport is None:
             transport = JingleTransportICEUDP(None)
         JingleContent.__init__(self, session, transport, None)
@@ -56,17 +55,22 @@ class JingleRTPContent(JingleContent):
             'audio': Farstream.MediaType.AUDIO,
             'video': Farstream.MediaType.VIDEO}[media]
 
-        self.pipeline = None
-        self.src_bin = None
+        self.pipeline: Gst.Pipeline | None = None
+        self.src_bin: Gst.Bin | None = None
         self.stream_failed_once = False
 
-        self.candidates_ready = False # True when local candidates are prepared
+        self.candidates_ready = False  # True when local candidates are prepared
 
         # TODO
-        self.conference = None
-        self.funnel = None
-        self.p2psession = None
-        self.p2pstream = None
+        self.conference: Farstream.Conference | None = None
+        self.funnel: Gst.Element | None = None
+        self.p2psession: Farstream.Session | None = None
+        self.p2pstream: Farstream.Stream | None = None
+
+        self.available_gst_plugins: list[str] = []
+        gst_plugin_registry = Gst.Registry.get()
+        for plugin in gst_plugin_registry.get_plugin_list():
+            self.available_gst_plugins.append(plugin.get_name())
 
         self.callbacks['session-initiate'] += [self.__on_remote_codecs]
         self.callbacks['content-add'] += [self.__on_remote_codecs]
@@ -76,7 +80,12 @@ class JingleRTPContent(JingleContent):
         self.callbacks['session-terminate'] += [self.__stop]
         self.callbacks['session-terminate-sent'] += [self.__stop]
 
-    def setup_stream(self, on_src_pad_added):
+    def setup_stream(self,
+                     on_src_pad_added: Callable[[Farstream.Stream,
+                                                 Gst.Pad,
+                                                 Farstream.Codec], None]
+                     ) -> None:
+
         # pipeline and bus
         self.pipeline = Gst.Pipeline()
         bus = self.pipeline.get_bus()
@@ -96,28 +105,33 @@ class JingleRTPContent(JingleContent):
         # due to bad controlling-mode
 
         params = {'controlling-mode': self.session.weinitiate, 'debug': False}
-        if app.settings.get('use_stun_server'):
-            stun_server = app.settings.get('stun_server')
-            if not stun_server and self.session.connection._stun_servers:
-                stun_server = self.session.connection._stun_servers[0]['host']
-            if stun_server:
-                try:
-                    ip = socket.getaddrinfo(stun_server, 0, socket.AF_UNSPEC,
-                                            socket.SOCK_STREAM)[0][4][0]
-                except socket.gaierror as e:
-                    log.warning('Lookup of stun ip failed: %s', str(e))
-                else:
-                    params['stun-ip'] = ip
+        # if app.settings.get('use_stun_server'):
+        #     stun_server = app.settings.get('stun_server')
+        #     if not stun_server and self.session.connection._stun_servers:
+        #         stun_server = self.session.connection._stun_servers[0]['host']
+        #     if stun_server:
+        #         try:
+        #             ip = socket.getaddrinfo(stun_server, 0, socket.AF_UNSPEC,
+        #                                     socket.SOCK_STREAM)[0][4][0]
+        #         except socket.gaierror as e:
+        #             log.warning('Lookup of stun ip failed: %s', str(e))
+        #         else:
+        #             params['stun-ip'] = ip
 
-        self.p2pstream = self.p2psession.new_stream(participant,
-                                                    Farstream.StreamDirection.BOTH)
+        self.p2pstream = self.p2psession.new_stream(
+            participant,
+            Farstream.StreamDirection.BOTH)
         self.p2pstream.connect('src-pad-added', on_src_pad_added)
         self.p2pstream.set_transmitter_ht('nice', params)
 
-    def is_ready(self):
+    def is_ready(self) -> bool:
         return JingleContent.is_ready(self) and self.candidates_ready
 
-    def make_bin_from_config(self, config_key, pipeline, text):
+    def make_bin_from_config(self,
+                             config_key: str,
+                             pipeline: str,
+                             text: str
+                             ) -> Gst.Bin | None:
         pipeline = pipeline % app.settings.get(config_key)
         log.debug('Pipeline: %s', str(pipeline))
         try:
@@ -136,18 +150,18 @@ class JingleRTPContent(JingleContent):
         if self.sent:
             self.p2pstream.add_remote_candidates(candidates)
 
-    def batch_dtmf(self, events):
-        """
+    def batch_dtmf(self, events: list[str]) -> None:
+        '''
         Send several DTMF tones
-        """
+        '''
         if self._dtmf_running:
-            raise Exception("There is a DTMF batch already running")
-        events = deque(events)
+            raise Exception('There is a DTMF batch already running')
+        d_events = deque(events)
         self._dtmf_running = True
-        self.start_dtmf(events.popleft())
-        GLib.timeout_add(500, self._next_dtmf, events)
+        self.start_dtmf(d_events.popleft())
+        GLib.timeout_add(500, self._next_dtmf, d_events)
 
-    def _next_dtmf(self, events):
+    def _next_dtmf(self, events: deque[str]):
         self.stop_dtmf()
         if events:
             self.start_dtmf(events.popleft())
@@ -164,28 +178,32 @@ class JingleRTPContent(JingleContent):
             event = int(key)
         self.p2psession.start_telephony_event(event, 2)
 
-    def stop_dtmf(self):
+    def stop_dtmf(self) -> None:
         self.p2psession.stop_telephony_event()
 
-    def _fill_content(self, content):
+    def _fill_content(self, content: nbxmpp.Node) -> None:
         content.addChild(Namespace.JINGLE_RTP + ' description',
                          attrs={'media': self.media},
                          payload=list(self.iter_codecs()))
 
-    def _setup_funnel(self):
+    def _setup_funnel(self) -> None:
         self.funnel = Gst.ElementFactory.make('funnel', None)
         self.pipeline.add(self.funnel)
         self.funnel.link(self.sink)
         self.sink.set_state(Gst.State.PLAYING)
         self.funnel.set_state(Gst.State.PLAYING)
 
-    def _on_src_pad_added(self, _stream, pad, codec):
+    def _on_src_pad_added(self,
+                          _stream: Farstream.Stream,
+                          pad: Gst.Pad,
+                          codec: Farstream.Codec
+                          ) -> None:
         log.info('Used codec: %s', codec.to_string())
         if not self.funnel:
             self._setup_funnel()
         pad.link(self.funnel.get_request_pad('sink_%u'))
 
-    def _on_gst_message(self, _bus, message):
+    def _on_gst_message(self, _bus: Gst.Bus, message: Gst.Message) -> None:
         if message.type == Gst.MessageType.ELEMENT:
             name = message.get_structure().get_name()
             message_string = message.get_structure().to_string()
@@ -203,8 +221,9 @@ class JingleRTPContent(JingleContent):
                         self.p2pstream.add_remote_candidates(
                             self.transport.remote_candidates)
                         self.transport.remote_candidates = []
-                        self.p2pstream.set_property('direction',
-                                                    Farstream.StreamDirection.BOTH)
+                        self.p2pstream.set_property(
+                            'direction',
+                            Farstream.StreamDirection.BOTH)
 
             elif name == 'farstream-local-candidates-prepared':
                 self.candidates_ready = True
@@ -257,10 +276,10 @@ class JingleRTPContent(JingleContent):
             self.pipeline.set_state(Gst.State.PLAYING)
 
     @staticmethod
-    def get_fallback_src():
+    def get_fallback_src() -> Gst.Element | None:
         return Gst.ElementFactory.make('fakesrc', None)
 
-    def on_negotiated(self):
+    def on_negotiated(self) -> None:
         if self.accepted:
             if self.p2psession.get_property('codecs'):
                 # those lines MUST be done after we get info on our codecs
@@ -268,16 +287,23 @@ class JingleRTPContent(JingleContent):
                     self.p2pstream.add_remote_candidates(
                         self.transport.remote_candidates)
                     self.transport.remote_candidates = []
-                    # TODO: Farstream.StreamDirection.BOTH only if senders='both'
-#                    self.p2pstream.set_property('direction',
-#                        Farstream.StreamDirection.BOTH)
+                    # TODO: Farstream.StreamDirection.BOTH only if
+                    # senders='both'
+                    # self.p2pstream.set_property(
+                    #    'direction',
+                    #    Farstream.StreamDirection.BOTH)
         JingleContent.on_negotiated(self)
 
-    def __on_remote_codecs(self, _stanza, content, _error, _action):
-        """
+    def __on_remote_codecs(self,
+                           _stanza: nbxmpp.Node,
+                           content: nbxmpp.Node,
+                           _error: nbxmpp.Node | None,
+                           _action: str
+                           ) -> None:
+        '''
         Get peer codecs from what we get from peer
-        """
-        codecs = []
+        '''
+        codecs: list[Farstream.Codec] = []
         for codec in content.getTag('description').iterTags('payload-type'):
             if not codec['id'] or not codec['name'] or not codec['clockrate']:
                 # ignore invalid payload-types
@@ -303,7 +329,7 @@ class JingleRTPContent(JingleContent):
             except GLib.Error:
                 raise FailedApplication
 
-    def iter_codecs(self):
+    def iter_codecs(self) -> Iterator[nbxmpp.Node]:
         codecs = self.p2psession.props.codecs_without_config
         for codec in codecs:
             attrs = {
@@ -322,45 +348,48 @@ class JingleRTPContent(JingleContent):
                 payload = []
             yield nbxmpp.Node('payload-type', attrs, payload)
 
-    def __stop(self, *things):
+    def __stop(self, *args: Any) -> None:
         self.pipeline.set_state(Gst.State.NULL)
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.__stop()
 
-    def destroy(self):
+    def destroy(self) -> None:
         JingleContent.destroy(self)
         self.p2pstream.disconnect_by_func(self._on_src_pad_added)
         self.pipeline.get_bus().disconnect_by_func(self._on_gst_message)
 
 
 class JingleAudio(JingleRTPContent):
-    """
+    '''
     Jingle VoIP sessions consist of audio content transported over an ICE UDP
     protocol
-    """
+    '''
 
-    def __init__(self, session, transport=None):
+    def __init__(self,
+                 session: JingleSession,
+                 transport: JingleTransport | None = None
+                 ) -> None:
         JingleRTPContent.__init__(self, session, 'audio', transport)
         self.setup_stream()
 
     def set_mic_volume(self, vol: float) -> None:
-        """
+        '''
         vol must be between 0 and 1
-        """
+        '''
         self.mic_volume.set_property('volume', vol)
 
     def set_out_volume(self, vol: float) -> None:
-        """
+        '''
         vol must be between 0 and 1
-        """
+        '''
         self.out_volume.set_property('volume', vol)
 
-    def setup_stream(self):
+    def setup_stream(self) -> None:
         JingleRTPContent.setup_stream(self, self._on_src_pad_added)
 
         # list of codecs that are explicitly allowed
-        allow_codecs = [
+        allow_codecs: list[Farstream.Codec] = [
             Farstream.Codec.new(Farstream.CODEC_ID_ANY, 'OPUS',
                                 Farstream.MediaType.AUDIO, 48000),
             Farstream.Codec.new(Farstream.CODEC_ID_ANY, 'SPEEX',
@@ -377,10 +406,10 @@ class JingleAudio(JingleRTPContent):
                                 Farstream.MediaType.AUDIO, 8000),
             Farstream.Codec.new(Farstream.CODEC_ID_ANY, 'AMR',
                                 Farstream.MediaType.AUDIO, 8000),
-            ]
+        ]
 
         # disable all other codecs
-        disable_codecs = []
+        disable_codecs: list[Farstream.Codec] = []
         codecs_without_config = self.p2psession.props.codecs_without_config
         allowed_encoding_names = [c.encoding_name for c in allow_codecs]
         allowed_encoding_names.append('telephone-event')
@@ -396,23 +425,52 @@ class JingleAudio(JingleRTPContent):
 
         # the local parts
         # TODO: Add queues?
-        self.src_bin = self.make_bin_from_config(
-            'audio_input_device',
-            '''%s
-            ! webrtcdsp
-                echo-suppression-level=high
-                noise-suppression-level=very-high
-                voice-detection=true
-            ! audioconvert ''',
-            _('audio input'))
+        if 'webrtcdsp' in self.available_gst_plugins:
+            self.src_bin = self.make_bin_from_config(
+                'audio_input_device',
+                '''
+                %s
+                ! audioconvert
+                ! audioresample
+                ! audio/x-raw,rate=48000
+                ! webrtcdsp
+                    echo-suppression-level=high
+                    noise-suppression-level=very-high
+                    voice-detection=true
+                ''',
+                _('audio input'))
+        else:
+            self.src_bin = self.make_bin_from_config(
+                'audio_input_device',
+                '''
+                %s
+                ! audioconvert
+                ''',
+                _('audio input'))
 
         # setting name=webrtcechoprobe0 is needed because lingering probes
         # cause a bug in subsequent calls
-        self.sink = self.make_bin_from_config(
-            'audio_output_device',
-            'audioconvert ! volume name=gajim_out_vol ! webrtcechoprobe name=webrtcechoprobe0 ! %s',
-            _('audio output'))
-
+        if 'webrtcdsp' in self.available_gst_plugins:
+            self.sink = self.make_bin_from_config(
+                'audio_output_device',
+                '''
+                audioconvert
+                ! audioresample
+                ! audio/x-raw,rate=48000
+                ! volume name=gajim_out_vol
+                ! webrtcechoprobe name=webrtcechoprobe0
+                ! %s
+                ''',
+                _('audio output'))
+        else:
+            self.sink = self.make_bin_from_config(
+                'audio_output_device',
+                '''
+                audioconvert
+                ! volume name=gajim_out_vol
+                ! %s
+                ''',
+                _('audio output'))
         self.mic_volume = self.src_bin.get_by_name('gajim_vol')
         self.out_volume = self.sink.get_by_name('gajim_out_vol')
 
@@ -428,12 +486,15 @@ class JingleAudio(JingleRTPContent):
 
 
 class JingleVideo(JingleRTPContent):
-    def __init__(self, session, transport=None):
+    def __init__(self,
+                 session: JingleSession,
+                 transport: JingleTransport | None = None
+                 ) -> None:
         JingleRTPContent.__init__(self, session, 'video', transport)
         self.sink = None
         self.setup_stream()
 
-    def setup_stream(self):
+    def setup_stream(self) -> None:
         # TODO: Everything is not working properly:
         # sometimes, one window won't show up,
         # sometimes it'll freeze...
@@ -443,9 +504,9 @@ class JingleVideo(JingleRTPContent):
 
         # list of codecs that are explicitly allowed
         # for now only VP8/H264 (available in gst-plugins-good)
-        allow_codecs = [
-            #Farstream.Codec.new(Farstream.CODEC_ID_ANY, 'VP9',
-            #                    Farstream.MediaType.VIDEO, 90000),
+        allow_codecs: list[Farstream.Codec] = [
+            # Farstream.Codec.new(Farstream.CODEC_ID_ANY, 'VP9',
+            #                     Farstream.MediaType.VIDEO, 90000),
             Farstream.Codec.new(Farstream.CODEC_ID_ANY, 'VP8',
                                 Farstream.MediaType.VIDEO, 90000),
             Farstream.Codec.new(Farstream.CODEC_ID_ANY, 'H264',
@@ -453,7 +514,7 @@ class JingleVideo(JingleRTPContent):
         ]
 
         # disable all other codecs
-        disable_codecs = []
+        disable_codecs: list[Farstream.Codec] = []
         codecs_without_config = self.p2psession.props.codecs_without_config
         allowed_encoding_names = [c.encoding_name for c in allow_codecs]
         for codec in codecs_without_config:
@@ -466,7 +527,10 @@ class JingleVideo(JingleRTPContent):
 
         self.p2psession.set_codec_preferences(allow_codecs + disable_codecs)
 
-    def do_setup(self, self_display_sink, other_sink):
+    def do_setup(self,
+                 self_display_sink: Gst.Element,
+                 other_sink: Gst.Element
+                 ) -> None:
         if app.settings.get('video_see_self'):
             tee = ('! tee name=split ! queue name=self-display-queue split. ! '
                    'queue name=network-queue')
@@ -495,22 +559,14 @@ class JingleVideo(JingleRTPContent):
         self.pipeline.set_state(Gst.State.PLAYING)
 
         if log.getEffectiveLevel() == logging.DEBUG:
-            # Use 'export GST_DEBUG_DUMP_DOT_DIR=/tmp/' before starting Gajim
             timestamp = datetime.now().strftime('%m-%d-%Y-%H-%M-%S')
             name = f'video-graph-{timestamp}'
-            debug_dir = os.environ.get('GST_DEBUG_DUMP_DOT_DIR')
-            name_dot = f'{debug_dir}/{name}.dot'
-            name_png = f'{debug_dir}/{name}.png'
+            filename = configpaths.get('DEBUG') / f'{name}.dot'
             Gst.debug_bin_to_dot_file(
-                self.pipeline, Gst.DebugGraphDetails.ALL, name)
-            if debug_dir:
-                try:
-                    os.system(f'dot -Tpng {name_dot} > {name_png}')
-                except Exception:
-                    log.debug('Could not save pipeline graph. Make sure '
-                              'graphviz is installed.')
+                self.pipeline, Gst.DebugGraphDetails.ALL, str(filename))
 
-    def get_fallback_src(self):
+    @staticmethod
+    def get_fallback_src() -> Gst.Bin | None:
         # TODO: Use avatar?
         pipeline = ('videotestsrc is-live=true ! video/x-raw,framerate=10/1 ! '
                     'videoconvert')

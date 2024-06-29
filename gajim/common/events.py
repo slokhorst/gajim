@@ -1,43 +1,51 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 import typing
 from typing import Any
 from typing import Union
-from typing import Optional
-from typing import Callable
 
+import datetime
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
+from functools import cached_property
 
-from nbxmpp.namespaces import Namespace
+from nbxmpp.const import Affiliation
+from nbxmpp.const import InviteType
+from nbxmpp.const import Role
+from nbxmpp.const import StatusCode
+from nbxmpp.modules.security_labels import Catalog
 from nbxmpp.protocol import JID
+from nbxmpp.structs import HTTPAuthData
 from nbxmpp.structs import LocationData
 from nbxmpp.structs import RosterItem
 from nbxmpp.structs import TuneData
-from nbxmpp.const import InviteType
 
 from gajim.common import app
+from gajim.common.const import EncryptionInfoMsg
+from gajim.common.const import JingleState
 from gajim.common.file_props import FileProp
+from gajim.common.storage.archive import models as mod
+from gajim.common.storage.archive.const import MessageType
 
 if typing.TYPE_CHECKING:
-    from gajim.common.helpers import AdditionalDataDict
-    from gajim.common.const import KindConstant
     from gajim.common.client import Client
-    from gajim.common.jingle_session import JingleSession
+    from gajim.common.modules.httpupload import HTTPFileTransfer
+
+ChatListEventT = Union[
+    'MessageReceived',
+    'MessageCorrected',
+    'MessageModerated',
+    'PresenceReceived',
+    'MessageSent',
+    'MessageDeleted',
+    'JingleRequestReceived',
+    'FileRequestReceivedEvent'
+]
 
 
 @dataclass
@@ -69,7 +77,7 @@ class AccountConnected(ApplicationEvent):
 
 
 @dataclass
-class AccountDisonnected(ApplicationEvent):
+class AccountDisconnected(ApplicationEvent):
     name: str = field(init=False, default='account-disconnected')
     account: str
 
@@ -85,7 +93,7 @@ class PlainConnection(ApplicationEvent):
 @dataclass
 class PasswordRequired(ApplicationEvent):
     name: str = field(init=False, default='password-required')
-    conn: 'Client'
+    client: 'Client'
     on_password: Callable[..., Any]
 
 
@@ -96,10 +104,18 @@ class Notification(ApplicationEvent):
     type: str
     title: str
     text: str
-    jid: Optional[Union[JID, str]] = None
-    sub_type: Optional[str] = None
-    sound: Optional[str] = None
-    icon_name: Optional[str] = None
+    jid: JID | str | None = None
+    sub_type: str | None = None
+    sound: str | None = None
+    icon_name: str | None = None
+    resource: str | None = None
+
+
+@dataclass
+class ChatRead(ApplicationEvent):
+    name: str = field(init=False, default='chat-read')
+    account: str
+    jid: JID
 
 
 @dataclass
@@ -124,24 +140,30 @@ class SignedIn(ApplicationEvent):
 
 
 @dataclass
+class LocationChanged(ApplicationEvent):
+    name: str = field(init=False, default='location-changed')
+    info: LocationData | None
+
+
+@dataclass
 class MusicTrackChanged(ApplicationEvent):
     name: str = field(init=False, default='music-track-changed')
-    info: Optional[TuneData]
+    info: TuneData | None
 
 
 @dataclass
 class MessageSent(ApplicationEvent):
     name: str = field(init=False, default='message-sent')
     account: str
-    jid: str
-    message: str
-    message_id: str
-    chatstate: Optional[str]
-    timestamp: float
-    additional_data: 'AdditionalDataDict'
-    label: Optional[str]
-    correct_id: Optional[str]
-    play_sound: bool
+    jid: JID
+    pk: int
+    play_sound: bool = False
+
+    @cached_property
+    def message(self) -> mod.Message:
+        m = app.storage.archive.get_message_with_pk(self.pk)
+        assert m is not None
+        return m
 
 
 @dataclass
@@ -155,17 +177,20 @@ class MessageNotSent(ApplicationEvent):
 
 
 @dataclass
-class AdHocCommandError(ApplicationEvent):
-    name: str = field(init=False, default='adhoc-command-error')
-    conn: 'Client'
-    error: str
+class MessageDeleted(ApplicationEvent):
+    name: str = field(init=False, default='message-deleted')
+    account: str
+    jid: JID
+    pk: int
 
 
 @dataclass
-class AdHocCommandActionResponse(ApplicationEvent):
-    name: str = field(init=False, default='adhoc-command-action-response')
-    conn: 'Client'
-    command: Any
+class MessageAcknowledged(ApplicationEvent):
+    name: str = field(init=False, default='message-acknowledged')
+    account: str
+    jid: JID
+    pk: int
+    stanza_id: str | None
 
 
 @dataclass
@@ -203,7 +228,7 @@ class FileRequestSent(ApplicationEvent):
     name: str = field(init=False, default='file-request-sent')
     account: str
     file_props: FileProp
-    jid: str
+    jid: JID
 
 
 @dataclass
@@ -222,6 +247,22 @@ class FileSendError(ApplicationEvent):
     file_props: FileProp
     jid: str
     error_msg: str = ''
+
+
+@dataclass
+class HTTPUploadStarted(ApplicationEvent):
+    name: str = field(init=False, default='http-upload-started')
+    account: str
+    jid: JID
+    transfer: HTTPFileTransfer
+
+
+@dataclass
+class HTTPUploadError(ApplicationEvent):
+    name: str = field(init=False, default='http-upload-error')
+    account: str
+    jid: JID
+    error_msg: str
 
 
 @dataclass
@@ -250,8 +291,16 @@ class BookmarksReceived(ApplicationEvent):
 
 
 @dataclass
-class BaseChatMarkerEvent(ApplicationEvent):
-    name: str
+class ReadStateSync(ApplicationEvent):
+    name: str = field(init=False, default='read-state-sync')
+    account: str
+    jid: JID
+    marker_id: str
+
+
+@dataclass
+class DisplayedReceived(ApplicationEvent):
+    name: str = field(init=False, default='displayed-received')
     account: str
     jid: JID
     properties: Any
@@ -261,30 +310,18 @@ class BaseChatMarkerEvent(ApplicationEvent):
 
 
 @dataclass
-class ReadStateSync(BaseChatMarkerEvent):
-    name: str = field(init=False, default='read-state-sync')
-
-
-@dataclass
-class DisplayedReceived(BaseChatMarkerEvent):
-    name: str = field(init=False, default='displayed-received')
-
-
-@dataclass
-class IqErrorReceived(ApplicationEvent):
-    name: str = field(init=False, default='iq-error-received')
+class ReactionUpdated(ApplicationEvent):
+    name: str = field(init=False, default='reaction-updated')
     account: str
-    properties: Any
+    jid: JID
+    reaction_id: str
 
 
 @dataclass
-class HttpAuthReceived(ApplicationEvent):
-    name: str = field(init=False, default='http-auth-received')
-    conn: 'Client'
-    iq_id: str
-    method: str
-    url: str
-    msg: str
+class HttpAuth(ApplicationEvent):
+    name: str = field(init=False, default='http-auth')
+    client: 'Client'
+    data: HTTPAuthData
     stanza: Any
 
 
@@ -345,71 +382,59 @@ class ArchivingIntervalFinished(ApplicationEvent):
 
 
 @dataclass
-class MessageUpdated(ApplicationEvent):
-    name: str = field(init=False, default='message-updated')
+class MessageCorrected(ApplicationEvent):
+    name: str = field(init=False, default='message-corrected')
     account: str
-    jid: str
-    msgtxt: str
-    properties: Any
-    correct_id: str
+    jid: JID
+    pk: int
+    correction_id: str
+
+    @cached_property
+    def message(self) -> mod.Message:
+        m = app.storage.archive.get_message_with_pk(self.pk)
+        assert m is not None
+        return m
 
 
 @dataclass
-class MamMessageReceived(ApplicationEvent):
-    name: str = field(init=False, default='mam-message-received')
+class MessageModerated(ApplicationEvent):
+    name: str = field(init=False, default='message-moderated')
     account: str
-    jid: str
-    msgtxt: str
-    properties: Any
-    additional_data: 'AdditionalDataDict'
-    unique_id: str
-    stanza_id: str
-    archive_jid: str
-    kind: 'KindConstant'
+    jid: JID
+    moderation: mod.Moderation
 
 
 @dataclass
 class MessageReceived(ApplicationEvent):
     name: str = field(init=False, default='message-received')
-    conn: 'Client'
-    stanza: Any
     account: str
-    jid: str
-    msgtxt: str
-    properties: Any
-    additional_data: 'AdditionalDataDict'
-    unique_id: str
-    stanza_id: str
-    fjid: str
-    resource: str
-    session: Any
-    delayed: Optional[float]
-    msg_log_id: int
-    displaymarking: str
+    jid: JID
+    m_type: MessageType
+    from_mam: bool
+    pk: int
 
-
-@dataclass
-class GcMessageReceived(MessageReceived):
-    name: str = field(init=False, default='gc-message-received')
-    room_jid: str
+    @cached_property
+    def message(self) -> mod.Message:
+        m = app.storage.archive.get_message_with_pk(self.pk)
+        assert m is not None
+        return m
 
 
 @dataclass
 class MessageError(ApplicationEvent):
     name: str = field(init=False, default='message-error')
     account: str
-    jid: str
-    room_jid: str
+    jid: JID
     message_id: str
     error: Any
 
 
 @dataclass
 class RosterItemExchangeEvent(ApplicationEvent):
-    name: str = field(init=False, default='roster-item-exchange-received')
-    conn: 'Client'
-    fjid: str
-    exchange_items_list: list[str]
+    name: str = field(init=False, default='roster-item-exchange')
+    client: 'Client'
+    jid: JID
+    exchange_items_list: dict[str, list[str]]
     action: str
 
 
@@ -424,36 +449,6 @@ class RosterPush(ApplicationEvent):
     name: str = field(init=False, default='roster-push')
     account: str
     item: RosterItem
-
-
-@dataclass
-class PluginAdded(ApplicationEvent):
-    name: str = field(init=False, default='plugin-added')
-    plugin: Any
-
-
-@dataclass
-class PluginRemoved(ApplicationEvent):
-    name: str = field(init=False, default='plugin-removed')
-    plugin: Any
-
-
-@dataclass
-class TuneReceived(ApplicationEvent):
-    name: str = field(init=False, default='tune-received')
-    account: str
-    jid: str
-    tune: TuneData
-    is_self_message: bool
-
-
-@dataclass
-class LocationReceived(ApplicationEvent):
-    name: str = field(init=False, default='location-received')
-    account: str
-    jid: str
-    location: LocationData
-    is_self_message: bool
 
 
 @dataclass
@@ -476,8 +471,32 @@ class SearchResultReceivedEvent(ApplicationEvent):
 class ReceiptReceived(ApplicationEvent):
     name: str = field(init=False, default='receipt-received')
     account: str
-    jid: str
+    jid: JID
     receipt_id: str
+
+
+@dataclass
+class CallStarted(ApplicationEvent):
+    name: str = field(init=False, default='call-started')
+    account: str
+    resource_jid: JID
+
+
+@dataclass
+class CallStopped(ApplicationEvent):
+    name: str = field(init=False, default='call-stopped')
+    account: str
+    jid: JID
+
+
+@dataclass
+class CallUpdated(ApplicationEvent):
+    name: str = field(init=False, default='call-updated')
+    jingle_type: str
+    audio_state: JingleState
+    video_state: JingleState
+    audio_sid: str | None
+    video_sid: str | None
 
 
 @dataclass
@@ -486,10 +505,10 @@ class JingleEvent(ApplicationEvent):
     conn: 'Client'
     account: str
     fjid: str
-    jid: str
+    jid: JID
     sid: str
     resource: str
-    jingle_session: JingleSession
+    jingle_session: Any
 
 
 @dataclass
@@ -528,7 +547,8 @@ class JingleErrorReceived(JingleEvent):
 class MucAdded(ApplicationEvent):
     name: str = field(init=False, default='muc-added')
     account: str
-    jid: str
+    jid: JID
+    select_chat: bool
 
 
 @dataclass
@@ -537,7 +557,7 @@ class MucDecline(ApplicationEvent):
     account: str
     muc: JID
     from_: JID
-    reason: Optional[str]
+    reason: str | None
 
 
 @dataclass
@@ -547,11 +567,11 @@ class MucInvitation(ApplicationEvent):
     info: Any
     muc: JID
     from_: JID
-    reason: Optional[str]
-    password: Optional[str]
+    reason: str | None
+    password: str | None
     type: InviteType
     continued: bool
-    thread: Optional[str]
+    thread: str | None
 
 
 @dataclass
@@ -574,22 +594,15 @@ class PingReply(ApplicationEvent):
     name: str = field(init=False, default='ping-reply')
     account: str
     contact: Any
-    seconds: int
+    seconds: float
 
 
 @dataclass
 class SecCatalogReceived(ApplicationEvent):
     name: str = field(init=False, default='sec-catalog-received')
     account: str
-    jid: str
-    catalog: dict[str, Any]
-
-
-@dataclass
-class RawPresenceReceived(ApplicationEvent):
-    name: str = field(init=False, default='raw-pres-received')
-    conn: 'Client'
-    stanza: Any
+    jid: JID
+    catalog: Catalog
 
 
 @dataclass
@@ -602,14 +615,13 @@ class PresenceReceived(ApplicationEvent):
     need_add_in_roster: bool
     popup: bool
     ptype: str
-    jid: str
+    jid: JID
     resource: str
     id_: str
     fjid: str
     timestamp: float
-    avatar_sha: Optional[str]
-    user_nick: Optional[str]
-    idle_time: Optional[float]
+    avatar_sha: str | None
+    user_nick: str | None
     show: str
     new_show: str
     old_show: str
@@ -650,83 +662,163 @@ class FileRequestReceivedEvent(ApplicationEvent):
     name: str = field(init=False, default='file-request-received')
     conn: 'Client'
     stanza: Any
-    jingle_content: Any
-    FT_content: Any
-    id_: str = field(init=False)
-    fjid: str = field(init=False)
-    account: str = field(init=False)
-    jid: str = field(init=False)
-    file_props: FileProp = field(init=False)
+    id_: str
+    fjid: str
+    account: str
+    jid: JID
+    file_props: FileProp
 
-    def __post_init__(self):
-        from gajim.common.jingle_transport import JingleTransportSocks5
-        from gajim.common.file_props import FilesProp
-        self.id_ = self.stanza.getID()
-        self.fjid = self.conn.get_module('Bytestream')._ft_get_from(
-            self.stanza)
-        self.account = self.conn.name
-        self.jid = app.get_jid_without_resource(self.fjid)
-        if not self.jingle_content:
-            return
-        secu = self.jingle_content.getTag('security')
-        self.FT_content.use_security = bool(secu)
-        if secu:
-            fingerprint = secu.getTag('fingerprint')
-            if fingerprint:
-                self.FT_content.x509_fingerprint = fingerprint.getData()
-        if not self.FT_content.transport:
-            self.FT_content.transport = JingleTransportSocks5()
-            self.FT_content.transport.set_our_jid(
-                self.FT_content.session.ourjid)
-            self.FT_content.transport.set_connection(
-                self.FT_content.session.connection)
-        sid = self.stanza.getTag('jingle').getAttr('sid')
-        self.file_props = FilesProp.getNewFileProp(self.conn.name, sid)
-        self.file_props.transport_sid = self.FT_content.transport.sid
-        self.FT_content.file_props = self.file_props
-        self.FT_content.transport.set_file_props(self.file_props)
-        self.file_props.streamhosts.extend(
-            self.FT_content.transport.remote_candidates)
-        for host in self.file_props.streamhosts:
-            host['initiator'] = self.FT_content.session.initiator
-            host['target'] = self.FT_content.session.responder
-        self.file_props.session_type = 'jingle'
-        self.file_props.stream_methods = Namespace.BYTESTREAM
-        desc = self.jingle_content.getTag('description')
-        if self.jingle_content.getAttr('creator') == 'initiator':
-            file_tag = desc.getTag('file')
-            self.file_props.sender = self.fjid
-            self.file_props.receiver = self.conn.get_own_jid()
-        else:
-            file_tag = desc.getTag('file')
-            hash_ = file_tag.getTag('hash')
-            hash_ = hash_.getData() if hash_ else None
-            file_name = file_tag.getTag('name')
-            file_name = file_name.getData() if file_name else None
-            pjid = app.get_jid_without_resource(self.fjid)
-            file_info = self.conn.get_module('Jingle').get_file_info(
-                pjid, hash_=hash_, name=file_name, account=self.conn.name)
-            self.file_props.file_name = file_info['file-name']
-            self.file_props.sender = self.conn.get_own_jid()
-            self.file_props.receiver = self.fjid
-            self.file_props.type_ = 's'
-        for child in file_tag.getChildren():
-            name = child.getName()
-            val = child.getData()
-            if val is None:
-                continue
-            if name == 'name':
-                self.file_props.name = val
-            if name == 'size':
-                self.file_props.size = int(val)
-            if name == 'hash':
-                self.file_props.algo = child.getAttr('algo')
-                self.file_props.hash_ = val
-            if name == 'date':
-                self.file_props.date = val
 
-        self.file_props.request_id = self.id_
-        file_desc_tag = file_tag.getTag('desc')
-        if file_desc_tag is not None:
-            self.file_props.desc = file_desc_tag.getData()
-        self.file_props.transfered_size = []
+@dataclass
+class AllowGajimUpdateCheck(ApplicationEvent):
+    name: str = field(init=False, default='allow-gajim-update-check')
+
+
+@dataclass
+class GajimUpdateAvailable(ApplicationEvent):
+    name: str = field(init=False, default='gajim-update-available')
+    version: str
+    setup_url: str
+
+
+@dataclass
+class MUCNicknameChanged(ApplicationEvent):
+    name: str = field(init=False, default='muc-nickname-changed')
+    is_self: bool
+    new_name: str
+    old_name: str
+    timestamp: datetime.datetime
+
+
+@dataclass
+class MUCRoomConfigChanged(ApplicationEvent):
+    name: str = field(init=False, default='muc-room-config-changed')
+    timestamp: datetime.datetime
+    status_codes: set[StatusCode]
+
+
+@dataclass
+class MUCRoomConfigFinished(ApplicationEvent):
+    name: str = field(init=False, default='muc-room-config-finished')
+    timestamp: datetime.datetime
+
+
+@dataclass
+class MUCRoomPresenceError(ApplicationEvent):
+    name: str = field(init=False, default='muc-room-presence-error')
+    timestamp: datetime.datetime
+    error: str
+
+
+@dataclass
+class MUCRoomKicked(ApplicationEvent):
+    name: str = field(init=False, default='muc-room-kicked')
+    timestamp: datetime.datetime
+    status_codes: set[StatusCode] | None
+    reason: str | None
+    actor: str | None
+
+
+@dataclass
+class MUCRoomDestroyed(ApplicationEvent):
+    name: str = field(init=False, default='muc-room-destroyed')
+    timestamp: datetime.datetime
+    reason: str | None
+    alternate: JID | None
+
+
+@dataclass
+class MUCUserJoined(ApplicationEvent):
+    name: str = field(init=False, default='muc-user-joined')
+    timestamp: datetime.datetime
+    is_self: bool
+    nick: str
+    status_codes: set[StatusCode] | None
+
+
+@dataclass
+class MUCUserLeft(ApplicationEvent):
+    name: str = field(init=False, default='muc-user-left')
+    timestamp: datetime.datetime
+    is_self: bool
+    nick: str
+    status_codes: set[StatusCode] | None
+    reason: str | None
+    actor: str | None
+
+
+@dataclass
+class MUCUserRoleChanged(ApplicationEvent):
+    name: str = field(init=False, default='muc-user-role-changed')
+    timestamp: datetime.datetime
+    is_self: bool
+    nick: str
+    role: Role
+    reason: str | None
+    actor: str | None
+
+
+@dataclass
+class MUCUserAffiliationChanged(ApplicationEvent):
+    name: str = field(init=False, default='muc-user-affiliation-changed')
+    timestamp: datetime.datetime
+    is_self: bool
+    nick: str
+    affiliation: Affiliation
+    reason: str | None
+    actor: str | None
+
+
+@dataclass
+class MUCAffiliationChanged(ApplicationEvent):
+    name: str = field(init=False, default='room-affiliation-changed')
+    timestamp: datetime.datetime
+    nick: str
+    affiliation: Affiliation
+
+
+@dataclass
+class MUCUserStatusShowChanged(ApplicationEvent):
+    name: str = field(init=False, default='muc-user-status-show-changed')
+    timestamp: datetime.datetime
+    is_self: bool
+    nick: str
+    status: str
+    show_value: str
+
+
+@dataclass
+class EncryptionInfo(ApplicationEvent):
+    name: str = field(init=False, default='encryption-check')
+    account: str
+    jid: JID
+    message: EncryptionInfoMsg
+
+
+@dataclass
+class DBMigration(ApplicationEvent):
+    name: str = field(init=False, default='db-migration')
+
+
+@dataclass
+class DBMigrationProgress(ApplicationEvent):
+    name: str = field(init=False, default='db-migration-progress')
+    count: int
+    progress: int
+
+    @property
+    def value(self) -> str:
+        value = 100
+        if self.count != 0:
+            value = self.progress / self.count * 100
+        return f'{value:05.2f}'
+
+
+@dataclass
+class DBMigrationFinished(ApplicationEvent):
+    name: str = field(init=False, default='db-migration-finished')
+
+@dataclass
+class DBMigrationError(ApplicationEvent):
+    name: str = field(init=False, default='db-migration-error')
+    exception: Exception

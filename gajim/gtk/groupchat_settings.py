@@ -1,16 +1,6 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from gi.repository import Gtk
 from nbxmpp.protocol import JID
@@ -18,18 +8,18 @@ from nbxmpp.protocol import JID
 from gajim.common.const import THRESHOLD_OPTIONS
 from gajim.common.i18n import _
 
-from .const import Setting
-from .const import SettingKind
-from .const import SettingType
-from .settings import SettingsBox
+from gajim.gtk.const import Setting
+from gajim.gtk.const import SettingKind
+from gajim.gtk.const import SettingType
+from gajim.gtk.settings import SettingsBox
 
 
 class GroupChatSettings(SettingsBox):
     def __init__(self, account: str, jid: JID) -> None:
-        SettingsBox.__init__(self, account, jid)
-
-        self.get_style_context().add_class('settings-border')
+        SettingsBox.__init__(self, account, str(jid))
+        self.get_style_context().add_class('border')
         self.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.set_size_request(700, -1)
         self.set_valign(Gtk.Align.START)
         self.set_halign(Gtk.Align.CENTER)
 

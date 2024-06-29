@@ -1,88 +1,76 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 from typing import Any
-from typing import Optional
 
 import logging
+import time
 
 import nbxmpp
-from nbxmpp.client import Client as NBXMPPClient
-from nbxmpp.protocol import JID
-from nbxmpp.const import StreamError
-from nbxmpp.const import ConnectionType
-
-from gi.repository import GLib
 from gi.repository import Gio
+from gi.repository import GLib
 from gi.repository import GObject
 from gi.repository import Gtk
+from nbxmpp.client import Client as NBXMPPClient
+from nbxmpp.const import ConnectionType
+from nbxmpp.const import StreamError
+from nbxmpp.namespaces import Namespace
+from nbxmpp.protocol import JID
 
 from gajim.common import app
 from gajim.common import helpers
 from gajim.common import modules
 from gajim.common import passwords
-from gajim.common.events import AccountConnected
-from gajim.common.events import MessageSent
-from gajim.common.events import AccountDisonnected
-from gajim.common.events import PasswordRequired
-from gajim.common.events import PlainConnection
-from gajim.common.events import ShowChanged
-from gajim.common.events import SignedIn
-from gajim.common.events import Notification
-from gajim.common.events import StanzaReceived
-from gajim.common.events import StanzaSent
+from gajim.common.client_modules import ClientModules
 from gajim.common.const import ClientState
 from gajim.common.const import SimpleClientState
+from gajim.common.events import AccountConnected
+from gajim.common.events import AccountDisconnected
+from gajim.common.events import MessageNotSent
+from gajim.common.events import Notification
+from gajim.common.events import PasswordRequired
+from gajim.common.events import PlainConnection
+from gajim.common.events import SignedIn
+from gajim.common.events import StanzaReceived
+from gajim.common.events import StanzaSent
+from gajim.common.helpers import get_account_proxy
 from gajim.common.helpers import get_custom_host
-from gajim.common.helpers import get_user_proxy
-from gajim.common.helpers import warn_about_plain_connection
-from gajim.common.helpers import get_resource
 from gajim.common.helpers import get_idle_status_message
+from gajim.common.helpers import get_resource
 from gajim.common.helpers import Observable
-from gajim.common.idle import Monitor
-from gajim.common.idle import IdleMonitorManager
+from gajim.common.helpers import warn_about_plain_connection
 from gajim.common.i18n import _
+from gajim.common.idle import IdleMonitorManager
+from gajim.common.idle import Monitor
 from gajim.common.structs import OutgoingMessage
+from gajim.common.util.http import create_http_session
 
-from gajim.gui.util import open_window
-
+from gajim.gtk.util import open_window
 
 log = logging.getLogger('gajim.client')
 
 
-IgnoredTlsErrorsT = Optional[set[Gio.TlsCertificateFlags]]
+IgnoredTlsErrorsT = set[Gio.TlsCertificateFlags] | None
 
 
-class Client(Observable):
+class Client(Observable, ClientModules):
     def __init__(self, account: str) -> None:
         Observable.__init__(self, log)
+        ClientModules.__init__(self, account)
         self._client = None
         self._account = account
         self.name = account
-        self._hostname = app.settings.get_account_setting(self._account,
-                                                          'hostname')
-        self._user = app.settings.get_account_setting(self._account, 'name')
-        self.password = None
+
+        address = app.settings.get_account_setting(self._account, 'address')
+        self._address = JID.from_string(address)
 
         self._priority = 0
         self._connect_machine_calls = 0
         self.addressing_supported = False
 
-        self.is_zeroconf = False
-        self.pep = {}
         self.roster_supported = True
 
         self._state = ClientState.DISCONNECTED
@@ -147,11 +135,14 @@ class Client(Observable):
         return self._client.features
 
     @property
-    def local_address(self) -> Optional[str]:
+    def local_address(self) -> str | None:
         address = self._client.local_address
         if address is not None:
             return address.to_string().split(':')[0]
         return None
+
+    def is_destroyed(self) -> bool:
+        return self._destroyed
 
     def set_remove_account(self, value: bool) -> None:
         # Used by the RemoveAccount Assistant to make the Client
@@ -160,32 +151,14 @@ class Client(Observable):
         self._remove_account = value
 
     def _create_client(self) -> None:
-        if self._destroyed:
-            # If we disable an account cleanup() is called and all
-            # modules are unregistered. Because disable_account() does not wait
-            # for the client to properly disconnect, handlers of the
-            # nbxmpp.Client() are emitted after we called cleanup().
-            # After nbxmpp.Client() disconnects and is destroyed we create a
-            # new instance with this method but modules.get_handlers() fails
-            # because modules are already unregistered.
-            # TODO: Make this nicer
-            return
         log.info('Create new nbxmpp client')
         self._client = NBXMPPClient(log_context=self._account)
         self.connection = self._client
-        self._client.set_domain(self._hostname)
-        self._client.set_username(self._user)
+        self._client.set_domain(self._address.domain)
+        self._client.set_username(self._address.localpart)
         self._client.set_resource(get_resource(self._account))
-
-        pass_saved = app.settings.get_account_setting(self._account, 'savepass')
-        if pass_saved:
-            # Request password from keyring only if the user chose to save
-            # his password
-            self.password = passwords.get_password(self._account)
-
-        self._client.set_password(self.password)
-        self._client.set_accepted_certificates(
-            app.cert_store.get_certificates())
+        self._client.set_http_session(create_http_session())
+        self._client.set_supported_fallback_ns([Namespace.REPLY])
 
         self._client.subscribe('resume-failed', self._on_resume_failed)
         self._client.subscribe('resume-successful', self._on_resume_successful)
@@ -205,8 +178,6 @@ class Client(Observable):
 
         log.info('Resume failed')
         self.notify('resume-failed')
-        app.ged.raise_event(ShowChanged(account=self._account,
-                                        show='offline'))
 
     def _on_resume_successful(self,
                               _client: NBXMPPClient,
@@ -218,14 +189,9 @@ class Client(Observable):
         if self._status_sync_on_resume:
             self._status_sync_on_resume = False
             self.update_presence()
-        else:
-            # Normally show is updated when we receive a presence reflection.
-            # On resume, if show has not changed while offline, we don’t send
-            # a new presence so we have to trigger the event here.
-            app.ged.raise_event(ShowChanged(account=self._account,
-                                            show=self._status))
 
         self.notify('state-changed', SimpleClientState.CONNECTED)
+        self.notify('resume-successful')
 
     def _set_client_available(self) -> None:
         self._set_state(ClientState.AVAILABLE)
@@ -270,6 +236,7 @@ class Client(Observable):
                         account=self._account,
                         client=self,
                         cert=cert,
+                        ignored_errors=set(self._client.ignored_tls_errors),
                         error=errors.pop())
 
         elif domain in (StreamError.STREAM, StreamError.BIND):
@@ -290,12 +257,10 @@ class Client(Observable):
             self._destroy_client = True
 
             if error in ('not-authorized', 'no-password'):
-                def _on_password(password: str) -> None:
-                    self.password = password
-                    self._client.set_password(password)
-                    self._prepare_for_connect()
+                def _on_password() -> None:
+                    self.connect()
 
-                app.ged.raise_event(PasswordRequired(conn=self,
+                app.ged.raise_event(PasswordRequired(client=self,
                                                      on_password=_on_password))
 
             app.ged.raise_event(
@@ -307,13 +272,11 @@ class Client(Observable):
         if self._reconnect:
             self._after_disconnect()
             self._schedule_reconnect()
-            app.ged.raise_event(ShowChanged(account=self._account,
-                                            show='error'))
-            self.notify('state-changed', SimpleClientState.RESUME_IN_PREGRESS)
+            if not self._client.resumeable:
+                self.notify('state-changed', SimpleClientState.DISCONNECTED)
+            self.notify('state-changed', SimpleClientState.RESUME_IN_PROGRESS)
 
         else:
-            app.ged.raise_event(ShowChanged(account=self._account,
-                                            show='offline'))
             self._after_disconnect()
             self.notify('state-changed', SimpleClientState.DISCONNECTED)
 
@@ -329,7 +292,7 @@ class Client(Observable):
             self._destroy_client = False
             self._create_client()
 
-        app.ged.raise_event(AccountDisonnected(account=self._account))
+        app.ged.raise_event(AccountDisconnected(account=self._account))
 
     def _on_connection_failed(self,
                               _client: NBXMPPClient,
@@ -361,11 +324,15 @@ class Client(Observable):
         app.ged.raise_event(StanzaReceived(account=self._account,
                                            stanza=stanza))
 
+    def is_own_jid(self, jid: JID | str) -> bool:
+        own_jid = self.get_own_jid()
+        return own_jid.bare_match(jid)
+
     def get_own_jid(self) -> JID:
-        """
+        '''
         Return the last full JID we received on a bind event.
         In case we were never connected it returns the bare JID from config.
-        """
+        '''
         if self._client is not None:
             jid = self._client.get_bound_jid()
             if jid is not None:
@@ -373,6 +340,12 @@ class Client(Observable):
 
         # This returns the bare jid
         return nbxmpp.JID.from_string(app.get_jid_from_account(self._account))
+
+    def get_bound_jid(self) -> JID:
+        assert self._client is not None
+        jid = self._client.get_bound_jid()
+        assert jid is not None
+        return jid
 
     def change_status(self, show: str, message: str) -> None:
         if not message:
@@ -384,16 +357,24 @@ class Client(Observable):
         if show != 'offline':
             self._status = show
 
+            app.settings.set_account_setting(
+                self._account,
+                'last_status',
+                show)
+            app.settings.set_account_setting(
+                self._account,
+                'last_status_msg',
+                helpers.to_one_line(message))
+
         if self._state.is_disconnecting:
-            log.warning('Can\'t change status while '
-                        'disconnect is in progress')
+            log.warning("Can't change status while disconnect is in progress")
             return
 
         if self._state.is_disconnected:
             if show == 'offline':
                 return
 
-            self._prepare_for_connect()
+            self.connect()
             return
 
         if self._state.is_connecting:
@@ -408,7 +389,7 @@ class Client(Observable):
                 self._destroy_client = True
                 self._abort_reconnect()
             else:
-                self._prepare_for_connect()
+                self.connect()
             return
 
         # We are connected
@@ -440,17 +421,12 @@ class Client(Observable):
         if include_muc:
             self.get_module('MUC').update_presence()
 
-    def get_module(self, name: str):
-        return modules.get(self._account, name)
-
     @helpers.call_counter
     def connect_machine(self) -> None:
         log.info('Connect machine state: %s', self._connect_machine_calls)
         if self._connect_machine_calls == 1:
-            self.get_module('Delimiter').get_roster_delimiter()
-        elif self._connect_machine_calls == 2:
             self.get_module('Roster').request_roster()
-        elif self._connect_machine_calls == 3:
+        elif self._connect_machine_calls == 2:
             self._finish_connect()
 
     def _finish_connect(self) -> None:
@@ -467,15 +443,18 @@ class Client(Observable):
         self.get_module('Annotations').request_annotations()
         self.get_module('Blocking').get_blocking_list()
 
+        if app.settings.get_account_setting(self._account, 'publish_tune'):
+            self.get_module('UserTune').set_enabled(True)
+
         self.notify('state-changed', SimpleClientState.CONNECTED)
 
         app.ged.raise_event(SignedIn(account=self._account, conn=self))
         modules.send_stored_publish(self._account)
 
     def send_stanza(self, stanza: Any) -> None:
-        """
+        '''
         Send a stanza untouched
-        """
+        '''
         return self._client.send_stanza(stanza)
 
     def send_message(self, message: OutgoingMessage) -> None:
@@ -484,15 +463,29 @@ class Client(Observable):
             return
 
         stanza = self.get_module('Message').build_message_stanza(message)
-        message.stanza = stanza
-
-        if message.contact is None:
-            # Only Single Message should have no contact
-            self._send_message(message)
-            return
+        message.set_stanza(stanza)
 
         method = message.contact.settings.get('encryption')
         if not method:
+            self._send_message(message)
+            return
+
+        if method == 'OMEMO':
+            try:
+                self.get_module('OMEMO').encrypt_message(message)
+            except Exception:
+                log.exception('Error')
+                text = message.get_text(with_fallback=False)
+                assert text is not None
+                app.ged.raise_event(
+                    MessageNotSent(
+                        client=self._client,
+                        jid=str(message.contact.jid),
+                        message=text,
+                        error=_('Encryption error'),
+                        time=time.time()))
+                return
+
             self._send_message(message)
             return
 
@@ -506,38 +499,21 @@ class Client(Observable):
                                            self._send_message)
 
     def _send_message(self, message: OutgoingMessage) -> None:
-        message.set_sent_timestamp()
-        message.message_id = self.send_stanza(message.stanza)
+        self.send_stanza(message.get_stanza())
+        self.get_module('Message').store_message(message)
 
-        app.ged.raise_event(
-            MessageSent(jid=message.jid,
-                        account=message.account,
-                        message=message.message,
-                        chatstate=message.chatstate,
-                        timestamp=message.timestamp,
-                        additional_data=message.additional_data,
-                        label=message.label,
-                        correct_id=message.correct_id,
-                        message_id=message.message_id,
-                        play_sound=message.play_sound))
+    def connect(
+        self,
+        ignored_tls_errors: IgnoredTlsErrorsT = None
+    ) -> None:
 
-        if message.is_groupchat:
+        log.info('Connect')
+
+        if self._state not in (ClientState.DISCONNECTED,
+                               ClientState.RECONNECT_SCHEDULED):
+            # Do not try to reco while we are already trying
             return
 
-        self.get_module('Message').log_message(message)
-
-    def send_messages(self, jids: list[JID], message: OutgoingMessage) -> None:
-        if not self._state.is_available:
-            log.warning('Trying to send message while offline')
-            return
-
-        # for jid in jids:
-        #     message = message.copy()
-        #     stanza = self.get_module('Message').build_message_stanza(message)
-        #     message.stanza = stanza
-        #     self._send_message(message)
-
-    def _prepare_for_connect(self) -> None:
         custom_host = get_custom_host(self._account)
         if custom_host is not None:
             self._client.set_custom_host(*custom_host)
@@ -556,24 +532,21 @@ class Client(Observable):
                                             'use_plain_connection'):
             self._client.set_connection_types([ConnectionType.PLAIN])
 
-        proxy = get_user_proxy(self._account)
+        proxy = get_account_proxy(self._account)
         if proxy is not None:
             self._client.set_proxy(proxy)
 
-        self.connect()
+        password = passwords.get_password(self._account)
+        self._client.set_password(password)
 
-    def connect(self, ignored_tls_errors: IgnoredTlsErrorsT = None) -> None:
-        if self._state not in (ClientState.DISCONNECTED,
-                               ClientState.RECONNECT_SCHEDULED):
-            # Do not try to reco while we are already trying
-            return
-
-        log.info('Connect')
-
+        self._client.set_accepted_certificates(
+            app.cert_store.get_certificates())
         self._client.set_ignored_tls_errors(ignored_tls_errors)
+
         self._reconnect = True
         self._disable_reconnect_timer()
         self._set_state(ClientState.CONNECTING)
+        self.notify('state-changed', SimpleClientState.CONNECTING)
 
         if warn_about_plain_connection(self._account,
                                        self._client.connection_types):
@@ -586,20 +559,21 @@ class Client(Observable):
 
     def _schedule_reconnect(self) -> None:
         self._set_state(ClientState.RECONNECT_SCHEDULED)
-        log.info("Reconnect to %s in 3s", self._account)
+        log.info('Reconnect to %s in 3s', self._account)
         self._reconnect_timer_source = GLib.timeout_add_seconds(
-            3, self._prepare_for_connect)
+            3, self.connect)
 
     def _abort_reconnect(self) -> None:
         self._set_state(ClientState.DISCONNECTED)
         self._disable_reconnect_timer()
-        app.ged.raise_event(ShowChanged(account=self._account, show='offline'))
 
         if self._destroy_client:
             self._client.destroy()
             self._client = None
             self._destroy_client = False
             self._create_client()
+
+        self.notify('state-changed', SimpleClientState.DISCONNECTED)
 
     def _disable_reconnect_timer(self) -> None:
         if self._reconnect_timer_source is not None:
@@ -663,12 +637,7 @@ class Client(Observable):
             Monitor.disconnect(self._idle_handler_id)
             app.app.disconnect(self._screensaver_handler_id)
         if self._client is not None:
-            # cleanup() is called before nbmxpp.Client has disconnected,
-            # when we disable the account. So we need to unregister
-            # handlers here.
-            # TODO: cleanup() should not be called before disconnect is finished
-            for handler in modules.get_handlers(self):
-                self._client.unregister_handler(handler)
+            self._client.destroy()
         modules.unregister_modules(self)
 
     def quit(self, kill_core: bool) -> None:

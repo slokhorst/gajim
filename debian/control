@@ -1,0 +1,69 @@
+Source: gajim-nightly
+Section: net
+Priority: optional
+Maintainer: Gajim Maintainers <ci@gajim.org>
+Build-Depends:
+    debhelper-compat (= 13),
+    dh-python,
+    pybuild-plugin-pyproject,
+    gettext (>= 0.17-4),
+    libglib2.0-dev,
+    python3-all,
+    python3-css-parser,
+    python3-gi,
+    python3-gi-cairo,
+    python3-nbxmpp-nightly (>=20240621),
+    python3-omemo-dr (>=20230527),
+    python3-setuptools,
+    python3-packaging,
+    python3-cryptography (>=3.4.8),
+    python3-pil (>=9.1.0),
+    python3-sqlalchemy (>=2.0.19),
+    python3-emoji (>=2.6.0),
+    gir1.2-gtk-3.0 (>=3.24.30),
+    gir1.2-gtksource-4,
+Rules-Requires-Root: no
+Standards-Version: 4.1.4
+Homepage: https://gajim.org/
+Vcs-Git: https://dev.gajim.org/gajim/gajim.git
+Vcs-Browser: https://dev.gajim.org/gajim/gajim/tree/master
+
+Package: gajim-nightly
+Architecture: all
+Depends:
+    ${misc:Depends},
+    ${python3:Depends},
+    desktop-file-utils,
+    python3 (>= 3.10),
+    python3-gi (>= 3.42.0),
+    python3-gi-cairo (>= 1.14.0~),
+    python3-nbxmpp-nightly (>=20240621),
+    python3-omemo-dr (>=20230527),
+    gir1.2-pango-1.0 (>= 1.50.0),
+    gir1.2-gtk-3.0 (>= 3.24.30),
+    gir1.2-gtksource-4,
+Recommends:
+    ca-certificates,
+    fonts-noto-color-emoji,
+    gir1.2-gsound-1.0,
+    gir1.2-gspell-1,
+    gir1.2-gupnpigd-1.0,
+    gir1.2-secret-1,
+    gir1.2-farstream-0.2,
+    gir1.2-gstreamer-1.0,
+    gir1.2-gst-plugins-base-1.0,
+    gir1.2-ayatanaappindicator3-0.1,
+    gstreamer1.0-plugins-ugly,
+    gstreamer1.0-libav,
+    gstreamer1.0-gtk3,
+    notification-daemon,
+    pulseaudio-utils | alsa-utils | sox | oss4-base,
+    python3-sentry-sdk,
+Suggests:
+    libxss1,
+Breaks: gajim
+Replaces: gajim-default-nightly
+Description: Fully-featured XMPP chat client
+ Gajim aims to be an easy to use and fully-featured XMPP client.
+ Just chat with your friends or family, easily share pictures and 
+ thoughts or discuss the news with your groups.

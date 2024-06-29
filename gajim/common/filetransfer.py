@@ -1,21 +1,10 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-from typing import Optional
 
-from gajim.common.helpers import Observable
 from gajim.common.const import FTState
+from gajim.common.helpers import Observable
 
 
 class FileTransfer(Observable):
@@ -27,12 +16,11 @@ class FileTransfer(Observable):
 
         self._account = account
 
-        self._seen: int = 0
-        self.size: int = 0
+        self._progress = 0
 
         self._state = FTState.INIT
         self._error_text: str = ''
-        self._error_domain: Optional[str] = None
+        self._error_domain: str | None = None
 
     @property
     def account(self) -> str:
@@ -43,16 +31,6 @@ class FileTransfer(Observable):
         return self._state
 
     @property
-    def seen(self) -> int:
-        return self._seen
-
-    @property
-    def is_complete(self) -> bool:
-        if self.size == 0:
-            return False
-        return self._seen >= self.size
-
-    @property
     def filename(self) -> str:
         raise NotImplementedError
 
@@ -61,12 +39,17 @@ class FileTransfer(Observable):
         return self._error_text
 
     @property
-    def error_domain(self) -> Optional[str]:
+    def error_domain(self) -> str | None:
         return self._error_domain
 
+    def get_progress(self) -> float:
+        return self._progress
+
+    def set_progress(self, progress: float) -> None:
+        self._progress = progress
+        self.update_progress()
+
     def get_state_description(self) -> str:
-        if self._state is None:
-            return ''
         return self._state_descriptions.get(self._state, '')
 
     def set_preparing(self) -> None:

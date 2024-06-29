@@ -1,25 +1,15 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
-from typing import List
-from typing import Optional
+from typing import Any
 
 import locale
 
-from gi.repository import Gdk, GdkPixbuf
+from gi.repository import Gdk
+from gi.repository import GdkPixbuf
 from gi.repository import GLib
 from gi.repository import GObject
 from gi.repository import Gtk
@@ -27,20 +17,21 @@ from gi.repository import Pango
 
 from gajim.common import app
 from gajim.common import types
-from gajim.common.i18n import _
 from gajim.common.const import AvatarSize
 from gajim.common.const import Direction
 from gajim.common.helpers import validate_jid
+from gajim.common.i18n import _
+from gajim.common.modules.contacts import BareContact
 
-from .builder import get_builder
-from .contacts_flowbox import ContactsFlowBox
-from .util import AccountBadge
+from gajim.gtk.builder import get_builder
+from gajim.gtk.contacts_flowbox import ContactsFlowBox
+from gajim.gtk.util import AccountBadge
 
 
 class ContactRow(Gtk.ListBoxRow):
     def __init__(self,
                  account: str,
-                 contact: Optional[types.BareContact],
+                 contact: types.BareContact | None,
                  jid: str,
                  name: str,
                  show_account: bool
@@ -67,9 +58,6 @@ class ContactRow(Gtk.ListBoxRow):
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         box.set_hexpand(True)
-
-        if self._name is None:
-            self._name = _('Invite New Contact')
 
         self._name_label = Gtk.Label(label=self._name)
         self._name_label.set_ellipsize(Pango.EllipsizeMode.END)
@@ -103,7 +91,7 @@ class ContactRow(Gtk.ListBoxRow):
         self.show_all()
 
     def _get_avatar_image(self,
-                          contact: Optional[types.BareContact]
+                          contact: types.BareContact | None
                           ) -> Gtk.Image:
         if contact is None:
             icon_name = 'avatar-default'
@@ -121,8 +109,6 @@ class ContactRow(Gtk.ListBoxRow):
     def get_search_text(self):
         if self._contact is None:
             return str(self.jid)
-        if self._show_account:
-            return f'{self._name} {self.jid} {self._account_label}'
         return f'{self._name} {self.jid}'
 
 
@@ -149,7 +135,7 @@ class GroupChatInviter(Gtk.Box):
         self._room_jid = room_jid
 
         self._new_contact_row_visible = False
-        self._new_contact_rows: dict[str, Optional[ContactRow]] = {}
+        self._new_contact_rows: dict[str, ContactRow | None] = {}
         self._accounts: list[list[str]] = []
 
         self._ui.search_entry.connect(
@@ -234,6 +220,7 @@ class GroupChatInviter(Gtk.Box):
             show_account = len(self._accounts) > 1
             client = app.get_client(account)
             contact = client.get_module('Contacts').get_contact(jid)
+            assert isinstance(contact, BareContact)
             row = ContactRow(account,
                              contact,
                              str(contact.jid),
@@ -342,7 +329,7 @@ class GroupChatInviter(Gtk.Box):
 
     def _filter_func(self,
                      row: ContactRow,
-                     _user_data: Optional[object]
+                     _user_data: Any | None
                      ) -> bool:
         search_text = self._ui.search_entry.get_text().lower()
         search_text_list = search_text.split()
@@ -357,7 +344,7 @@ class GroupChatInviter(Gtk.Box):
     @staticmethod
     def _sort_func(row1: ContactRow,
                    row2: ContactRow,
-                   _user_data: Optional[object]
+                   _user_data: Any | None
                    ) -> int:
         name1 = row1.get_search_text()
         name2 = row2.get_search_text()
@@ -394,5 +381,5 @@ class GroupChatInviter(Gtk.Box):
     def focus_search_entry(self) -> None:
         self._ui.search_entry.grab_focus()
 
-    def get_invitees(self) -> List[str]:
+    def get_invitees(self) -> list[str]:
         return self._invitees_box.get_contact_jids()

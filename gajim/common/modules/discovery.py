@@ -1,30 +1,31 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 # XEP-0030: Service Discovery
 
+from __future__ import annotations
+
 import nbxmpp
-from nbxmpp.namespaces import Namespace
-from nbxmpp.structs import StanzaHandler
-from nbxmpp.errors import StanzaError
 from nbxmpp.errors import is_error
+from nbxmpp.errors import StanzaError
+from nbxmpp.modules.muc.util import MucInfoResult
+from nbxmpp.namespaces import Namespace
+from nbxmpp.protocol import Iq
+from nbxmpp.protocol import JID
+from nbxmpp.structs import DiscoInfo
+from nbxmpp.structs import IqProperties
+from nbxmpp.structs import StanzaHandler
+from nbxmpp.task import Task
 
 from gajim.common import app
-from gajim.common.events import ServerDiscoReceived
+from gajim.common import types
 from gajim.common.events import MucDiscoUpdate
-from gajim.common.modules.util import as_task
+from gajim.common.events import ServerDiscoReceived
 from gajim.common.modules.base import BaseModule
+from gajim.common.modules.contacts import BareContact
+from gajim.common.modules.contacts import GroupchatContact
+from gajim.common.modules.util import as_task
 
 
 class Discovery(BaseModule):
@@ -35,7 +36,7 @@ class Discovery(BaseModule):
         'disco_items',
     ]
 
-    def __init__(self, con):
+    def __init__(self, con: types.Client) -> None:
         BaseModule.__init__(self, con)
 
         self.handlers = [
@@ -49,22 +50,22 @@ class Discovery(BaseModule):
                           ns=Namespace.DISCO_ITEMS),
         ]
 
-        self._account_info = None
-        self._server_info = None
+        self._account_info: DiscoInfo | None = None
+        self._server_info: DiscoInfo | None = None
 
     @property
-    def account_info(self):
+    def account_info(self) -> DiscoInfo | None:
         return self._account_info
 
     @property
-    def server_info(self):
+    def server_info(self) -> DiscoInfo | None:
         return self._server_info
 
-    def discover_server_items(self):
+    def discover_server_items(self) -> None:
         server = self._con.get_own_jid().domain
         self.disco_items(server, callback=self._server_items_received)
 
-    def _server_items_received(self, task):
+    def _server_items_received(self, task: Task) -> None:
         try:
             result = task.finish()
         except StanzaError as error:
@@ -80,7 +81,7 @@ class Discovery(BaseModule):
                 continue
             self.disco_info(item.jid, callback=self._server_items_info_received)
 
-    def _server_items_info_received(self, task):
+    def _server_items_info_received(self, task: Task) -> None:
         try:
             result = task.finish()
         except StanzaError as error:
@@ -99,11 +100,11 @@ class Discovery(BaseModule):
 
         app.ged.raise_event(ServerDiscoReceived())
 
-    def discover_account_info(self):
+    def discover_account_info(self) -> None:
         own_jid = self._con.get_own_jid().bare
         self.disco_info(own_jid, callback=self._account_info_received)
 
-    def _account_info_received(self, task):
+    def _account_info_received(self, task: Task) -> None:
         try:
             result = task.finish()
         except StanzaError as error:
@@ -123,12 +124,12 @@ class Discovery(BaseModule):
 
         self._con.get_module('Caps').update_caps()
 
-    def discover_server_info(self):
+    def discover_server_info(self) -> None:
         # Calling this method starts the connect_maschine()
         server = self._con.get_own_jid().domain
         self.disco_info(server, callback=self._server_info_received)
 
-    def _server_info_received(self, task):
+    def _server_info_received(self, task: Task) -> None:
         try:
             result = task.finish()
         except StanzaError as error:
@@ -149,13 +150,19 @@ class Discovery(BaseModule):
 
         self._con.connect_machine(restart=True)
 
-    def _parse_transports(self, info):
+    def _parse_transports(self, info: DiscoInfo) -> None:
         for identity in info.identities:
-            if identity.category not in ('gateway', 'headline'):
+            if identity.category != 'gateway':
                 continue
 
             self._log.info('Found transport: %s %s %s',
                            info.jid, identity.category, identity.type)
+
+            for child in self._con.get_module(
+                    'Contacts').get_contacts_with_domain(info.jid.domain):
+                if not isinstance(child, BareContact | GroupchatContact):
+                    continue
+                child.update_gateway_type(identity.type)
 
             jid = str(info.jid)
             if jid not in app.transport_type:
@@ -166,12 +173,13 @@ class Discovery(BaseModule):
             else:
                 self._con.available_transports[identity.type] = [jid]
 
-    def _answer_disco_items(self, _con, stanza, _properties):
+    def _answer_disco_items(self,
+                            _con: types.xmppClient,
+                            stanza: Iq,
+                            _properties: IqProperties
+                            ) -> None:
         from_ = stanza.getFrom()
         self._log.info('Answer disco items to %s', from_)
-
-        if self._con.get_module('AdHocCommands').command_items_query(stanza):
-            raise nbxmpp.NodeProcessed
 
         node = stanza.getTagAttr('query', 'node')
         if node is None:
@@ -179,27 +187,25 @@ class Discovery(BaseModule):
             self._con.connection.send(result)
             raise nbxmpp.NodeProcessed
 
-        if node == Namespace.COMMANDS:
-            self._con.get_module('AdHocCommands').command_list_query(stanza)
-            raise nbxmpp.NodeProcessed
-
-    def _answer_disco_info(self, _con, stanza, _properties):
+    def _answer_disco_info(self,
+                           _con: types.xmppClient,
+                           stanza: Iq,
+                           _properties: IqProperties
+                           ) -> None:
         from_ = stanza.getFrom()
         self._log.info('Answer disco info %s', from_)
         if str(from_).startswith('echo.'):
             # Service that echos all stanzas, ignore it
             raise nbxmpp.NodeProcessed
 
-        if self._con.get_module('AdHocCommands').command_info_query(stanza):
-            raise nbxmpp.NodeProcessed
-
     @as_task
     def disco_muc(self,
-                  jid,
-                  request_vcard=False,
-                  allow_redirect=False):
+                  jid: JID | str,
+                  request_vcard: bool = False,
+                  allow_redirect: bool = False
+                  ) -> MucInfoResult | None:
 
-        _task = yield
+        _task = yield  # noqa: F841
 
         self._log.info('Request MUC info for %s', jid)
 
@@ -222,22 +228,27 @@ class Discovery(BaseModule):
         if result.vcard is not None:
             avatar, avatar_sha = result.vcard.get_avatar()
             if avatar is not None:
-                if not app.interface.avatar_exists(avatar_sha):
-                    app.interface.save_avatar(avatar)
+                if not app.app.avatar_storage.avatar_exists(avatar_sha):
+                    app.app.avatar_storage.save_avatar(avatar)
 
-                app.storage.cache.set_muc(result.info.jid, 'avatar', avatar_sha)
-                app.interface.avatar_storage.invalidate_cache(result.info.jid)
+                app.storage.cache.set_muc(
+                    self._account, result.info.jid, 'avatar', avatar_sha)
+                app.app.avatar_storage.invalidate_cache(result.info.jid)
 
         self._con.get_module('VCardAvatars').muc_disco_info_update(result.info)
         app.ged.raise_event(MucDiscoUpdate(
             account=self._account,
             jid=result.info.jid))
 
+        contact = self._con.get_module('Contacts').get_contact(
+            result.info.jid, groupchat=True)
+        contact.notify('disco-info-update')
+
         yield result
 
     @as_task
-    def disco_contact(self, contact):
-        _task = yield
+    def disco_contact(self, contact: types.ContactT):
+        _task = yield  # noqa: F841
 
         result = yield self.disco_info(contact.jid)
         if is_error(result):

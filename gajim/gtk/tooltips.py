@@ -12,46 +12,35 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
-import os
-import time
 import logging
+import os
 from datetime import datetime
 
-from gi.repository import Gtk
+from gi.repository import GdkPixbuf
 from gi.repository import GLib
+from gi.repository import Gtk
 from gi.repository import Pango
-
 from nbxmpp import JID
 
 from gajim.common import app
-from gajim.common import types
 from gajim.common import helpers
+from gajim.common import types
 from gajim.common.const import AvatarSize
-from gajim.common.const import PEPEventType
-from gajim.common.i18n import Q_
-from gajim.common.i18n import _
 from gajim.common.file_props import FileProp
+from gajim.common.i18n import _
+from gajim.common.i18n import p_
+from gajim.common.modules.contacts import BareContact
 
-from .avatar import get_show_circle
-from .builder import get_builder
-from .util import format_tune
-from .util import format_location
+from gajim.gtk.avatar import get_show_circle
+from gajim.gtk.builder import get_builder
+from gajim.gtk.util import format_location
+from gajim.gtk.util import format_tune
 
-log = logging.getLogger('gajim.gui.tooltips')
+log = logging.getLogger('gajim.gtk.tooltips')
 
 
 class GCTooltip:
@@ -75,16 +64,16 @@ class GCTooltip:
         return False, self._ui.tooltip_grid
 
     def _hide_grid_children(self) -> None:
-        """
+        '''
         Hide all Elements of the Tooltip Grid
-        """
+        '''
         for child in self._ui.tooltip_grid.get_children():
             child.hide()
 
     def _populate_grid(self, contact: types.GroupchatParticipant) -> None:
-        """
+        '''
         Populate the Tooltip Grid with data of from the contact
-        """
+        '''
         self._hide_grid_children()
 
         self._ui.nick.set_text(contact.name)
@@ -118,72 +107,73 @@ class GCTooltip:
         self._ui.avatar.show()
         self._ui.fillelement.show()
 
-        app.plugin_manager.gui_extension_point(
+        app.plugin_manager.extension_point(
             'gc_tooltip_populate', self, contact, self._ui.tooltip_grid)
 
     def destroy(self) -> None:
         self._ui.tooltip_grid.destroy()
 
 
-class RosterTooltip:
+class ContactTooltip:
     def __init__(self) -> None:
-        self._row = None
-        self._ui = get_builder('roster_tooltip.ui')
+        self._contact = None
+        self._ui = get_builder('contact_tooltip.ui')
 
     def clear_tooltip(self) -> None:
-        self._row = None
+        self._contact = None
         for widget in self._ui.resources_box.get_children():
             widget.destroy()
         for widget in self._ui.tooltip_grid.get_children():
             widget.hide()
 
     def get_tooltip(self,
-                    row: Gtk.TreePath,
                     contact: types.BareContact) -> tuple[bool, Gtk.Grid]:
-        if self._row == row:
+        if self._contact == contact:
             return True, self._ui.tooltip_grid
 
+        self.clear_tooltip()
         self._populate_grid(contact)
-        self._row = row
+        self._contact = contact
         return False, self._ui.tooltip_grid
 
     def _populate_grid(self, contact: types.BareContact) -> None:
-        self.clear_tooltip()
         scale = self._ui.tooltip_grid.get_scale_factor()
 
-        # Avatar
         surface = contact.get_avatar(AvatarSize.TOOLTIP, scale)
+        assert not isinstance(surface, GdkPixbuf.Pixbuf)
         self._ui.avatar.set_from_surface(surface)
         self._ui.avatar.show()
 
-        # Name
         self._ui.name.set_markup(GLib.markup_escape_text(contact.name))
         self._ui.name.show()
 
-        # JID
         self._ui.jid.set_text(str(contact.jid))
         self._ui.jid.show()
 
-        # Resources with show, status, priority
-        self._add_resources(contact)
+        if contact.has_resources():
+            for res in contact.iter_resources():
+                self._add_resources(res)
+        else:
+            self._add_resources(contact)
 
-        # Subscription
+        self._ui.resources_box.show_all()
+
         if contact.subscription and contact.subscription != 'both':
             # 'both' is the normal subscription value, just omit it
             self._ui.sub.set_text(helpers.get_uf_sub(contact.subscription))
             self._ui.sub.show()
             self._ui.sub_label.show()
 
-        # PEP info
-        # TODO
-        # self._append_pep_info(contact)
+        self._append_pep_info(contact)
 
-        app.plugin_manager.gui_extension_point(
+        app.plugin_manager.extension_point(
             'roster_tooltip_populate', self, contact)
 
         # This sets the bottom-most widget to expand, in case the avatar
         # takes more space than the labels
         row_count = 1
+        last_widget = self._ui.tooltip_grid.get_child_at(1, 1)
+        assert last_widget is not None
         while row_count < 6:
             widget = self._ui.tooltip_grid.get_child_at(1, row_count)
             if widget and widget.get_visible():
@@ -193,73 +183,87 @@ class RosterTooltip:
                 break
         last_widget.set_vexpand(True)
 
-    def _add_resources(self, contact: types.BareContact) -> None:
-        for resource in contact.iter_resources():
-            resource_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    def _add_resources(
+        self,
+        contact: types.BareContact | types.ResourceContact
+    ) -> None:
 
-            show_surface = get_show_circle(
-                resource.show,
-                AvatarSize.SHOW_CIRCLE,
-                self._ui.tooltip_grid.get_scale_factor())
-            show_image = Gtk.Image.new_from_surface(show_surface)
-            show_image.set_halign(Gtk.Align.START)
-            show_image.set_valign(Gtk.Align.CENTER)
+        resource_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
-            resource_string = GLib.markup_escape_text(resource.jid.resource)
-            resource_label = Gtk.Label()
-            resource_label.set_halign(Gtk.Align.START)
-            resource_label.set_xalign(0)
-            resource_label.set_ellipsize(Pango.EllipsizeMode.END)
-            resource_label.set_max_width_chars(30)
-            resource_label.set_text(resource_string)
+        show_surface = get_show_circle(
+            contact.show,
+            AvatarSize.SHOW_CIRCLE,
+            self._ui.tooltip_grid.get_scale_factor())
+        show_image = Gtk.Image(
+            surface=show_surface,
+            halign=Gtk.Align.START,
+            valign=Gtk.Align.CENTER)
 
-            base_box = Gtk.Box(spacing=6)
-            base_box.add(show_image)
-            base_box.add(resource_label)
-            resource_box.add(base_box)
+        show_string = helpers.get_uf_show(contact.show.value)
 
-            if resource.status:
-                status_text = GLib.markup_escape_text(resource.status)
-                status_label = Gtk.Label(label=status_text)
-                status_label.set_halign(Gtk.Align.START)
-                status_label.set_xalign(0)
-                status_label.set_ellipsize(Pango.EllipsizeMode.END)
-                status_label.set_max_width_chars(30)
-                resource_box.add(status_label)
+        resource_string = ''
+        if contact.jid.resource is not None:
+            escaped_resource = GLib.markup_escape_text(contact.jid.resource)
+            resource_string = f' ({escaped_resource})'
 
-            if resource.idle_time:
-                idle_time = time.localtime(resource.idle_time)
-                idle_time = datetime(*(idle_time[:6]))
-                current = datetime.now()
-                if idle_time.date() == current.date():
-                    formatted = idle_time.strftime('%X')
-                else:
-                    formatted = idle_time.strftime('%c')
-                idle_text = _('Idle since: %s') % formatted
-                idle_label = Gtk.Label(label=idle_text)
-                idle_label.set_halign(Gtk.Align.START)
-                idle_label.set_xalign(0)
-                resource_box.add(idle_label)
+        resource_label = Gtk.Label(
+            ellipsize=Pango.EllipsizeMode.END,
+            halign=Gtk.Align.START,
+            label=f'{show_string}{resource_string}',
+            max_width_chars=30,
+            xalign=0,
+        )
 
-            app.plugin_manager.gui_extension_point(
-                'roster_tooltip_resource_populate',
-                resource_box,
-                resource)
+        base_box = Gtk.Box(spacing=6)
+        base_box.add(show_image)
+        base_box.add(resource_label)
+        resource_box.add(base_box)
 
-            self._ui.resources_box.add(resource_box)
+        if contact.status:
+            status_label = Gtk.Label(
+                ellipsize=Pango.EllipsizeMode.END,
+                halign=Gtk.Align.START,
+                label=contact.status,
+                max_width_chars=30,
+                xalign=0,
+            )
+            resource_box.add(status_label)
 
-        self._ui.resources_box.show_all()
+        if idle_datetime := contact.idle_datetime:
+            current = datetime.now()
+            if idle_datetime.date() == current.date():
+                format_string = app.settings.get('time_format')
+                formatted = idle_datetime.strftime(format_string)
+            else:
+                format_string = app.settings.get('date_time_format')
+                formatted = idle_datetime.strftime(format_string)
+            idle_text = _('Idle since: %s') % formatted
+            idle_label = Gtk.Label(
+                halign=Gtk.Align.START,
+                label=idle_text,
+                xalign=0,
+            )
+            resource_box.add(idle_label)
+
+        app.plugin_manager.extension_point(
+            'roster_tooltip_resource_populate',
+            resource_box,
+            contact)
+
+        self._ui.resources_box.add(resource_box)
 
     def _append_pep_info(self, contact: types.BareContact) -> None:
-        if PEPEventType.TUNE in contact.pep:
-            tune = format_tune(*contact.pep[PEPEventType.TUNE])
-            self._ui.tune.set_markup(tune)
+        tune = contact.get_tune()
+        if tune is not None:
+            tune_str = format_tune(tune)
+            self._ui.tune.set_markup(tune_str)
             self._ui.tune.show()
             self._ui.tune_label.show()
 
-        if PEPEventType.LOCATION in contact.pep:
-            location = format_location(contact.pep[PEPEventType.LOCATION])
-            self._ui.location.set_markup(location)
+        location = contact.get_location()
+        if location is not None:
+            location_str = format_location(location)
+            self._ui.location.set_markup(location_str)
             self._ui.location.show()
             self._ui.location_label.show()
 
@@ -299,50 +303,61 @@ class FileTransfersTooltip:
         properties: list[tuple[str, str]] = []
         name = file_prop.name
         if file_prop.type_ == 'r':
+            assert file_prop.file_name is not None
             file_name = os.path.split(file_prop.file_name)[1]
         else:
+            assert file_prop.name is not None
             file_name = file_prop.name
         properties.append((_('File Name: '),
                            GLib.markup_escape_text(file_name)))
 
+        assert file_prop.tt_account is not None
         client = app.get_client(file_prop.tt_account)
         if file_prop.type_ == 'r':
-            type_ = Q_('?Noun:Download')
+            type_ = p_('Noun', 'Download')
             actor = _('Sender: ')
             sender = JID.from_string(file_prop.sender)
-            name = client.get_module('Contacts').get_contact(sender.bare).name
+            contact = client.get_module('Contacts').get_contact(sender.bare)
+            assert isinstance(contact, BareContact)
+            name = contact.name
         else:
-            type_ = Q_('?Noun:Upload')
+            type_ = p_('Noun', 'Upload')
             actor = _('Recipient: ')
             receiver = JID.from_string(file_prop.receiver)
-            name = client.get_module('Contacts').get_contact(
-                receiver.bare).name
-        properties.append((Q_('?transfer type:Type: '), type_))
+            contact = client.get_module('Contacts').get_contact(receiver.bare)
+            assert isinstance(contact, BareContact)
+            name = contact.name
+        properties.append((p_('File transfer type', 'Type: '), type_))
         properties.append((actor, GLib.markup_escape_text(name)))
 
-        transfered_len = file_prop.received_len
-        if not transfered_len:
-            transfered_len = 0
-        properties.append((Q_('?transfer status:Transferred: '),
-                           GLib.format_size_full(transfered_len, self.units)))
+        transferred_len = file_prop.received_len
+        if not transferred_len:
+            transferred_len = 0
+        properties.append((p_('File transfer state', 'Transferred: '),
+                           GLib.format_size_full(transferred_len, self.units)))
         status = self._get_current_status(file_prop)
-        properties.append((Q_('?transfer status:Status: '), status))
+        properties.append((p_('File transfer state', 'Status: '), status))
         file_desc = file_prop.desc or ''
         properties.append((_('Description: '),
                            GLib.markup_escape_text(file_desc)))
 
         while properties:
             property_ = properties.pop(0)
-            label = Gtk.Label()
-            label.set_halign(Gtk.Align.END)
-            label.set_valign(Gtk.Align.CENTER)
-            label.set_markup(property_[0])
+            label = Gtk.Label(
+                halign=Gtk.Align.END,
+                label=property_[0],
+                use_markup=True,
+                valign=Gtk.Align.CENTER,
+            )
+
             ft_grid.attach(label, 0, current_row, 1, 1)
-            label = Gtk.Label()
-            label.set_halign(Gtk.Align.START)
-            label.set_valign(Gtk.Align.START)
-            label.set_line_wrap(True)
-            label.set_markup(property_[1])
+            label = Gtk.Label(
+                halign=Gtk.Align.START,
+                label=property_[1],
+                use_markup=True,
+                valign=Gtk.Align.START,
+                wrap=True,
+            )
             ft_grid.attach(label, 1, current_row, 1, 1)
             current_row += 1
 
@@ -352,17 +367,17 @@ class FileTransfersTooltip:
     @staticmethod
     def _get_current_status(file_prop: FileProp) -> str:
         if file_prop.stopped:
-            return Q_('?transfer status:Aborted')
+            return p_('File transfer state', 'Aborted')
         if file_prop.completed:
-            return Q_('?transfer status:Completed')
+            return p_('File transfer state', 'Completed')
         if file_prop.paused:
-            return Q_('?transfer status:Paused')
+            return p_('File transfer state', 'Paused')
         if file_prop.stalled:
             # stalled is not paused. it is like 'frozen' it stopped alone
-            return Q_('?transfer status:Stalled')
+            return p_('File transfer state', 'Stalled')
 
         if file_prop.connected:
             if file_prop.started:
-                return Q_('?transfer status:Transferring')
-            return Q_('?transfer status:Not started')
-        return Q_('?transfer status:Not started')
+                return p_('File transfer state', 'Transferring')
+            return p_('File transfer state', 'Not started')
+        return p_('File transfer state', 'Not started')

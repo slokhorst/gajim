@@ -39,9 +39,6 @@
 .gajim-user-connected {
     color: rgb(160, 200, 170);
 }
-.gajim-msg-correcting text {
-    background: rgb(240, 230, 170);
-}
 .gajim-notify-message {
 	color: rgb(30, 144, 255);
 }
@@ -68,4 +65,13 @@
 }
 .gajim-status-offline {
     color: rgb(154, 154, 154);
+}
+.gajim-status-connecting {
+    color: rgb(77, 166, 255);
+}
+.gajim-single-emoji-msg {
+    font-size: 36pt
+}
+.gajim-emoji-msg {
+    font-size: 24pt
 }

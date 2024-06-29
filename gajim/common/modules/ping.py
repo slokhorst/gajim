@@ -1,30 +1,22 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 # XEP-0199: XMPP Ping
 
-from typing import Generator
+from __future__ import annotations
 
 import time
+from collections.abc import Generator
 
 from nbxmpp.errors import is_error
+from nbxmpp.structs import CommonResult
 
 from gajim.common import app
+from gajim.common import types
 from gajim.common.events import PingError
 from gajim.common.events import PingReply
 from gajim.common.events import PingSent
-from gajim.common.types import ConnectionT
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import as_task
 
@@ -36,14 +28,16 @@ class Ping(BaseModule):
         'ping',
     ]
 
-    def __init__(self, con: ConnectionT) -> None:
+    def __init__(self, con: types.Client) -> None:
         BaseModule.__init__(self, con)
 
         self.handlers = []
 
     @as_task
-    def send_ping(self, contact) -> Generator:
-        _task = yield
+    def send_ping(self,
+                  contact: types.ContactT
+                  ) -> Generator[CommonResult, None, None]:
+        _task = yield  # noqa: F841
 
         if not app.account_is_available(self._account):
             return

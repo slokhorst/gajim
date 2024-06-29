@@ -1,76 +1,81 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-"""
-Handles Jingle contents (XEP 0166)
-"""
 
-from typing import Any  # pylint: disable=unused-import
-from typing import Dict  # pylint: disable=unused-import
+# Handles Jingle contents (XEP 0166)
+
+
+from __future__ import annotations
+
+from typing import Any
+from typing import TYPE_CHECKING
+
+from collections.abc import Callable
 
 import nbxmpp
 from nbxmpp.namespaces import Namespace
 
 from gajim.common import app
-from gajim.common import configpaths
-from gajim.common.jingle_xtls import SELF_SIGNED_CERTIFICATE
-from gajim.common.jingle_xtls import load_cert_file
+from gajim.common.file_props import FileProp
 
-contents = {}  # type: Dict[str, Any]
+if TYPE_CHECKING:
+    from gajim.common.jingle_session import JingleSession
+    from gajim.common.jingle_transport import JingleTransport
 
-def get_jingle_content(node):
+
+contents: dict[str, Any] = {}
+
+
+def get_jingle_content(node: nbxmpp.Node):
     namespace = node.getNamespace()
     if namespace in contents:
         return contents[namespace](node)
 
 
 class JingleContentSetupException(Exception):
-    """
+    '''
     Exception that should be raised when a content fails to setup.
-    """
+    '''
 
 
 class JingleContent:
-    """
+    '''
     An abstraction of content in Jingle sessions
-    """
+    '''
 
-    def __init__(self, session, transport, senders):
+    def __init__(self,
+                 session: JingleSession,
+                 transport: JingleTransport | None,
+                 senders: str | None
+                 ) -> None:
+
         self.session = session
         self.transport = transport
         # will be filled by JingleSession.add_content()
         # don't uncomment these lines, we will catch more buggy code then
         # (a JingleContent not added to session shouldn't send anything)
-        self.creator = None
-        self.name = None
+        self.creator: str | None = None
+        self.name: str | None = None
         self.accepted = False
         self.sent = False
         self.negotiated = False
 
-        self.media = None
+        self.media: str | None = None
 
         self.senders = senders
         if self.senders is None:
             self.senders = 'both'
 
-        self.allow_sending = True # Used for stream direction, attribute 'senders'
+        # Used for stream direction, attribute 'senders'
+        self.allow_sending = True
 
         # These were found by the Politie
-        self.file_props = None
-        self.use_security = None
+        self.file_props: FileProp | None = None
 
-        self.callbacks = {
+        self.callbacks: dict[str, list[Callable[
+            [nbxmpp.Node, nbxmpp.Node, nbxmpp.Node | None, str],
+            None]]] = {
             # these are called when *we* get stanzas
             'content-accept': [self.__on_transport_info,
                                self.__on_content_accept],
@@ -101,47 +106,69 @@ class JingleContent:
             'session-terminate-sent': [],
         }
 
-    def is_ready(self):
+    def is_ready(self) -> bool:
         return self.accepted and not self.sent
 
-    def __on_content_accept(self, stanza, content, error, action):
+    def __on_content_accept(self,
+                            stanza: nbxmpp.Node,
+                            content: nbxmpp.Node,
+                            error: nbxmpp.Node | None,
+                            action: str
+                            ) -> None:
         self.on_negotiated()
 
-    def on_negotiated(self):
+    def on_negotiated(self) -> None:
         if self.accepted:
             self.negotiated = True
             self.session.content_negotiated(self.media)
 
     def add_remote_candidates(self, candidates):
-        """
+        '''
         Add a list of candidates to the list of remote candidates
-        """
+        '''
         self.transport.remote_candidates = candidates
 
-    def on_stanza(self, stanza, content, error, action):
-        """
+    def on_stanza(self,
+                  stanza: nbxmpp.Node,
+                  content: nbxmpp.Node | None,
+                  error: nbxmpp.Node | None,
+                  action: str
+                  ) -> None:
+        '''
         Called when something related to our content was sent by peer
-        """
+        '''
         if action in self.callbacks:
             for callback in self.callbacks[action]:
                 callback(stanza, content, error, action)
 
-    def __on_transport_replace(self, stanza, content, error, action):
+    def __on_transport_replace(self,
+                               stanza: nbxmpp.Node,
+                               content: nbxmpp.Node,
+                               error: nbxmpp.Node | None,
+                               action: str
+                               ) -> None:
         content.addChild(node=self.transport.make_transport())
 
-    def __on_transport_info(self, stanza, content, error, action):
-        """
+    def __on_transport_info(self,
+                            stanza: nbxmpp.Node,
+                            content: nbxmpp.Node,
+                            error: nbxmpp.Node | None,
+                            action: str
+                            ) -> None:
+        '''
         Got a new transport candidate
-        """
+        '''
         candidates = self.transport.parse_transport_stanza(
             content.getTag('transport'))
         if candidates:
             self.add_remote_candidates(candidates)
 
-    def __content(self, payload=None):
-        """
+    def __content(self,
+                  payload: list[nbxmpp.Node] | None = None
+                  ) -> nbxmpp.Node:
+        '''
         Build a XML content-wrapper for our data
-        """
+        '''
         if payload is None:
             payload = []
         return nbxmpp.Node('content',
@@ -150,39 +177,43 @@ class JingleContent:
                                   'senders': self.senders},
                            payload=payload)
 
-    def send_candidate(self, candidate):
-        """
+    def send_candidate(self, candidate: dict[str, Any]) -> None:
+        '''
         Send a transport candidate for a previously defined transport.
-        """
+        '''
         content = self.__content()
         content.addChild(node=self.transport.make_transport([candidate]))
         self.session.send_transport_info(content)
 
-    def send_error_candidate(self):
-        """
+    def send_error_candidate(self) -> None:
+        '''
         Sends a candidate-error when we can't connect to a candidate.
-        """
+        '''
         content = self.__content()
         tp = self.transport.make_transport(add_candidates=False)
         tp.addChild(name='candidate-error')
         content.addChild(node=tp)
         self.session.send_transport_info(content)
 
-
-    def send_description_info(self):
+    def send_description_info(self) -> None:
         content = self.__content()
         self._fill_content(content)
         self.session.send_description_info(content)
 
-    def __fill_jingle_stanza(self, stanza, content, error, action):
-        """
+    def __fill_jingle_stanza(self,
+                             stanza: nbxmpp.Node,
+                             content: nbxmpp.Node,
+                             error: nbxmpp.Node | None,
+                             action: str
+                             ) -> None:
+        '''
         Add our things to session-initiate stanza
-        """
+        '''
         self._fill_content(content)
         self.sent = True
         content.addChild(node=self.transport.make_transport())
 
-    def _fill_content(self, content):
+    def _fill_content(self, content: nbxmpp.Node) -> None:
         description_node = nbxmpp.simplexml.Node(
             tag=Namespace.JINGLE_FILE_TRANSFER_5 + ' description')
         file_tag = description_node.setTag('file')
@@ -211,35 +242,20 @@ class JingleContent:
                 if hash_data:
                     file_tag.addChild(node=hash_data)
                 pjid = app.get_jid_without_resource(self.session.peerjid)
-                file_info = {'name' : self.file_props.name,
-                             'file-name' : self.file_props.file_name,
-                             'hash' : self.file_props.hash_,
-                             'size' : self.file_props.size,
-                             'date' : self.file_props.date,
-                             'peerjid' : pjid
-                            }
-                self.session.connection.get_module('Jingle').set_file_info(file_info)
+                file_info = {'name': self.file_props.name,
+                             'file-name': self.file_props.file_name,
+                             'hash': self.file_props.hash_,
+                             'size': self.file_props.size,
+                             'date': self.file_props.date,
+                             'peerjid': pjid
+                             }
+                self.session.connection.get_module('Jingle').set_file_info(
+                    file_info)
         desc = file_tag.setTag('desc')
         if self.file_props.desc:
             desc.setData(self.file_props.desc)
-        if self.use_security:
-            security = nbxmpp.simplexml.Node(
-                tag=Namespace.JINGLE_XTLS + ' security')
-            certpath = configpaths.get('MY_CERT') / (SELF_SIGNED_CERTIFICATE
-                                                     + '.cert')
-            cert = load_cert_file(certpath)
-            if cert:
-                digest_algo = (cert.get_signature_algorithm()
-                               .decode('utf-8').split('With')[0])
-                security.addChild('fingerprint').addData(cert.digest(
-                    digest_algo).decode('utf-8'))
-                for m in ('x509', ): # supported authentication methods
-                    method = nbxmpp.simplexml.Node(tag='method')
-                    method.setAttr('name', m)
-                    security.addChild(node=method)
-                content.addChild(node=security)
         content.addChild(node=description_node)
 
-    def destroy(self):
+    def destroy(self) -> None:
         self.callbacks = None
         del self.session.contents[(self.creator, self.name)]

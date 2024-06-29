@@ -1,43 +1,31 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 from typing import Any
-from typing import List
-from typing import Optional
 from typing import cast
 
 import logging
+import pickle
 
 from gi.repository import Gdk
-from gi.repository import Gio
-from gi.repository import GLib
 from gi.repository import Gtk
-
 from nbxmpp.protocol import JID
 
 from gajim.common import app
 from gajim.common.const import AvatarSize
 from gajim.common.i18n import _
 
-from .chat_list_stack import ChatListStack
-from .chat_page import ChatPage
-from .structs import MoveChatToWorkspaceAP
-from .util import open_window
+from gajim.gtk.chat_list_stack import ChatListStack
+from gajim.gtk.chat_page import ChatPage
+from gajim.gtk.menus import get_workspace_menu
+from gajim.gtk.structs import ChatListEntryParam
+from gajim.gtk.util import GajimPopover
+from gajim.gtk.util import open_window
 
-log = logging.getLogger('gajim.gui.workspace_sidebar')
+log = logging.getLogger('gajim.gtk.workspace_sidebar')
 
 
 class WorkspaceSideBar(Gtk.ListBox):
@@ -63,9 +51,9 @@ class WorkspaceSideBar(Gtk.ListBox):
             entries,
             Gdk.DragAction.MOVE)
 
-        self.drag_row: Optional[Workspace] = None
-        self.row_before: Optional[CommonWorkspace] = None
-        self.row_after: Optional[CommonWorkspace] = None
+        self.drag_row: Workspace | None = None
+        self.row_before: CommonWorkspace | None = None
+        self.row_after: CommonWorkspace | None = None
 
         self.connect('drag-motion', self._on_drag_motion)
         self.connect('drag-data-received', self._on_drag_data_received)
@@ -117,12 +105,14 @@ class WorkspaceSideBar(Gtk.ListBox):
                                _info: int,
                                _time: int
                                ) -> None:
-        data = selection_data.get_data().decode('utf-8')
+        data = selection_data.get_data()
         item_type = selection_data.get_data_type().name()
         if item_type == 'WORKSPACE_SIDEBAR_ITEM':
-            self._process_workspace_drop(data)
+            self._process_workspace_drop(data.decode('utf-8'))
         elif item_type == 'CHAT_LIST_ITEM':
-            self._process_chat_list_drop(data, y_coord)
+            account, jid, source_workspace = pickle.loads(data)
+            self._process_chat_list_drop(
+                account, jid, source_workspace, y_coord)
         else:
             log.debug('Unknown item type dropped')
 
@@ -147,28 +137,35 @@ class WorkspaceSideBar(Gtk.ListBox):
         self.store_workspace_order()
         app.window.activate_workspace(workspace_id)
 
-    def _process_chat_list_drop(self, identifier: str, y_coord: int) -> None:
-        account, jid = identifier.split()
-        workspace_row = cast(Workspace, self.get_row_at_y(y_coord))
-        if workspace_row.workspace_id == 'add':
-            return
+    def _process_chat_list_drop(self,
+                                account: str,
+                                jid: JID,
+                                source_workspace: str,
+                                y_coord: int) -> None:
 
-        params = MoveChatToWorkspaceAP(workspace_id=workspace_row.workspace_id,
-                                       account=account,
-                                       jid=JID.from_string(jid))
+        workspace_row = cast(Workspace, self.get_row_at_y(y_coord))
+
+        workspace_id = workspace_row.workspace_id
+        if workspace_row.workspace_id == 'add':
+            workspace_id = ''
+
+        params = ChatListEntryParam(workspace_id=workspace_id,
+                                    source_workspace_id=source_workspace,
+                                    account=account,
+                                    jid=jid)
         app.window.activate_action('move-chat-to-workspace',
                                    params.to_variant())
 
     def _get_row_before(self,
                         row: CommonWorkspace
-                        ) -> Optional[CommonWorkspace]:
+                        ) -> CommonWorkspace | None:
         workspace = cast(
             CommonWorkspace, self.get_row_at_index(row.get_index() - 1))
         return workspace
 
     def _get_row_after(self,
                        row: CommonWorkspace
-                       ) -> Optional[CommonWorkspace]:
+                       ) -> CommonWorkspace | None:
         workspace = cast(
             CommonWorkspace, self.get_row_at_index(row.get_index() + 1))
         return workspace
@@ -212,45 +209,53 @@ class WorkspaceSideBar(Gtk.ListBox):
         self.insert(row, len(self.get_children()) - 1)
 
     def store_workspace_order(self) -> None:
-        workspaces: list[CommonWorkspace] = cast(
-            list[CommonWorkspace], self.get_children())
-        order: list[str] = [row.workspace_id for row in workspaces]
+        workspaces = cast(list[CommonWorkspace], self.get_children())
+        order = [row.workspace_id for row in workspaces]
         order.remove('add')
         app.settings.set_app_setting('workspace_order', order)
 
-    def remove_workspace(self, workspace_id: str) -> bool:
-        if len(self._workspaces) == 1:
-            return False
+    def remove_workspace(self, workspace_id: str) -> None:
         row = self._workspaces.pop(workspace_id)
         self.remove(row)
-        return True
+
+    def get_other_workspace(self,
+                            exclude_workspace_id: str
+                            ) -> str | None:
+
+        for workspace in self._workspaces.values():
+            if workspace.workspace_id != exclude_workspace_id:
+                return workspace.workspace_id
+        return None
 
     def activate_workspace(self, workspace_id: str) -> None:
-        row = cast(CommonWorkspace, self.get_selected_row())
+        row = cast(CommonWorkspace | None, self.get_selected_row())
         if row is not None and row.workspace_id == workspace_id:
             return
 
         row = self._workspaces[workspace_id]
         self.select_row(row)
 
-    def get_active_workspace(self) -> Optional[str]:
-        row = cast(CommonWorkspace, self.get_selected_row())
+    def activate_workspace_number(self, number: int) -> None:
+        row = cast(CommonWorkspace | None, self.get_row_at_index(number))
+        if row is not None and row.workspace_id != 'add':
+            app.window.activate_workspace(row.workspace_id)
+
+    def get_active_workspace(self) -> str | None:
+        row = cast(CommonWorkspace | None, self.get_selected_row())
         if row is None:
             return None
         return row.workspace_id
 
     def get_first_workspace(self) -> str:
-        workspaces: list[CommonWorkspace] = cast(
-            list[CommonWorkspace], self.get_children())
+        workspaces = cast(list[CommonWorkspace], self.get_children())
         for row in workspaces:
             return row.workspace_id
         return ''
 
     def get_workspace_by_id(self,
                             workspace_id: str
-                            ) -> Optional[CommonWorkspace]:
-        workspaces: list[CommonWorkspace] = cast(
-            list[CommonWorkspace], self.get_children())
+                            ) -> CommonWorkspace | None:
+        workspaces = cast(list[CommonWorkspace], self.get_children())
         for row in workspaces:
             if row.workspace_id == workspace_id:
                 return row
@@ -305,6 +310,7 @@ class Workspace(CommonWorkspace):
             entries,
             Gdk.DragAction.MOVE)
         eventbox.connect('drag-begin', self._on_drag_begin)
+        eventbox.connect('drag-end', self._on_drag_end)
         eventbox.connect('drag-data-get', self._on_drag_data_get)
         eventbox.connect('button-press-event', self._popup_menu)
         eventbox.add(overlay)
@@ -312,35 +318,13 @@ class Workspace(CommonWorkspace):
         self.show_all()
 
     def _popup_menu(self, _widget: Gtk.Widget, event: Gdk.EventButton) -> None:
-        if event.button != 3:  # right click
+        if event.button != Gdk.BUTTON_SECONDARY:
             return
 
-        menu = self._get_workspace_menu()
+        menu = get_workspace_menu(self.workspace_id)
 
-        rectangle = Gdk.Rectangle()
-        rectangle.x = int(event.x)
-        rectangle.y = int(event.y)
-        rectangle.width = rectangle.height = 1
-
-        popover = Gtk.Popover.new_from_model(self, menu)
-        popover.set_relative_to(self)
-        popover.set_position(Gtk.PositionType.RIGHT)
-        popover.set_pointing_to(rectangle)
+        popover = GajimPopover(menu, relative_to=self, event=event)
         popover.popup()
-
-    def _get_workspace_menu(self) -> Gio.Menu:
-        menu_items: List[Any] = [
-            ('edit-workspace', _('Edit…')),
-        ]
-        menu = Gio.Menu()
-        for item in menu_items:
-            action, label = item
-            action = f'win.{action}'
-            menuitem = Gio.MenuItem.new(label, action)
-            variant = GLib.Variant('s', self.workspace_id)
-            menuitem.set_action_and_target_value(action, variant)
-            menu.append_item(menuitem)
-        return menu
 
     def update_avatar(self) -> None:
         self._image.update()
@@ -353,17 +337,27 @@ class Workspace(CommonWorkspace):
         self._unread_label.set_visible(bool(count))
 
     def _on_drag_begin(self,
-                       _widget: Gtk.Widget,
+                       row: Workspace,
                        drag_context: Gdk.DragContext
                        ) -> None:
+
         scale = self.get_scale_factor()
-        surface = app.interface.avatar_storage.get_workspace_surface(
+        surface = app.app.avatar_storage.get_workspace_surface(
             self.workspace_id, AvatarSize.WORKSPACE, scale)
         if surface is not None:
             Gtk.drag_set_icon_surface(drag_context, surface)
 
         listbox = cast(WorkspaceSideBar, self.get_parent())
         listbox.set_drag_row(self)
+
+        app.window.highlight_dnd_targets(row, True)
+
+    def _on_drag_end(self,
+                     row: Workspace,
+                     drag_context: Gdk.DragContext
+                     ) -> None:
+
+        app.window.highlight_dnd_targets(row, False)
 
     def _on_drag_data_get(self,
                           _widget: Gtk.Widget,
@@ -374,7 +368,7 @@ class Workspace(CommonWorkspace):
                           ) -> None:
         drop_type = Gdk.Atom.intern_static_string('WORKSPACE_SIDEBAR_ITEM')
         data = self.workspace_id.encode('utf-8')
-        selection_data.set(drop_type, 32, data)
+        selection_data.set(drop_type, 8, data)
 
 
 class AddWorkspace(CommonWorkspace):
@@ -398,12 +392,13 @@ class WorkspaceAvatar(Gtk.Image):
     def __init__(self, workspace_id: str) -> None:
         Gtk.Image.__init__(self)
         self._workspace_id = workspace_id
+        self.get_style_context().add_class('workspace-avatar')
         self.update()
 
     def update(self) -> None:
-        app.interface.avatar_storage.invalidate_cache(self._workspace_id)
+        app.app.avatar_storage.invalidate_cache(self._workspace_id)
         scale = self.get_scale_factor()
-        surface = app.interface.avatar_storage.get_workspace_surface(
+        surface = app.app.avatar_storage.get_workspace_surface(
             self._workspace_id, AvatarSize.WORKSPACE, scale)
         self.set_from_surface(surface)
         name = app.settings.get_workspace_setting(self._workspace_id, 'name')

@@ -1,30 +1,24 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
-from typing import Union
-from typing import Match
+from typing import Any
 
-import string
 import re
+import string
 from dataclasses import dataclass
 from dataclasses import field
+from re import Match
 
 from gi.repository import GLib
 
-from gajim.gui.emoji_data import emoji_data
+from gajim.common import regex
+from gajim.common.const import URIType
+from gajim.common.helpers import parse_uri as analyze_uri
+from gajim.common.helpers import validate_jid
+from gajim.common.util.text import escape_iri_query
 
 PRE = '`'
 STRONG = '*'
@@ -32,7 +26,7 @@ STRIKE = '~'
 EMPH = '_'
 
 WHITESPACE = set(string.whitespace)
-SPAN_DIRS = set([PRE, STRONG, STRIKE, EMPH])
+SPAN_DIRS = {PRE, STRONG, STRIKE, EMPH}
 VALID_SPAN_START = WHITESPACE | SPAN_DIRS
 
 PRE_RX = r'(?P<pre>^```.+?(^```$(.|\Z)))'
@@ -43,17 +37,12 @@ BLOCK_RX = re.compile(PRE_RX + '|' + QUOTE_RX, re.S | re.M)
 BLOCK_NESTED_RX = re.compile(PRE_NESTED_RX + '|' + QUOTE_RX, re.S | re.M)
 UNQUOTE_RX = re.compile(r'^> |^>', re.M)
 
-URI_RX = r'((?P<protocol>[\w-]+://?|www[.])[\S()<>]+?(?=[,]?(\s|\Z)+))'
-URI_RX = re.compile(URI_RX)
-
-ADDRESS_RX = r'(\b(?P<protocol>(xmpp|mailto)+:)?[\w-]*@(.*?\.)+[\w]+([\?].*?(?=([\s\),]|$)))?)'
-ADDRESS_RX = re.compile(ADDRESS_RX)
-
-EMOJI_RX = emoji_data.get_regex()
-EMOJI_RX = re.compile(EMOJI_RX)
+URI_OR_JID_RX = re.compile(
+    fr'(?P<uri>(?<![\w+.-]){regex.IRI})|(?P<jid>{regex.XMPP.jid})')
 
 SD = 0
 SD_POS = 1
+MAX_QUOTE_LEVEL = 20
 
 
 @dataclass
@@ -64,46 +53,43 @@ class StyleObject:
 
 
 @dataclass
-class BaseUri(StyleObject):
+class BaseHyperlink(StyleObject):
     name: str
+    uri: str
     start_byte: int
     end_byte: int
 
     def get_markup_string(self) -> str:
+        href = GLib.markup_escape_text(self.uri)
         text = GLib.markup_escape_text(self.text)
-        return f'<a href="{text}">{text}</a>'
+        return f'<a href="{href}">{text}</a>'
 
 
 @dataclass
-class Uri(BaseUri):
+class Hyperlink(BaseHyperlink):
     name: str = field(default='uri', init=False)
 
 
 @dataclass
-class Address(BaseUri):
+class Address(BaseHyperlink):
     name: str = field(default='address', init=False)
 
 
 @dataclass
-class XMPPAddress(BaseUri):
+class XMPPAddress(BaseHyperlink):
     name: str = field(default='xmppadr', init=False)
 
 
 @dataclass
-class MailAddress(BaseUri):
+class MailAddress(BaseHyperlink):
     name: str = field(default='mailadr', init=False)
-
-
-@dataclass
-class Emoji(StyleObject):
-    name: str = field(default='emoji', init=False)
 
 
 @dataclass
 class Block(StyleObject):
 
     @classmethod
-    def from_match(cls, match: Match[str]) -> Block:
+    def from_match(cls: Any, match: Match[str]) -> Block:
         return cls(start=match.start(),
                    end=match.end(),
                    text=match.group(cls.name))
@@ -113,8 +99,13 @@ class Block(StyleObject):
 class PlainBlock(Block):
     name: str = field(default='plain', init=False)
     spans: list[Span] = field(default_factory=list)
-    uris: list[BaseUri] = field(default_factory=list)
-    emojis: list[Emoji] = field(default_factory=list)
+    uris: list[BaseHyperlink] = field(default_factory=list)
+
+    @classmethod
+    def from_quote_match(cls, match: Match[str]) -> PlainBlock:
+        return cls(start=match.start(),
+                   end=match.end(),
+                   text=match.group('quote'))
 
 
 @dataclass
@@ -184,14 +175,14 @@ def find_byte_index(text: str, index: int):
         if index == index_:
             return byte_index
 
-    raise ValueError('index not in string: %s, %s' % (text, index))
+    raise ValueError(f'index not in string: {text}, {index}')
 
 
-def process(text: Union[str, bytes], nested: bool = False) -> ParsingResult:
+def process(text: str | bytes, level: int = 0) -> ParsingResult:
     if isinstance(text, bytes):
         text = text.decode()
 
-    blocks = _parse_blocks(text, nested)
+    blocks = _parse_blocks(text, level)
     for block in blocks:
         if isinstance(block, PlainBlock):
             offset = 0
@@ -199,23 +190,38 @@ def process(text: Union[str, bytes], nested: bool = False) -> ParsingResult:
             for line in block.text.splitlines(keepends=True):
                 block.spans += _parse_line(line, offset, offset_bytes)
                 block.uris += _parse_uris(line, offset, offset_bytes)
-                block.emojis += _parse_emojis(line, offset)
+
                 offset += len(line)
                 offset_bytes += len(line.encode())
 
         if isinstance(block, QuoteBlock):
-            result = process(block.unquote(), nested=True)
+            result = process(block.unquote(), level=level + 1)
             block.blocks = result.blocks
 
     return ParsingResult(text, blocks)
 
 
-def _parse_blocks(text: str, nested: bool) -> list[Block]:
+def process_uris(text: str | bytes) -> list[BaseHyperlink]:
+    if isinstance(text, bytes):
+        text = text.decode()
+
+    uris: list[BaseHyperlink] = []
+    offset = 0
+    offset_bytes = 0
+    for line in text.splitlines(keepends=True):
+        uris += _parse_uris(line, offset, offset_bytes)
+        offset += len(line)
+        offset_bytes += len(line.encode())
+
+    return uris
+
+
+def _parse_blocks(text: str, level: int) -> list[Block]:
     blocks: list[Block] = []
     text_len = len(text)
     last_end_pos = 0
 
-    rx = BLOCK_NESTED_RX if nested else BLOCK_RX
+    rx = BLOCK_NESTED_RX if level > 0 else BLOCK_RX
 
     for match in rx.finditer(text):
         if match.start() != last_end_pos:
@@ -228,7 +234,10 @@ def _parse_blocks(text: str, nested: bool) -> list[Block]:
         group_dict = match.groupdict()
 
         if group_dict.get('quote') is not None:
-            blocks.append(QuoteBlock.from_match(match))
+            if level > MAX_QUOTE_LEVEL:
+                blocks.append(PlainBlock.from_quote_match(match))
+            else:
+                blocks.append(QuoteBlock.from_match(match))
 
         if group_dict.get('pre') is not None:
             blocks.append(PreBlock.from_match(match))
@@ -298,42 +307,36 @@ def _parse_line(line: str, offset: int, offset_bytes: int) -> list[Span]:
     return spans
 
 
-def _parse_uris(line: str, offset: int, offset_bytes: int) -> list[BaseUri]:
-    uris: list[BaseUri] = []
+def _parse_uris(line: str,
+                offset: int,
+                offset_bytes: int) -> list[BaseHyperlink]:
+    uris: list[BaseHyperlink] = []
 
-    def make(match: Match[str], is_address: bool) -> BaseUri:
-        return _make_link(line,
-                          match.start(),
-                          match.end() - 1,
-                          offset,
-                          offset_bytes,
-                          is_address)
+    def make(start: int, end: int, is_jid: bool) -> BaseHyperlink | None:
+        if line[end - 1] == ',':
+            # Trim one trailing comma
+            end -= 1
+        if '(' in line[:start] and line[end - 1] == ')':
+            # Trim one trailing closing parenthesis if the match is preceded
+            # by an opening one somewhere on the line
+            end -= 1
+        if re.fullmatch('[^:]+:', line[start:end]):
+            # URIs that consist only of a scheme are thusly excluded
+            return None
+        return _make_hyperlink(line,
+                               start,
+                               end - 1,
+                               offset,
+                               offset_bytes,
+                               is_jid)
 
-    for match in URI_RX.finditer(line):
-        uri = make(match, False)
-        uris.append(uri)
-
-    for match in ADDRESS_RX.finditer(line):
-        uri = make(match, True)
-        uris.append(uri)
+    for match in URI_OR_JID_RX.finditer(line):
+        start, end = match.span()
+        hyperlink = make(start, end, bool(match.group('jid')))
+        if hyperlink:
+            uris.append(hyperlink)
 
     return uris
-
-
-def _parse_emojis(line: str, offset: int) -> list[Emoji]:
-    emojis: list[Emoji] = []
-
-    def make(match: Match[str]) -> Emoji:
-        return _make_emoji(line,
-                           match.start(),
-                           match.end() - 1,
-                           offset)
-
-    for match in EMOJI_RX.finditer(line):
-        emoji = make(match)
-        emojis.append(emoji)
-
-    return emojis
 
 
 def _handle_pre_span(line: str,
@@ -379,12 +382,12 @@ def _make_span(line: str,
                       text=text)
 
 
-def _make_link(line: str,
-               start: int,
-               end: int,
-               offset: int,
-               offset_bytes: int,
-               is_address: bool) -> BaseUri:
+def _make_hyperlink(line: str,
+                    start: int,
+                    end: int,
+                    offset: int,
+                    offset_bytes: int,
+                    is_jid: bool) -> BaseHyperlink | None:
 
     text = line[start:end + 1]
 
@@ -394,35 +397,33 @@ def _make_link(line: str,
     start += offset
     end += offset + 1
 
-    if not is_address:
-        cls_ = Uri
-
-    elif text.startswith('xmpp'):
-        cls_ = XMPPAddress
-
-    elif text.startswith('mailto'):
-        cls_ = MailAddress
+    uri = text
+    if is_jid:
+        cls_ = Address
+        try:
+            validate_jid(text)
+        except ValueError:
+            return None
+        uri = 'about:ambiguous-address?' + escape_iri_query(text)
 
     else:
-        cls_ = Address
+        uri = text
+        auri = analyze_uri(uri)
+        if auri.type == URIType.XMPP:
+            cls_ = XMPPAddress
+        elif auri.type == URIType.MAIL:
+            cls_ = MailAddress
+        elif auri.type == URIType.INVALID:
+            return None
+        else:
+            cls_ = Hyperlink
 
     return cls_(start=start,
                 start_byte=start_byte,
                 end=end,
                 end_byte=end_byte,
+                uri=uri,
                 text=text)
-
-
-def _make_emoji(line: str,
-                start: int,
-                end: int,
-                offset: int) -> Emoji:
-    text = line[start:end + 1]
-    start += offset
-    end += offset + 1
-    return Emoji(start=start,
-                 end=end,
-                 text=text)
 
 
 def _is_span_empty(sd: str, index: int, stack: list[tuple[str, int]]) -> bool:

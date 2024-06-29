@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2017-2024 Gajim Team -->
+<component type="desktop-application">
+  <id>org.gajim.Gajim</id>
+  <metadata_license>CC-BY-SA-3.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>Gajim</name>
+  <summary>Fully-featured XMPP chat client</summary>
+  <description>
+    <p>Gajim aims to be an easy to use and fully-featured XMPP client.
+    Just chat with your friends or family, easily share pictures and 
+    thoughts or discuss the news with your groups.
+    </p>
+    <p>Chat securely with End-to-End encryption via OMEMO or OpenPGP.</p>
+    <p>Gajim integrates well with your other devices: simply continue conversations on your mobile device.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Never miss a message, keep all your chat clients synchronized</li>
+      <li>Invite friends to group chats or join one</li>
+      <li>Easily send pictures, videos or other files to friends and groups</li>
+      <li>Chat securely with End-to-End encryption via OMEMO or OpenPGP</li>
+      <li>Use your favorite emoticons, set your own profile picture</li>
+      <li>Keep and manage all your chat history</li>
+      <li>Organize your chats with workspaces</li>
+      <li>Automatic spell-checking for your messages</li>
+      <li>Connect to other Messengers via Transports (Facebook, IRC, ...)</li>
+      <li>Lookup things on Wikipedia, dictionaries or other search engines directly from the chat window</li>
+      <li>Set your activity or tune to show your friends how you are feeling</li>
+      <li>Support for multiple accounts</li>
+      <li>XML console to see what's happening on the protocol layer</li>
+      <li>Support for service discovery including nodes and search for users</li>
+      <li>Even more features via plugins</li>
+    </ul>
+  </description>
+  <branding>
+    <color type="primary" scheme_preference="light">#cfe6a3</color>
+    <color type="primary" scheme_preference="dark">#22363b</color>
+  </branding>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://gajim.org/img/screenshots/single-window-mode.png</image>
+      <caption>Contact list</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://gajim.org/img/screenshots/tabbed-chat.png</image>
+      <caption>Tabbed chat window</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://gajim.org/img/screenshots/groupchat-window.png</image>
+      <caption>Group chat support</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://gajim.org/img/screenshots/history-window.png</image>
+      <caption>Chat history</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://gajim.org/img/screenshots/plugins.png</image>
+      <caption>Plugin manager</caption>
+    </screenshot>
+  </screenshots>
+  <launchable type="desktop-id">org.gajim.Gajim.desktop</launchable>
+  <developer id="gajim.org">
+    <name>Gajim Team</name>
+  </developer>
+  <update_contact>gajim-devel_AT_gajim.org</update_contact>
+  <url type="homepage">https://gajim.org/</url>
+  <url type="bugtracker">https://dev.gajim.org/gajim/gajim</url>
+  <url type="faq">https://dev.gajim.org/gajim/gajim/-/wikis/help/gajimfaq</url>
+  <url type="help">https://dev.gajim.org/gajim/gajim/-/wikis/help/Help</url>
+  <url type="donation">https://gajim.org/development/#donations</url>
+  <url type="translate">https://dev.gajim.org/gajim/gajim/-/wikis/development/devtranslate</url>
+  <translation type="gettext">gajim</translation>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+  </content_rating>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+  <releases>
+    <release version="1.9.1" date="2024-06-22">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.9.1</url>
+    </release>
+    <release version="1.9.0" date="2024-06-10">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.9.0</url>
+    </release>
+    <release version="1.8.4" date="2023-11-26">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.8.4</url>
+    </release>
+    <release version="1.8.3" date="2023-11-06">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.8.3</url>
+    </release>
+    <release version="1.8.2" date="2023-10-29">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.8.2</url>
+    </release>
+    <release version="1.8.1" date="2023-08-07">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.8.1</url>
+    </release>
+    <release version="1.8.0" date="2023-05-27">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.8.0</url>
+    </release>
+    <release version="1.7.3" date="2023-04-04">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.7.3</url>
+    </release>
+    <release version="1.7.2" date="2023-03-11">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.7.2</url>
+    </release>
+    <release version="1.7.1" date="2023-02-08">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.7.1</url>
+    </release>
+    <release version="1.7.0" date="2023-02-03">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.7.0</url>
+    </release>
+    <release version="1.6.1" date="2023-01-14">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.6.1</url>
+    </release>
+    <release version="1.6.0" date="2023-01-07">
+      <url>https://dev.gajim.org/gajim/gajim/-/releases/1.6.0</url>
+    </release>
+    <release version="1.5.4" date="2022-12-03" />
+    <release version="1.5.3" date="2022-10-31" />
+    <release version="1.5.2" date="2022-10-08" />
+    <release version="1.5.1" date="2022-09-19" />
+    <release version="1.5.0" date="2022-09-19" />
+    <release version="1.4.7" date="2022-07-24" />
+    <release version="1.4.6" date="2022-07-07" />
+    <release version="1.4.5" date="2022-06-21" />
+    <release version="1.4.4" date="2022-06-18" />
+    <release version="1.4.3" date="2022-06-01" />
+    <release version="1.4.2" date="2022-05-25" />
+    <release version="1.4.1" date="2022-05-21" />
+    <release version="1.4.0" date="2022-05-11" />
+    <release version="1.3.3" date="2021-10-10" />
+    <release version="1.3.2" date="2021-04-24" />
+    <release version="1.3.1" date="2021-03-01" />
+    <release version="1.3.0" date="2021-02-08" />
+    <release version="1.2.2" date="2020-08-15" />
+    <release version="1.2.1" date="2020-07-08" />
+    <release version="1.2.0" date="2020-06-21" />
+    <release version="1.1.3" date="2019-04-23" />
+    <release version="1.1.2" date="2019-01-15" />
+    <release version="1.1.1" date="2018-12-23" />
+    <release version="1.1.0" date="2018-11-06" />
+    <release version="1.0.3" date="2018-05-20" />
+    <release version="1.0.2" date="2018-04-30" />
+    <release version="1.0.1" date="2018-04-01" />
+    <release version="1.0.0" date="2018-03-17" />
+  </releases>
+</component>

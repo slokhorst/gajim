@@ -6,200 +6,144 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
-from typing import Iterator
-from typing import Optional
+from typing import cast
 
+import gettext
+import importlib.resources
+import locale
 import os
 import sys
-import locale
-import gettext
 import unicodedata
 from pathlib import Path
-from gi.repository import GLib
 
 DOMAIN = 'gajim'
-direction_mark = '\u200E'
-_translation = gettext.NullTranslations()
 
 
-def get_locale_dirs() -> Optional[list[Path]]:
-    if sys.platform == 'win32':
-        return
-
-    path = gettext.find(DOMAIN)
-    if path is not None:
-        # gettext can find the location itself
-        # so we don’t need the localedir
-        return
-
-    if Path('/app/share/run-as-flatpak').exists():
-        # Check if we run as flatpak
-        return [Path('/app/share/')]
-
-    data_dirs = [GLib.get_user_data_dir()] + GLib.get_system_data_dirs()
-    return [Path(dir_) for dir_ in data_dirs]
-
-
-def iter_locale_dirs() -> Iterator[Optional[str]]:
-    locale_dirs = get_locale_dirs()
-    if locale_dirs is None:
-        yield None
-        return
-
-    # gettext fallback
-    locale_dirs.append(Path(sys.base_prefix) / 'share')
-
-    found_paths: list[Path] = []
-    for path in locale_dirs:
-        locale_dir = path / 'locale'
-        if locale_dir in found_paths:
-            continue
-        found_paths.append(locale_dir)
-        if locale_dir.is_dir():
-            yield str(locale_dir)
-
-
-def get_win32_default_lang() -> str:
-    import ctypes
-    windll = ctypes.windll.kernel32
-    return locale.windows_locale[windll.GetUserDefaultUILanguage()]
-
-
-def get_darwin_default_lang() -> str:
-    from AppKit import NSLocale
-    # FIXME: This returns a two letter language code (en, de, fr)
-    # We need a way to get en_US, de_DE etc.
-    return NSLocale.currentLocale().languageCode()
+def init() -> None:
+    _trans.init()
 
 
 def get_default_lang() -> str:
-    if sys.platform == "win32":
-        return get_win32_default_lang()
-
-    if sys.platform == "darwin":
-        return get_darwin_default_lang()
-
-    return locale.getdefaultlocale()[0] or 'en'
+    return _trans.get_default_lang()
 
 
-def get_rfc5646_lang(lang: Optional[str] = None) -> str:
+def get_rfc5646_lang(lang: str | None = None) -> str:
     if lang is None:
-        lang = LANG
+        lang = _trans.get_default_lang()
     return lang.replace('_', '-')
 
 
-def get_short_lang_code(lang: Optional[str] = None) -> str:
+def get_short_lang_code(lang: str | None = None) -> str:
     if lang is None:
-        lang = LANG
+        lang = _trans.get_default_lang()
     return lang[:2]
 
 
-def initialize_direction_mark() -> None:
-    from gi.repository import Gtk
-
-    global direction_mark
-
-    if Gtk.Widget.get_default_direction() == Gtk.TextDirection.RTL:
-        direction_mark = '\u200F'
-
-
-def paragraph_direction_mark(text: str) -> str:
-    """
+def is_rtl_text(text: str) -> bool:
+    '''
     Determine paragraph writing direction according to
     http://www.unicode.org/reports/tr9/#The_Paragraph_Level
-
-    Returns either Unicode LTR mark or RTL mark.
-    """
+    '''
     for char in text:
         bidi = unicodedata.bidirectional(char)
         if bidi == 'L':
-            return '\u200E'
+            return False
         if bidi in ('AL', 'R'):
-            return '\u200F'
+            return True
 
-    return '\u200E'
-
-
-def Q_(text: str) -> str:
-    """
-    Translate the given text, optionally qualified with a special
-    construction, which will help translators to disambiguate between
-    same terms, but in different contexts.
-
-    When translated text is returned - this rudimentary construction
-    will be stripped off, if it's present.
-
-    Here is the construction to use:
-        Q_("?vcard:Unknown")
-
-    Everything between ? and : - is the qualifier to convey the context
-    to the translators. Everything after : - is the text itself.
-    """
-    text = _(text)
-    if text.startswith('?'):
-        text = text.split(':', 1)[1]
-    return text
+    return False
 
 
 def ngettext(s_sing: str,
              s_plural: str,
              n: int,
-             replace_sing: Optional[str] = None,
-             replace_plural: Optional[str] = None) -> str:
-    """
+             replace_sing: str | None = None,
+             replace_plural: str | None = None) -> str:
+    '''
     Use as:
         i18n.ngettext(
             'leave room %s', 'leave rooms %s', len(rooms), 'a', 'a, b, c')
 
     In other words this is a hack to ngettext() to support %s %d etc..
-    """
-    text = _translation.ngettext(s_sing, s_plural, n)
+    '''
+    text = _trans.translation.ngettext(s_sing, s_plural, n)
     if n == 1 and replace_sing is not None:
-        text = text % replace_sing
-    elif n > 1 and replace_plural is not None:
-        text = text % replace_plural
+        return text % replace_sing
+
+    if n > 1 and replace_plural is not None:
+        return text % replace_plural
     return text
 
 
-try:
-    locale.setlocale(locale.LC_ALL, '')
-except locale.Error as error:
-    print(error, file=sys.stderr)
+class Translation:
+    def __init__(self) -> None:
+        self.translation = gettext.NullTranslations()
+        self._default_lang = None
 
-LANG = get_default_lang()
-if sys.platform == 'win32':
-    # Set the env var on Windows because gettext.find() uses it to
-    # find the translation
-    # Use LANGUAGE instead of LANG, LANG sets LC_ALL and thus
-    # doesn't retain other region settings like LC_TIME
-    os.environ['LANGUAGE'] = LANG
+        self.install()
 
-# Search for the translation in all locale dirs
-for dir_ in iter_locale_dirs():
-    try:
-        _translation = gettext.translation(DOMAIN, dir_)
-        _ = _translation.gettext
-        if hasattr(locale, 'bindtextdomain'):
-            locale.bindtextdomain(DOMAIN, dir_)  # type: ignore
-    except OSError:
-        continue
-    else:
-        break
-else:
-    print('No translations found', file=sys.stderr)
-    print('Dirs searched: %s' % get_locale_dirs(), file=sys.stderr)
-    _ = _translation.gettext
+    def get_default_lang(self) -> str:
+        assert self._default_lang is not None
+        return self._default_lang
+
+    @staticmethod
+    def _get_win32_default_lang() -> str:
+        import ctypes
+        windll = ctypes.windll.kernel32
+        return locale.windows_locale[windll.GetUserDefaultUILanguage()]
+
+    @staticmethod
+    def _get_darwin_default_lang() -> str:
+        from AppKit import NSLocale
+
+        # FIXME: This returns a two letter language code (en, de, fr)
+        # We need a way to get en_US, de_DE etc.
+        return NSLocale.currentLocale().languageCode()
+
+    def _get_default_lang(self) -> str:
+        if sys.platform == 'win32':
+            return self._get_win32_default_lang()
+
+        if sys.platform == 'darwin':
+            return self._get_darwin_default_lang()
+
+        return locale.getdefaultlocale()[0] or 'en'
+
+    def init(self) -> None:
+        try:
+            locale.setlocale(locale.LC_ALL, '')
+        except locale.Error as error:
+            print(error, file=sys.stderr)
+
+        self._default_lang = self._get_default_lang()
+        if sys.platform == 'win32':
+            # Set the env var on Windows because gettext.find() uses it to
+            # find the translation
+            # Use LANGUAGE instead of LANG, LANG sets LC_ALL and thus
+            # doesn't retain other region settings like LC_TIME
+            os.environ['LANGUAGE'] = self._default_lang
+
+        package_dir = cast(Path, importlib.resources.files('gajim'))
+        locale_dir = package_dir / 'data' / 'locale'
+
+        try:
+            self.translation = gettext.translation(DOMAIN, locale_dir)
+            if hasattr(locale, 'bindtextdomain'):
+                locale.bindtextdomain(DOMAIN, locale_dir)
+        except OSError:
+            pass
+
+        self.install()
+
+    def install(self) -> None:
+        global _, g_, p_
+        _ = self.translation.gettext
+        g_ = self.translation.gettext
+        p_ = self.translation.pgettext
+
+
+_trans = Translation()

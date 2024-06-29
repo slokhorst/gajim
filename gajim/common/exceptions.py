@@ -5,50 +5,13 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
-
-from gajim.common.i18n import _
-
-
-class ServiceNotAvailable(Exception):
-    """
-    This exception is raised when we cannot use Gajim remotely'
-    """
-
-    def __init__(self) -> None:
-        Exception.__init__(self)
-
-    def __str__(self) -> str:
-        return _('Service not available: Gajim is not running, or remote_control is False')
-
-
-class SessionBusNotPresent(Exception):
-    """
-    This exception indicates that there is no session daemon
-    """
-
-    def __init__(self) -> None:
-        Exception.__init__(self)
-
-    def __str__(self) -> str:
-        return _('Session bus is not available.\nTry reading %(url)s') % \
-                {'url': 'https://dev.gajim.org/gajim/gajim/wikis/help/GajimDBus'}
+# SPDX-License-Identifier: GPL-3.0-only
 
 
 class GajimGeneralException(Exception):
-    """
+    '''
     This exception is our general exception
-    """
+    '''
 
     def __init__(self, text: str = '') -> None:
         Exception.__init__(self)
@@ -59,9 +22,9 @@ class GajimGeneralException(Exception):
 
 
 class PluginsystemError(Exception):
-    """
+    '''
     Error in the pluginsystem
-    """
+    '''
 
     def __init__(self, text: str = '') -> None:
         Exception.__init__(self)

@@ -1,16 +1,6 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
@@ -18,11 +8,12 @@ import typing
 
 import inspect
 import logging
-from pathlib import Path
 from importlib import import_module
+from pathlib import Path
 
 from nbxmpp.structs import StanzaHandler
 
+from gajim.common import app
 from gajim.common.modules.base import BaseModule
 
 if typing.TYPE_CHECKING:
@@ -39,7 +30,7 @@ _store_publish_modules = [
 
 
 def register_modules(client: Client) -> None:
-    if client in _modules:
+    if client.account in _modules:
         return
 
     _modules[client.account] = {}
@@ -80,6 +71,7 @@ def unregister_modules(client: Client) -> None:
     for instance in _modules[client.account].values():
         if hasattr(instance, 'cleanup'):
             instance.cleanup()
+        app.check_finalize(instance)
     del _modules[client.account]
 
 

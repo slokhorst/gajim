@@ -1,59 +1,55 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
-from typing import Optional
-from typing import Union
+from typing import cast
 
 import logging
 from enum import IntEnum
 
-from gi.repository import Gtk
 from gi.repository import Gdk
+from gi.repository import GdkPixbuf
 from gi.repository import GObject
-
-from nbxmpp.task import Task
+from gi.repository import Gtk
 from nbxmpp.errors import StanzaError
-from nbxmpp.structs import AnnotationNote, SoftwareVersionResult
 from nbxmpp.modules.vcard4 import VCard
+from nbxmpp.namespaces import Namespace
+from nbxmpp.structs import AnnotationNote
+from nbxmpp.structs import SoftwareVersionResult
+from nbxmpp.task import Task
 
 from gajim.common import app
 from gajim.common import ged
+from gajim.common import types
 from gajim.common.const import AvatarSize
+from gajim.common.const import SimpleClientState
 from gajim.common.events import SubscribedPresenceReceived
 from gajim.common.events import UnsubscribedPresenceReceived
+from gajim.common.ged import EventHelper
 from gajim.common.helpers import get_uf_affiliation
 from gajim.common.helpers import get_uf_role
 from gajim.common.helpers import get_uf_show
 from gajim.common.i18n import _
-from gajim.common.ged import EventHelper
 from gajim.common.modules.contacts import BareContact
-from gajim.common.modules.contacts import ResourceContact
 from gajim.common.modules.contacts import GroupchatParticipant
+from gajim.common.modules.contacts import ResourceContact
 
-from .dialogs import ConfirmationDialog
-from .dialogs import DialogButton
-from .sidebar_switcher import SideBarSwitcher
-from .builder import get_builder
-from .util import connect_destroy
-from .vcard_grid import VCardGrid
+from gajim.gtk.builder import get_builder
+from gajim.gtk.contact_settings import ContactSettings
+from gajim.gtk.dialogs import ConfirmationDialog
+from gajim.gtk.dialogs import DialogButton
+from gajim.gtk.omemo_trust_manager import OMEMOTrustManager
+from gajim.gtk.sidebar_switcher import SideBarSwitcher
+from gajim.gtk.structs import RemoveHistoryActionParams
+from gajim.gtk.util import connect_destroy
+from gajim.gtk.vcard_grid import VCardGrid
 
-log = logging.getLogger('gajim.gui.contact_info')
+log = logging.getLogger('gajim.gtk.contact_info')
 
 
-ContactT = Union[BareContact, GroupchatParticipant]
+ContactT = BareContact | GroupchatParticipant
 
 
 class Column(IntEnum):
@@ -65,7 +61,7 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
     def __init__(self,
                  account: str,
                  contact: ContactT,
-                 page: Optional[str] = None) -> None:
+                 page: str | None = None) -> None:
 
         Gtk.ApplicationWindow.__init__(self)
         EventHelper.__init__(self)
@@ -82,13 +78,15 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         self.account = account
         self.contact = contact
         self._client = app.get_client(account)
+        self._client.connect_signal(
+            'state-changed', self._on_client_state_changed)
 
         self._ui = get_builder('contact_info.ui')
 
         self._tasks: list[Task] = []
         self._devices: dict[str, DeviceGrid] = {}
 
-        self._switcher = SideBarSwitcher()
+        self._switcher = SideBarSwitcher(width=250)
         self._switcher.set_stack(self._ui.main_stack, rows_visible=False)
         self._ui.main_grid.attach(self._switcher, 0, 0, 1, 1)
         self._ui.main_stack.connect('notify::visible-child-name',
@@ -104,6 +102,7 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
 
         if isinstance(self.contact, BareContact):
             self._fill_settings_page(self.contact)
+            self._fill_encryption_page(self.contact)
             self._fill_device_info(self.contact)
             self._fill_groups_page(self.contact)
             self._fill_note_page(self.contact)
@@ -115,16 +114,19 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         self.connect('key-press-event', self._on_key_press)
         self.connect('destroy', self._on_destroy)
 
-        # pylint: disable=line-too-long
-        connect_destroy(self._ui.tree_selection, 'changed', self._on_group_selection_changed)
-        connect_destroy(self._ui.toggle_renderer, 'toggled', self._on_group_toggled)
-        connect_destroy(self._ui.text_renderer, 'edited', self._on_group_name_edited)
+        connect_destroy(self._ui.tree_selection,
+                        'changed', self._on_group_selection_changed)
+        connect_destroy(self._ui.toggle_renderer,
+                        'toggled', self._on_group_toggled)
+        connect_destroy(self._ui.text_renderer,
+                        'edited', self._on_group_name_edited)
 
         self.register_events([
-            ('subscribed-presence-received', ged.GUI1, self._on_subscribed_presence_received),
-            ('unsubscribed-presence-received', ged.GUI1, self._on_unsubscribed_presence_received),
+            ('subscribed-presence-received', ged.GUI1,
+             self._on_subscribed_presence_received),
+            ('unsubscribed-presence-received', ged.GUI1,
+             self._on_unsubscribed_presence_received),
         ])
-        # pylint: enable=line-too-long
 
         self.add(self._ui.main_grid)
         self.show_all()
@@ -133,9 +135,27 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         if event.keyval == Gdk.KEY_Escape:
             self.destroy()
 
+    def _on_client_state_changed(self,
+                                 _client: types.Client,
+                                 _signal_name: str,
+                                 state: SimpleClientState
+                                 ) -> None:
+
+        self._ui.edit_name_button.set_sensitive(state.is_connected)
+        self._ui.edit_name_button.set_tooltip_text(
+            _('Not connected') if not state.is_connected else _('Edit Name…'))
+        self._ui.subscription_listbox.set_sensitive(state.is_connected)
+
+        if state.is_connected:
+            self._ui.groups_page_stack.set_visible_child_name('groups')
+            self._ui.notes_page_stack.set_visible_child_name('notes')
+        else:
+            self._ui.groups_page_stack.set_visible_child_name('offline')
+            self._ui.notes_page_stack.set_visible_child_name('offline')
+
     def _on_stack_child_changed(self,
                                 _widget: Gtk.Stack,
-                                pspec: GObject.ParamSpec) -> None:
+                                _pspec: GObject.ParamSpec) -> None:
 
         name = self._ui.main_stack.get_visible_child_name()
         self._ui.header_revealer.set_reveal_child(name != 'information')
@@ -144,7 +164,7 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         for task in self._tasks:
             task.cancel()
 
-        if self.contact.is_in_roster:
+        if self.contact.is_in_roster and self._client.state.is_available:
             self._save_annotation()
 
         for device_grid in self._devices.values():
@@ -156,15 +176,18 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
 
     def _fill_information_page(self, contact: ContactT) -> None:
         self._vcard_grid = VCardGrid(self.account)
-        self._vcard_grid.set_column_homogeneous(True)
         self._ui.vcard_box.add(self._vcard_grid)
-        self._client.get_module('VCard4').request_vcard(
-            jid=self.contact.jid,
-            callback=self._on_vcard_received)
+        if self._client.state.is_available:
+            self._client.get_module('VCard4').request_vcard(
+                jid=self.contact.jid,
+                callback=self._on_vcard_received)
 
         jid = str(contact.get_address())
 
         self._ui.contact_name_label.set_text(contact.name)
+        self._ui.edit_name_button.set_sensitive(
+            self._client.state.is_available)
+
         self._ui.contact_jid_label.set_text(jid)
         self._ui.contact_jid_label.set_tooltip_text(jid)
 
@@ -176,6 +199,11 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
 
         self._switcher.set_row_visible('information', True)
 
+    def _fill_encryption_page(self, contact: ContactT) -> None:
+        self._ui.encryption_box.add(
+            OMEMOTrustManager(self.contact.account, self.contact))
+        self._switcher.set_row_visible('encryption-omemo', True)
+
     def _fill_note_page(self, contact: BareContact) -> None:
         if not contact.is_in_roster:
             return
@@ -184,14 +212,23 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         if note is not None:
             self._ui.textview_annotation.get_buffer().set_text(note.data)
 
-        self._switcher.set_row_visible('notes', True)
+        server_disco = self._client.get_module('Discovery').server_info
+        if (server_disco is not None and
+                server_disco.supports(Namespace.PRIVATE)):
+            # Hide the Notes page if private storage is not available, because
+            # roster notes cannot be stored without.
+            # Since there is no disco mechanism for private storage, we rely on
+            # Delimiter as a "proxy" for the availability of private storage.
+            self._switcher.set_row_visible('notes', True)
 
     def _fill_settings_page(self, contact: BareContact) -> None:
         if not contact.is_in_roster:
             return
 
-        if contact.subscription in ('from', 'both'):
-            self._ui.from_subscription_switch.set_state(True)
+        self._ui.from_subscription_switch.set_state(contact.is_subscribed)
+
+        self._ui.subscription_listbox.set_sensitive(
+            self._client.state.is_available)
 
         if contact.subscription in ('to', 'both'):
             self._ui.to_subscription_stack.set_visible_child_name('checkmark')
@@ -204,12 +241,21 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
             self._ui.request_stack.set_visible_child_name('cross')
 
         self._switcher.set_row_visible('settings', True)
+        contact_settings = ContactSettings(self.account, contact.jid)
+        self._ui.contact_settings_box.add(contact_settings)
+
+        params = RemoveHistoryActionParams(
+            account=self.account, jid=self.contact.jid)
+        self._ui.remove_history_button.set_action_name('app.remove-history')
+        self._ui.remove_history_button.set_action_target_value(
+            params.to_variant())
 
     def _fill_groups_page(self, contact: BareContact) -> None:
-        if not contact.is_in_roster:
+        if not contact.is_in_roster or not self._client.state.is_available:
             return
 
         model = self._ui.groups_treeview.get_model()
+        assert isinstance(model, Gtk.ListStore)
         model.set_sort_column_id(Column.GROUP_NAME, Gtk.SortType.ASCENDING)
         groups = self._client.get_module('Roster').get_groups()
         for group in groups:
@@ -233,7 +279,8 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         self._switcher.set_row_visible('devices', True)
 
     def _query_device(self, contact: ResourceContact) -> None:
-        task = self._client.get_module('SoftwareVersion').request_software_version(
+        software_module = self._client.get_module('SoftwareVersion')
+        task = software_module.request_software_version(
             contact.jid,
             callback=self._set_os_info,
             user_data=contact.resource)
@@ -247,9 +294,12 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
 
     def _on_vcard_received(self, task: Task) -> None:
         try:
-            vcard = task.finish()
+            vcard = cast(VCard | None, task.finish())
         except StanzaError as err:
             log.info('Error loading VCard: %s', err)
+            vcard = None
+
+        if vcard is None:
             vcard = VCard()
 
         self._vcard_grid.set_vcard(vcard)
@@ -262,6 +312,8 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         surface_2 = self.contact.get_avatar(AvatarSize.VCARD_HEADER,
                                             scale,
                                             add_show=False)
+        assert not isinstance(surface_1, GdkPixbuf.Pixbuf)
+        assert not isinstance(surface_2, GdkPixbuf.Pixbuf)
         self._ui.avatar_image.set_from_surface(surface_1)
         self._ui.header_image.set_from_surface(surface_2)
 
@@ -269,7 +321,7 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         self._tasks.remove(task)
 
         try:
-            result = task.finish()
+            result = cast(SoftwareVersionResult, task.finish())
         except Exception as err:
             log.warning('Could not retrieve software version: %s', err)
             result = None
@@ -282,7 +334,7 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         self._tasks.remove(task)
 
         try:
-            entity_time = task.finish()
+            entity_time = cast(str, task.finish())
         except Exception as err:
             log.warning('Could not retrieve entity time: %s', err)
             entity_time = None
@@ -307,10 +359,19 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         self._ui.name_entry.set_sensitive(active)
         if active:
             self._ui.name_entry.grab_focus()
+            self._ui.edit_name_button_image.set_from_icon_name(
+                'document-save-symbolic', Gtk.IconSize.BUTTON)
+        else:
+            self._ui.edit_name_button_image.set_from_icon_name(
+                'document-edit-symbolic', Gtk.IconSize.BUTTON)
+            name = self._ui.name_entry.get_text()
+            if name == self.contact.name:
+                return
 
-        name = self._ui.name_entry.get_text()
-        self._client.get_module('Roster').set_item(self.contact.jid, name)
-        self._ui.contact_name_label.set_text(name)
+            assert isinstance(self.contact, BareContact)
+            self._client.get_module('Roster').set_item(
+                self.contact.jid, name, self.contact.groups)
+            self._ui.contact_name_label.set_text(name)
 
     def _on_name_entry_activate(self, _widget: Gtk.Entry) -> None:
         self._ui.edit_name_button.set_active(False)
@@ -373,13 +434,15 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
 
         model = self._ui.groups_treeview.get_model()
         assert model is not None
+        assert isinstance(model, Gtk.ListStore)
         selected_iter_ = model.get_iter(path)
         old_name = model[selected_iter_][Column.GROUP_NAME]
 
         # Check if group already exists
         iter_ = model.get_iter_first()
         while iter_:
-            if model.get_value(iter_, Column.GROUP_NAME) == new_name:
+            group_name = model.get_value(iter_, Column.GROUP_NAME)
+            if group_name == new_name:
                 return
             iter_ = model.iter_next(iter_)
 
@@ -418,7 +481,8 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         iter_ = model.get_iter_first()
         while iter_:
             if model.get_value(iter_, Column.IN_GROUP):
-                groups.add(model.get_value(iter_, Column.GROUP_NAME))
+                group_name = model.get_value(iter_, Column.GROUP_NAME)
+                groups.add(group_name)
             iter_ = model.iter_next(iter_)
 
         self._client.get_module('Roster').set_groups(self.contact.jid, groups)
@@ -427,11 +491,13 @@ class ContactInfo(Gtk.ApplicationWindow, EventHelper):
         default_name = _('New Group')
         model = self._ui.groups_treeview.get_model()
         assert model is not None
+        assert isinstance(model, Gtk.ListStore)
 
         # Check if default_name group already exists
         iter_ = model.get_iter_first()
         while iter_:
-            if model.get_value(iter_, Column.GROUP_NAME) == default_name:
+            group_name = model.get_value(iter_, Column.GROUP_NAME)
+            if group_name == default_name:
                 default_name += '_'
             iter_ = model.iter_next(iter_)
 
@@ -464,7 +530,7 @@ class DeviceGrid:
     def widget(self) -> Gtk.Grid:
         return self._ui.devices_grid
 
-    def set_entity_time(self, entity_time: Optional[str]) -> None:
+    def set_entity_time(self, entity_time: str | None) -> None:
         if entity_time is not None:
             self._ui.time_value.set_text(entity_time)
             self._ui.time_value.show()
@@ -472,9 +538,9 @@ class DeviceGrid:
 
         self._check_complete()
 
-    def set_software(self, software: Optional[SoftwareVersionResult]) -> None:
+    def set_software(self, software: SoftwareVersionResult | None) -> None:
         if software is not None:
-            software_string = '%s %s' % (software.name, software.version)
+            software_string = f'{software.name} {software.version}'
             self._ui.software_value.set_text(software_string)
             self._ui.software_value.show()
             self._ui.software_label.show()

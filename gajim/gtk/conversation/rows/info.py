@@ -1,39 +1,36 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-import time
+from __future__ import annotations
+
 from datetime import datetime
 
-from gi.repository import GLib
 from gi.repository import Gtk
 
 from gajim.common.const import AvatarSize
+from gajim.common.util.datetime import utc_now
 
-from .widgets import SimpleLabel
-from .base import BaseRow
+from gajim.gtk.conversation.rows.base import BaseRow
+from gajim.gtk.conversation.rows.widgets import DateTimeLabel
+from gajim.gtk.conversation.rows.widgets import SimpleLabel
 
 
 class InfoMessage(BaseRow):
-    def __init__(self, account: str, text: str) -> None:
+    def __init__(self,
+                 account: str,
+                 text: str,
+                 timestamp: datetime | None
+                 ) -> None:
+
         BaseRow.__init__(self, account)
 
         self.type = 'info'
-        timestamp = time.time()
-        self.timestamp = datetime.fromtimestamp(timestamp)
-        self.db_timestamp = timestamp
 
-        text = GLib.markup_escape_text(text)
+        if timestamp is None:
+            timestamp = utc_now()
+        self.timestamp = timestamp.astimezone()
+        self.db_timestamp = timestamp.timestamp()
 
         avatar_placeholder = Gtk.Box()
         avatar_placeholder.set_size_request(AvatarSize.ROSTER, -1)
@@ -49,10 +46,9 @@ class InfoMessage(BaseRow):
         self._label.set_text(text)
         self.grid.attach(self._label, 2, 0, 1, 1)
 
-        timestamp_widget = self.create_timestamp_widget(self.timestamp)
-        timestamp_widget.set_hexpand(True)
-        timestamp_widget.set_halign(Gtk.Align.END)
-        timestamp_widget.set_valign(Gtk.Align.START)
+        timestamp_widget = DateTimeLabel(self.timestamp)
+        timestamp_widget.set_halign(Gtk.Align.START)
+        timestamp_widget.set_valign(Gtk.Align.END)
         self.grid.attach(timestamp_widget, 3, 0, 1, 1)
 
         self.show_all()

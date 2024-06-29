@@ -2,46 +2,41 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from __future__ import annotations
-from typing import Optional
-from typing import Union
-from typing import Tuple
 
-import math
 import logging
+import math
+import sys
 from pathlib import Path
 
-from gi.repository import Gtk
-from gi.repository import Gdk
-from gi.repository import Pango
 import css_parser
+from css_parser.css import CSSStyleRule
+from css_parser.css import CSSStyleSheet
+from gi.repository import Gdk
+from gi.repository import Gtk
+from gi.repository import Pango
 
 from gajim.common import app
 from gajim.common import configpaths
-from gajim.common.const import StyleAttr, CSSPriority
+from gajim.common.const import CSSPriority
+from gajim.common.const import StyleAttr
 
-from .const import Theme
+if sys.platform == 'win32':
+    from gajim.common.winapi.system_style import SystemStyleListener
+else:
+    from gajim.common.dbus.system_style import SystemStyleListener
 
-log = logging.getLogger('gajim.gui.css')
+from gajim.gtk.const import Theme
+
+log = logging.getLogger('gajim.gtk.css')
 settings = Gtk.Settings.get_default()
 
 
 class CSSConfig:
     def __init__(self) -> None:
-        """
+        '''
         CSSConfig handles loading and storing of all relevant Gajim style files
 
         The order in which CSSConfig loads the styles
@@ -69,23 +64,23 @@ class CSSConfig:
 
         These are the themes the Themes Dialog stores. Because they are
         loaded at last they overwrite everything else. Users should add custom
-        css here."""
+        css here.'''
 
         # Delete empty rules
         css_parser.ser.prefs.keepEmptyRules = False
 
         # Holds the currently selected theme in the Theme Editor
-        self._pre_css: Optional[css_parser.css.CSSStyleSheet] = None
-        self._pre_css_path: Optional[Path] = None
+        self._pre_css: CSSStyleSheet | None = None
+        self._pre_css_path: Path | None = None
 
         # Holds the default theme, its used if values are not found
         # in the selected theme
-        self._default_css: Optional[css_parser.css.CSSStyleSheet] = None
-        self._default_css_path: Optional[Path] = None
+        self._default_css: CSSStyleSheet | None = None
+        self._default_css_path: Path | None = None
 
         # Holds the currently selected theme
-        self._css: Optional[css_parser.css.CSSStyleSheet] = None
-        self._css_path: Optional[Path] = None
+        self._css: CSSStyleSheet | None = None
+        self._css_path: Path | None = None
 
         # User Theme CSS Provider
         self._provider = Gtk.CssProvider()
@@ -95,16 +90,27 @@ class CSSConfig:
         self._dynamic_dict: dict[str, str] = {}
         self.refresh()
 
+        screen = Gdk.Screen.get_default()
+        assert screen is not None
         Gtk.StyleContext.add_provider_for_screen(
-            Gdk.Screen.get_default(),
+            screen,
             self._dynamic_provider,
             CSSPriority.APPLICATION)
 
+        # Font size provider for GUI font size
+        self._app_font_size_provider = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_screen(
+            screen,
+            self._app_font_size_provider,
+            CSSPriority.PRE_APPLICATION)
+
         # Cache of recently requested values
-        self._cache: dict[str, Union[str, Pango.FontDescription, None]] = {}
+        self._cache: dict[str, str | Pango.FontDescription | None] = {}
 
         # Holds all currently available themes
         self.themes: list[str] = []
+
+        self._system_style = SystemStyleListener(callback=self.set_dark_theme)
 
         self.set_dark_theme()
         self._load_css()
@@ -114,20 +120,24 @@ class CSSConfig:
         self._activate_theme()
 
         Gtk.StyleContext.add_provider_for_screen(
-            Gdk.Screen.get_default(),
+            screen,
             self._provider,
             CSSPriority.USER_THEME)
+
+        self.apply_app_font_size()
 
     @property
     def prefer_dark(self) -> bool:
         setting = app.settings.get('dark_theme')
         if setting == Theme.SYSTEM:
+            if self._system_style.prefer_dark is not None:
+                return self._system_style.prefer_dark
             if settings is None:
                 return False
             return settings.get_property('gtk-application-prefer-dark-theme')
         return setting == Theme.DARK
 
-    def set_dark_theme(self, value: Optional[int] = None) -> None:
+    def set_dark_theme(self, value: int | None = None) -> None:
         if value is None:
             value = app.settings.get('dark_theme')
         else:
@@ -136,8 +146,10 @@ class CSSConfig:
         if settings is None:
             return
         if value == Theme.SYSTEM:
-            settings.reset_property('gtk-application-prefer-dark-theme')
-            return
+            if self._system_style.prefer_dark is None:
+                settings.reset_property('gtk-application-prefer-dark-theme')
+                return
+            value = self._system_style.prefer_dark
         settings.set_property('gtk-application-prefer-dark-theme', bool(value))
         self._load_css()
 
@@ -158,7 +170,7 @@ class CSSConfig:
                             ) -> None:
         path = configpaths.get('STYLE') / filename
         try:
-            with open(path, "r", encoding='utf8') as file_:
+            with open(path, encoding='utf8') as file_:
                 css = file_.read()
         except Exception as exc:
             log.error('Error loading css: %s', exc)
@@ -169,7 +181,9 @@ class CSSConfig:
         try:
             provider = Gtk.CssProvider()
             provider.load_from_data(bytes(css.encode('utf-8')))
-            Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(),
+            screen = Gdk.Screen.get_default()
+            assert screen is not None
+            Gtk.StyleContext.add_provider_for_screen(screen,
                                                      provider,
                                                      priority)
             self._load_selected()
@@ -177,6 +191,15 @@ class CSSConfig:
 
         except Exception:
             log.exception('Error loading application css')
+
+    def apply_app_font_size(self) -> None:
+        app_font_size = app.settings.get('app_font_size')
+        css = f'''
+        * {{
+            font-size: {app_font_size}rem;
+        }}
+        '''
+        self._app_font_size_provider.load_from_data(bytes(css.encode('utf-8')))
 
     @staticmethod
     def _pango_to_css_weight(number: int) -> int:
@@ -219,7 +242,7 @@ class CSSConfig:
         log.info('Use Theme: %s', theme)
         return theme_path
 
-    def _load_selected(self, new_path: Optional[Path] = None) -> None:
+    def _load_selected(self, new_path: Path | None = None) -> None:
         if new_path is None:
             self._css_path = self._determine_theme_path()
         else:
@@ -241,6 +264,9 @@ class CSSConfig:
         if pre:
             path = self._pre_css_path
             css = self._pre_css
+
+        assert path is not None
+        assert css is not None
         with open(path, 'w', encoding='utf-8') as file:
             file.write(css.cssText.decode('utf-8'))
 
@@ -251,12 +277,14 @@ class CSSConfig:
 
     def set_value(self,
                   selector: str,
-                  attr: StyleAttr,
-                  value: Union[str, Pango.FontDescription],
+                  attr: str | StyleAttr,
+                  value: str | Pango.FontDescription,
                   pre: bool = False
                   ) -> None:
+
         if attr == StyleAttr.FONT:
             # forward to set_font() for convenience
+            assert isinstance(value, Pango.FontDescription)
             self.set_font(selector, value, pre)
             return
 
@@ -266,6 +294,8 @@ class CSSConfig:
         css = self._css
         if pre:
             css = self._pre_css
+
+        assert css is not None
         for rule in css:
             if rule.type != rule.STYLE_RULE:
                 continue
@@ -279,7 +309,7 @@ class CSSConfig:
 
         # The rule was not found, so we add it to this theme
         log.info('Set %s %s %s', selector, attr, value)
-        rule = css_parser.css.CSSStyleRule(selectorText=selector)
+        rule = CSSStyleRule(selectorText=selector)
         rule.style[attr] = value
         css.add(rule)
         self._write(pre)
@@ -294,13 +324,16 @@ class CSSConfig:
             css = self._pre_css
         family, size, style, weight = self._get_attr_from_description(
             description)
+        assert css is not None
         for rule in css:
             if rule.type != rule.STYLE_RULE:
                 continue
             if rule.selectorText == selector:
                 log.info('Set Font for: %s %s %s %s %s',
                          selector, family, size, style, weight)
-                rule.style['font-family'] = family
+                # Quote font-family in order to avoid unquoted font-families
+                # (this is a bug in css_parser)
+                rule.style['font-family'] = f'"{family}"'
                 rule.style['font-style'] = style
                 rule.style['font-size'] = f'{size}pt'
                 rule.style['font-weight'] = weight
@@ -314,8 +347,10 @@ class CSSConfig:
         # The rule was not found, so we add it to this theme
         log.info('Set Font for: %s %s %s %s %s',
                  selector, family, size, style, weight)
-        rule = css_parser.css.CSSStyleRule(selectorText=selector)
-        rule.style['font-family'] = family
+        rule = CSSStyleRule(selectorText=selector)
+        # Quote font-family in order to avoid unquoted font-families
+        # (this is a bug in css_parser)
+        rule.style['font-family'] = f'"{family}"'
         rule.style['font-style'] = style
         rule.style['font-size'] = f'{size}pt'
         rule.style['font-weight'] = weight
@@ -324,7 +359,8 @@ class CSSConfig:
 
     def _get_attr_from_description(self,
                                    description: Pango.FontDescription
-                                   ) -> Tuple[Optional[str], float, str, int]:
+                                   ) -> tuple[str | None, float, str, int]:
+
         size = description.get_size() / Pango.SCALE
         style = self._get_string_from_pango_style(description.get_style())
         weight = self._pango_to_css_weight(int(description.get_weight()))
@@ -333,8 +369,10 @@ class CSSConfig:
 
     def _get_default_rule(self,
                           selector: str,
-                          _attr: StyleAttr
-                          ) -> Optional[css_parser.css.CSSStyleRule]:
+                          _attr: str
+                          ) -> CSSStyleRule | None:
+
+        assert self._default_css is not None
         for rule in self._default_css:
             if rule.type != rule.STYLE_RULE:
                 continue
@@ -346,13 +384,15 @@ class CSSConfig:
     def get_font(self,
                  selector: str,
                  pre: bool = False
-                 ) -> Optional[Pango.FontDescription]:
+                 ) -> Pango.FontDescription | None:
         if pre:
             css = self._pre_css
         else:
             css = self._css
             try:
-                return self._get_from_cache(selector, 'fontdescription')
+                font_desc = self._get_from_cache(selector, 'fontdescription')
+                if isinstance(font_desc, Pango.FontDescription):
+                    return font_desc
             except KeyError:
                 pass
 
@@ -369,6 +409,11 @@ class CSSConfig:
                 weight = rule.style.getPropertyValue('font-weight') or None
                 family = rule.style.getPropertyValue('font-family') or None
 
+                if family is not None:
+                    # Unquote previously quoted font-family
+                    # (this is a bug in css_parser)
+                    family = family.strip('"')
+
                 desc = self._get_description_from_css(
                     family, size, style, weight)
                 if not pre:
@@ -379,11 +424,12 @@ class CSSConfig:
         return None
 
     def _get_description_from_css(self,
-                                  family: Optional[str],
-                                  size: Optional[str],
-                                  style: Optional[str],
-                                  weight: Optional[str]
-                                  ) -> Optional[Pango.FontDescription]:
+                                  family: str | None,
+                                  size: str | None,
+                                  style: str | None,
+                                  weight: str | None
+                                  ) -> Pango.FontDescription | None:
+
         if family is None:
             return None
         desc = Pango.FontDescription()
@@ -393,7 +439,7 @@ class CSSConfig:
         if style is not None:
             desc.set_style(self._get_pango_style_from_string(style))
         if size is not None:
-            desc.set_size(int(size[:-2]) * Pango.SCALE)
+            desc.set_size(int(float(size[:-2])) * Pango.SCALE)
         return desc
 
     @staticmethod
@@ -416,9 +462,10 @@ class CSSConfig:
 
     def get_value(self,
                   selector: str,
-                  attr: StyleAttr,
+                  attr: str | StyleAttr,
                   pre: bool = False
-                  ) -> Union[str, Pango.FontDescription, None]:
+                  ) -> str | Pango.FontDescription | None:
+
         if attr == StyleAttr.FONT:
             # forward to get_font() for convenience
             return self.get_font(selector, pre)
@@ -458,9 +505,10 @@ class CSSConfig:
 
     def remove_value(self,
                      selector: str,
-                     attr: StyleAttr,
+                     attr: str | StyleAttr,
                      pre: bool = False
                      ) -> None:
+
         if attr == StyleAttr.FONT:
             # forward to remove_font() for convenience
             self.remove_font(selector, pre)
@@ -472,6 +520,8 @@ class CSSConfig:
         css = self._css
         if pre:
             css = self._pre_css
+
+        assert css is not None
         for rule in css:
             if rule.type != rule.STYLE_RULE:
                 continue
@@ -486,6 +536,7 @@ class CSSConfig:
         if pre:
             css = self._pre_css
 
+        assert css is not None
         for rule in css:
             if rule.type != rule.STYLE_RULE:
                 continue
@@ -542,6 +593,7 @@ class CSSConfig:
     def _activate_theme(self) -> None:
         log.info('Activate theme')
         self._invalidate_cache()
+        assert self._css is not None
         self._provider.load_from_data(self._css.cssText)
 
     def add_new_theme(self, theme: str) -> bool:
@@ -564,15 +616,17 @@ class CSSConfig:
 
     def _add_to_cache(self,
                       selector: str,
-                      attr: StyleAttr,
-                      value: Union[str, Pango.FontDescription, None]
+                      attr: str,
+                      value: str | Pango.FontDescription | None
                       ) -> None:
+
         self._cache[selector + attr] = value
 
     def _get_from_cache(self,
                         selector: str,
-                        attr: StyleAttr
-                        ) -> Union[str, Pango.FontDescription, None]:
+                        attr: str
+                        ) -> str | Pango.FontDescription | None:
+
         return self._cache[selector + attr]
 
     def _invalidate_cache(self) -> None:
@@ -584,7 +638,7 @@ class CSSConfig:
         for index, account in enumerate(accounts):
             color = app.settings.get_account_setting(account, 'account_color')
             css_class = f'gajim_class_{index}'
-            css += '.%s { background-color: %s }\n' % (css_class, color)
+            css += f'.{css_class} {{ background-color: {color} }}\n'
             self._dynamic_dict[account] = css_class
 
         self._dynamic_provider.load_from_data(css.encode())

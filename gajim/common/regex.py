@@ -1,88 +1,110 @@
+# This file is part of Gajim.
+#
+# SPDX-License-Identifier: GPL-3.0-only
+
+from typing import Any
+
 import re
 
-def _get_link_pattern():
-    # regexp meta characters are:  . ^ $ * + ? { } [ ] \ | ( )
-    # one escapes the metachars with \
-    # \S matches anything but ' ' '\t' '\n' '\r' '\f' and '\v'
-    # \s matches any whitespace character
-    # \w any alphanumeric character
-    # \W any non-alphanumeric character
-    # \b means word boundary. This is a zero-width assertion that
-    #    matches only at the beginning or end of a word.
-    # ^ matches at the beginning of lines
-    #
-    # * means 0 or more times
-    # + means 1 or more times
-    # ? means 0 or 1 time
-    # | means or
-    # [^*] anything but '*' (inside [] you don't have to escape metachars)
-    # [^\s*] anything but whitespaces and '*'
-    # (?<!\S) is a one char lookbehind assertion and asks for any leading
-    #         whitespace
-    # and matches beginning of lines so we have correct formatting detection
-    # even if the text is just '*foo*'
-    # (?!\S) is the same thing but it's a lookahead assertion
-    # \S*[^\s\W] --> in the matching string don't match ? or ) etc.. if at
-    #                the end
-    # so http://be) will match http://be and http://be)be) will match
-    # http://be)be
-
-    legacy_prefixes = r"((?<=\()(www|ftp)\.([A-Za-z0-9\.\-_~:/\?#\[\]@!\$"\
-        r"&'\(\)\*\+,;=]|%[A-Fa-f0-9]{2})+(?=\)))"\
-        r"|((www|ftp)\.([A-Za-z0-9\.\-_~:/\?#\[\]@!\$&'\(\)\*\+,;=]"\
-        r"|%[A-Fa-f0-9]{2})+"\
-        r"\.([A-Za-z0-9\.\-_~:/\?#\[\]@!\$&'\(\)\*\+,;=]|%[A-Fa-f0-9]{2})+)"
-    # NOTE: it's ok to catch www.gr such stuff exist!
-
-    # FIXME: recognize xmpp: and treat it specially
-    links = r"((?<=\()[A-Za-z][A-Za-z0-9\+\.\-]*:"\
-        r"([\w\.\-_~:/\?#\[\]@!\$&'\(\)\*\+,;=]|%[A-Fa-f0-9]{2})+"\
-        r"(?=\)))|(\w[\w\+\.\-]*:([^<>\s]|%[A-Fa-f0-9]{2})+)"
-
-    # 2nd one: at_least_one_char@at_least_one_char.at_least_one_char
-    mail = r'\bmailto:\S*[^\s\W]|' r'\b\S+@\S+\.\S*[^\s\W]'
-
-    link_pattern = links + '|' + mail + '|' + legacy_prefixes
-    return link_pattern
-
-def _get_basic_pattern():
-    basic_pattern = _get_link_pattern()
-    # detects eg. *b* *bold* *bold bold* test *bold* *bold*! (*bold*)
-    # doesn't detect (it's a feature :P) * bold* *bold * * bold * test*bold*
-    formatting = r'|(?<!\w)' r'\*[^\s*]' r'([^*]*[^\s*])?' r'\*(?!\w)|'\
-        r'(?<!\S)' r'~[^\s~]' r'([^~]*[^\s~])?' r'~(?!\S)|'\
-        r'(?<!\w)' r'_[^\s_]' r'([^_]*[^\s_])?' r'_(?!\w)'
-    return basic_pattern + formatting
-
-def _get_emot_and_basic_pattern(use_ascii_formatting: bool = True) -> str:
-    from gajim.gui.emoji_data import emoji_data
-    # because emoticons match later (in the string) they need to be after
-    # basic matches that may occur earlier
-    emoticons = emoji_data.get_regex()
-
-    if use_ascii_formatting:
-        pattern = _get_basic_pattern()
-    else:
-        pattern = _get_link_pattern()
-
-    return '%s|%s' % (pattern, emoticons)
-
-LINK_REGEX = re.compile(_get_link_pattern(), re.I | re.U)
-
-# link pattern + ASCII formatting
-BASIC_REGEX = re.compile(_get_basic_pattern(), re.IGNORECASE)
-
-# emoticons + link pattern
-EMOT_AND_LINK_REGEX = re.compile(_get_emot_and_basic_pattern(False),
-                                          re.IGNORECASE)
-
-# emoticons + link pattern + ASCII formatting
-EMOT_AND_BASIC_REGEX = re.compile(_get_emot_and_basic_pattern(True),
-                                          re.IGNORECASE)
+COMMAND_REGEX = re.compile(r'^/[a-z]+')
 
 INVALID_XML_CHARS_REGEX = re.compile(
     '[\x00-\x08]|[\x0b-\x0c]|[\x0e-\x1f]|[\ud800-\udfff]|[\ufffe-\uffff]')
 
-# at least one character in 3 parts (before @, after @, after .)
-STH_AT_STH_DOT_STH_REGEX = re.compile(
-    r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$')
+
+# Universal/Internationalized Resource Identifiers and their components, as
+# defined in [ABNF for IRI References and IRIs]
+# <https://rfc-editor.org/rfc/rfc3987#section-2.2> and
+# [Representing IPv6 Zone Identifiers in Address Literals and URIs]
+# <https://www.rfc-editor.org/rfc/rfc6874>.
+ALPHA          = r'[A-Za-z]'
+HEXDIG         = r'[0-9A-Fa-f]'
+sub_delims     = r"!$&'()*+,;="
+ucschar        = r'\xA0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF'\
+    r'\U00010000-\U0001FFFD\U00020000-\U0002FFFD\U00030000-\U0003FFFD'\
+    r'\U00040000-\U0004FFFD\U00050000-\U0005FFFD\U00060000-\U0006FFFD'\
+    r'\U00070000-\U0007FFFD\U00080000-\U0008FFFD\U00090000-\U0009FFFD'\
+    r'\U000A0000-\U000AFFFD\U000B0000-\U000BFFFD\U000C0000-\U000CFFFD'\
+    r'\U000D0000-\U000DFFFD\U000E1000-\U000EFFFD'
+iprivate       = r'\uE000-\uF8FF'\
+    r'\U000F0000-\U000FFFFD\U00100000-\U0010FFFD'
+unreserved     = r'A-Za-z0-9\-._~'
+iunreserved    = fr'{unreserved}{ucschar}'
+pct_encoded    = fr'%{HEXDIG}{HEXDIG}'
+ipchar         = fr'(?:[{iunreserved}{sub_delims}:@]|{pct_encoded})'
+iuserinfo      = fr'(?:[{iunreserved}{sub_delims}:]|{pct_encoded})*'
+ireg_name      = fr'(?:[{iunreserved}{sub_delims}]|{pct_encoded})*'
+dec_octet      = r'(?:25[0-5]'\
+                 r'|2[0-4][0-9]'\
+                 r'|1[0-9][0-9]'\
+                 r'|[1-9][0-9]'\
+                 r'|[0-9])'
+IPv4address    = fr'{dec_octet}(?:\.{dec_octet}){{3}}'
+h16            = fr'{HEXDIG}{{1,4}}'
+ls32           = fr'(?:{h16}:{h16}|{IPv4address})'
+IPv6address    =\
+                              fr'(?:(?:{h16}:){{6}}{ls32}'\
+                              fr'|::(?:{h16}:){{5}}{ls32}'\
+                    fr'|(?:{h16})?::(?:{h16}:){{4}}{ls32}'\
+    fr'|(?:(?:{h16}:){{,1}}{h16})?::(?:{h16}:){{3}}{ls32}'\
+    fr'|(?:(?:{h16}:){{,2}}{h16})?::(?:{h16}:){{2}}{ls32}'\
+    fr'|(?:(?:{h16}:){{,3}}{h16})?::{h16}:{ls32}'\
+    fr'|(?:(?:{h16}:){{,4}}{h16})?::{ls32}'\
+    fr'|(?:(?:{h16}:){{,5}}{h16})?::{h16}'\
+    fr'|(?:(?:{h16}:){{,6}}{h16})?::)'  # noqa: E126,E127,E131
+ZoneID         = fr'(?:{unreserved}|{pct_encoded})+'
+IPv6addrz      = fr'{IPv6address}%25{ZoneID}'
+IPvFuture      = fr'[Vv]{HEXDIG}+\.[{unreserved}{sub_delims}:]+'
+IP_literal     = fr'\[(?:{IPv6address}|{IPv6addrz}|{IPvFuture})\]'
+# ihost        = fr'(?P<host>{IP_literal}|{IPv4address}|{ireg_name})'
+# The below is equivalent to the above for the purpose of validation, but
+# better for the purpose of search: e.g., matches 'foo://1.2.3.4.5' completely.
+ihost          = fr'(?P<host>{IP_literal}|{ireg_name})'
+port           = r'[0-9]*'
+iauthority     = fr'(?:{iuserinfo}@)?{ihost}(?::{port})?'
+isegment       = fr'{ipchar}*'
+isegment_nz    = fr'{ipchar}+'
+ipath_abempty  = fr'(?:/{isegment})*'
+ipath_absolute = fr'/(?:{isegment_nz}(?:/{isegment})*)?'
+ipath_rootless = fr'{isegment_nz}(?:/{isegment})*'
+ipath_empty    = r''
+ihier_part     = fr'(?://{iauthority}{ipath_abempty}'\
+                 fr'|{ipath_absolute}'\
+                 fr'|{ipath_rootless}'\
+                 fr'|{ipath_empty})'
+iquery         = fr'(?:{ipchar}|[/?{iprivate}])*'
+ifragment      = fr'(?:{ipchar}|[/?])*'
+scheme         = fr'(?P<scheme>{ALPHA}[a-zA-Z0-9+.-]*)'
+IRI            = fr'{scheme}:{ihier_part}(?:\?{iquery})?(?:#{ifragment})?'
+
+
+# <https://rfc-editor.org/rfc/rfc7564#section-4.2>
+class PRECIS:
+    LetterDigits = r'\w'  # roughly (e.g., includes '_' as an extra)
+    Spaces       = r'\s'  # roughly?
+    Symbols      = r'♚'   # let's make that test pass!
+    HasCompat    = r'Ⅳ'  # and that one!
+    IdentifierClass: Any
+
+
+class PRECISIdentifierClass:
+    _p = PRECIS
+    Valid      = fr'{_p.LetterDigits}\x21-\x7e'
+    Disallowed = fr'{_p.Spaces}{_p.Symbols}{_p.HasCompat}'  # there's a ton more
+
+
+PRECIS.IdentifierClass = PRECISIdentifierClass
+
+
+# (Rough approximation of) Jabber IDs, as defined in [XMPP: Address Format]
+# <https://rfc-editor.org/rfc/rfc7622#section-3>.
+class XMPP:
+    _id = PRECIS.IdentifierClass
+    _excl      = '"&\'/:<>@'  # <#section-3.3.1>
+    localpart  = fr'(?:(?![{_excl}{_id.Disallowed}])[{_id.Valid}])+'
+    # ^ doesn't take into account "contextual rules" <rfc7564#section-4.2.2>
+    ifqdn      = fr'[{iunreserved}{sub_delims}]+'
+    # ^ probably correct
+    domainpart = fr'(?:{IP_literal}|{IPv4address}|{ifqdn})'
+    jid        = fr'(?P<local>{localpart})@(?P<domain>{domainpart})'
+    # ^ notably, doesn't include resourcepart (TODO)

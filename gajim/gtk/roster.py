@@ -1,59 +1,48 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 from typing import Any
 from typing import Literal
-from typing import Optional
 
 import locale
 import logging
-
-from enum import IntEnum
 from collections import defaultdict
+from enum import IntEnum
 
 from gi.repository import Gdk
 from gi.repository import Gio
 from gi.repository import GLib
 from gi.repository import Gtk
-
 from nbxmpp import JID
-from nbxmpp import Namespace
+from nbxmpp.const import PresenceShow
+from nbxmpp.namespaces import Namespace
 
 from gajim.common import app
 from gajim.common import ged
-from gajim.common import types
 from gajim.common.const import AvatarSize
-from gajim.common.const import StyleAttr
 from gajim.common.const import PresenceShowExt
+from gajim.common.const import StyleAttr
 from gajim.common.events import ApplicationEvent
+from gajim.common.events import RosterPush
+from gajim.common.events import RosterReceived
 from gajim.common.helpers import event_filter
 from gajim.common.i18n import _
+from gajim.common.modules.contacts import BareContact
 
-from .menus import get_roster_menu
-from .dialogs import ConfirmationDialog
-from .dialogs import DialogButton
-from .tooltips import RosterTooltip
-from .util import EventHelper
-from .builder import get_builder
-from .util import open_window
+from gajim.gtk.builder import get_builder
+from gajim.gtk.dialogs import ConfirmationDialog
+from gajim.gtk.dialogs import DialogButton
+from gajim.gtk.menus import get_roster_menu
+from gajim.gtk.tooltips import ContactTooltip
+from gajim.gtk.util import EventHelper
+from gajim.gtk.util import GajimPopover
+from gajim.gtk.util import open_window
 
-log = logging.getLogger('gajim.gui.roster')
+log = logging.getLogger('gajim.gtk.roster')
 
-
-HANDLED_EVENTS = []
 
 DEFAULT_GROUP = _('Contacts')
 
@@ -76,14 +65,16 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
 
         self._account = account
         self._client = app.get_client(account)
+        self._contacts = self._client.get_module('Contacts')
 
-        self._roster_tooltip = RosterTooltip()
+        self._roster_tooltip = ContactTooltip()
 
         self._ui = get_builder('roster.ui')
         self._ui.roster_treeview.set_model(None)
         self.add(self._ui.roster_treeview)
 
-        self._contact_refs: dict[JID, list[Gtk.TreeRowReference]] = defaultdict(list)
+        self._contact_refs: dict[
+            JID, list[Gtk.TreeRowReference]] = defaultdict(list)
         self._group_refs: dict[str, Gtk.TreeRowReference] = {}
 
         self._store = self._ui.contact_store
@@ -112,8 +103,6 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
         self._ui.connect_signals(self)
 
         self.register_events([
-            ('account-connected', ged.CORE, self._on_account_state),
-            ('account-disconnected', ged.CORE, self._on_account_state),
             ('roster-received', ged.CORE, self._on_roster_received),
             ('theme-update', ged.GUI2, self._on_theme_update),
             ('roster-push', ged.GUI2, self._on_roster_push),
@@ -130,72 +119,36 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
         self._filter_enabled = False
         self._filter_string = ''
 
-        self._add_actions()
+        app.settings.connect_signal('showoffline', self._on_setting_changed)
+        app.settings.connect_signal('sort_by_show_in_roster',
+                                    self._on_setting_changed)
+
+        self._action_signal_ids = self._connect_actions()
         self._initial_draw()
 
-    def _add_actions(self):
-        actions = [
-            ('contact-info', self._on_contact_info),
-            ('modify-gateway', self._on_modify_gateway),
-            ('execute-command', self._on_execute_command),
-            ('block-contact', self._on_block_contact),
-            ('remove-contact', self._on_remove_contact),
+    def _connect_actions(self) -> dict[Gio.Action, int]:
+        app_actions = [
+            (f'{self._account}-contact-info', self._on_contact_info),
+            (f'{self._account}-modify-gateway', self._on_modify_gateway),
+            (f'{self._account}-execute-command', self._on_execute_command),
+            (f'{self._account}-block-contact', self._on_block_contact),
+            (f'{self._account}-remove-contact', self._on_remove_contact),
         ]
-        for action in actions:
+
+        signal_ids: dict[Gio.Action, int] = {}
+        for action in app_actions:
             action_name, func = action
-            act = Gio.SimpleAction.new(
-                f'{action_name}-{self._account}', GLib.VariantType.new('s'))
-            act.connect('activate', func)
-            app.window.add_action(act)
+            action = app.app.lookup_action(action_name)
+            assert action is not None
+            signal_id = action.connect('activate', func)
+            signal_ids[action] = signal_id
 
-        action = Gio.SimpleAction.new_stateful(
-            f'show-offline-{self._account}',
-            None,
-            GLib.Variant.new_boolean(app.settings.get('showoffline')))
-        action.connect('change-state', self._on_show_offline)
-        app.window.add_action(action)
+        return signal_ids
 
-        action = Gio.SimpleAction.new_stateful(
-            f'sort-by-show-{self._account}',
-            None,
-            GLib.Variant.new_boolean(
-                app.settings.get('sort_by_show_in_roster')))
-        action.connect('change-state', self._on_sort_by_show)
-        app.window.add_action(action)
-
-    def update_actions(self):
-        online = app.account_is_connected(self._account)
-        blocking_support = self._client.get_module('Blocking').supported
-
-        actions = [('contact-info', online),
-                   ('modify-gateway', online),
-                   ('execute-command', online),
-                   ('block-contact', online and blocking_support),
-                   ('remove-contact', online)]
-
-        for action, enabled in actions:
-            act = app.window.lookup_action(f'{action}-{self._account}')
-            assert act is not None
-            act.set_enabled(enabled)
-
-    def _remove_actions(self):
-        actions = [
-            'contact-info',
-            'modify-gateway',
-            'execute-command',
-            'block-contact',
-            'remove-contact',
-            'show-offline',
-            'sort-by-show',
-        ]
-        for action in actions:
-            app.window.remove_action(f'{action}-{self._account}')
-
-    def _get_contact(self, jid: str) -> types.BareContact:
-        return self._client.get_module('Contacts').get_contact(jid)
-
-    def _on_account_state(self, _event: ApplicationEvent) -> None:
-        self.update_actions()
+    def _get_contact(self, jid: str) -> BareContact:
+        contact = self._client.get_module('Contacts').get_contact(jid)
+        assert isinstance(contact, BareContact)
+        return contact
 
     def _on_theme_update(self, _event: ApplicationEvent) -> None:
         self.redraw()
@@ -296,25 +249,14 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
             self._roster_tooltip.clear_tooltip()
             return False
 
-        contact = self._get_contact(model[iter_][Column.JID_OR_GROUP])
-        value, widget = self._roster_tooltip.get_tooltip(path, contact)
+        contact = self._contacts.get_bare_contact(
+            model[iter_][Column.JID_OR_GROUP])
+        assert isinstance(contact, BareContact)
+        value, widget = self._roster_tooltip.get_tooltip(contact)
         tooltip.set_custom(widget)
         return value
 
-    def _on_show_offline(self,
-                         action: Gio.SimpleAction,
-                         value: Optional[GLib.Variant]) -> None:
-
-        assert value is not None
-        action.set_state(value)
-        app.settings.set('showoffline', value.get_boolean())
-        self._refilter()
-
-    def _on_sort_by_show(self,
-                         action: Gio.SimpleAction,
-                         value: GLib.Variant) -> None:
-        action.set_state(value)
-        app.settings.set('sort_by_show_in_roster', value.get_boolean())
+    def _on_setting_changed(self, *args: Any) -> None:
         self._refilter()
 
     def _on_contact_info(self,
@@ -326,17 +268,16 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
     def _on_modify_gateway(self,
                            _action: Gio.SimpleAction,
                            param: GLib.Variant) -> None:
-
         open_window(
             'ServiceRegistration',
             account=self._account,
-            address=param.get_string())
+            address=JID.from_string(param.get_string()))
 
     def _on_execute_command(self,
                             _action: Gio.SimpleAction,
                             param: GLib.Variant) -> None:
 
-        app.window.execute_command(self._account, param.get_string())
+        app.window.execute_command(self._account, param.get_strv())
 
     def _on_block_contact(self,
                           _action: Gio.SimpleAction,
@@ -349,7 +290,8 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
                            param: GLib.Variant):
 
         jid = JID.from_string(param.get_string())
-        selected_contact = self._client.get_module('Contacts').get_contact(jid)
+        selected_contact = self._contacts.get_contact(jid)
+        assert isinstance(selected_contact, BareContact)
         if selected_contact.is_gateway:
             # Check for transport users in roster and warn about removing the
             # transport if there are any
@@ -358,14 +300,15 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
                 if contact.jid.domain == selected_contact.jid.domain:
                     has_transport_contacts = True
                     break
-            if has_transport_contacts:
-                def _on_remove():
-                    self._client.get_module('Gateway').unsubscribe(
-                        selected_contact.jid)
 
+            def _on_remove():
+                self._client.get_module('Gateway').unsubscribe(
+                    str(selected_contact.jid))
+
+            if has_transport_contacts:
                 ConfirmationDialog(
                     _('Remove Transport'),
-                    _('Transport \'%s\' will be '
+                    _('Transport "%s" will be '
                       'removed') % selected_contact.name,
                     _('You will no longer be able to send and receive '
                       'messages from and to contacts using this transport.'),
@@ -398,7 +341,7 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
                                       treeview: Gtk.TreeView,
                                       event: Gdk.EventButton) -> None:
 
-        if event.button not in (2, 3):
+        if event.button == Gdk.BUTTON_PRIMARY:
             return
 
         pos = treeview.get_path_at_pos(int(event.x), int(event.y))
@@ -406,6 +349,9 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
             return
 
         path, _, _, _ = pos
+        if path is None:
+            return
+
         path = self._modelfilter.convert_path_to_child_path(path)
         assert path is not None
         iter_ = self._store.get_iter(path)
@@ -415,11 +361,11 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
 
         jid = self._store[iter_][Column.JID_OR_GROUP]
 
-        if event.button == 3:  # right click
+        if event.button == Gdk.BUTTON_SECONDARY:
             self._show_contact_menu(jid, treeview, event)
 
         jid = JID.from_string(jid)
-        if event.button == 2:  # middle click
+        if event.button == Gdk.BUTTON_MIDDLE:
             app.window.add_chat(self._account, jid, 'contact', select=True)
 
     @staticmethod
@@ -431,21 +377,14 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
                            treeview: Gtk.TreeView,
                            event: Gdk.EventButton) -> None:
 
-        contact = self._client.get_module('Contacts').get_contact(jid)
+        contact = self._contacts.get_bare_contact(jid)
+        assert isinstance(contact, BareContact)
         gateway_register = contact.is_gateway and contact.supports(
             Namespace.REGISTER)
+
         menu = get_roster_menu(
-            self._account, jid, gateway=gateway_register)
-
-        rectangle = Gdk.Rectangle()
-        rectangle.x = int(event.x)
-        rectangle.y = int(event.y)
-        rectangle.width = rectangle.height = 1
-
-        popover = Gtk.Popover.new_from_model(self, menu)
-        popover.set_relative_to(treeview)
-        popover.set_position(Gtk.PositionType.RIGHT)
-        popover.set_pointing_to(rectangle)
+            self._account, contact, gateway=gateway_register)
+        popover = GajimPopover(menu, relative_to=treeview, event=event)
         popover.popup()
 
     def set_search_string(self, text: str) -> None:
@@ -466,7 +405,7 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
 
         return self._filter_string in model[iter_][Column.TEXT].lower()
 
-    def _get_contact_visible(self, contact: types.BareContact) -> bool:
+    def _get_contact_visible(self, contact: BareContact) -> bool:
         if self._filter_enabled:
             return self._filter_string in contact.name.lower()
 
@@ -504,39 +443,36 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
 
     def _initial_draw(self) -> None:
         for contact in self._client.get_module('Roster').iter_contacts():
-            self._connect_contact_signals(contact)
             self._add_or_update_contact(contact)
 
         self._enable_sort(True)
         self._set_model()
         self._roster.expand_all()
 
-    def _connect_contact_signals(self, contact: types.BareContact) -> None:
+    def _connect_contact_signals(self, contact: BareContact) -> None:
         contact.connect('presence-update', self._on_contact_update)
         contact.connect('caps-update', self._on_contact_update)
         contact.connect('avatar-update', self._on_contact_update)
         contact.connect('blocking-update', self._on_contact_update)
 
     def _on_contact_update(self,
-                           contact: types.BareContact,
+                           contact: BareContact,
                            _signal_name: str) -> None:
 
         self._draw_contact(contact)
 
     @event_filter(['account'])
-    def _on_roster_received(self, _event: ApplicationEvent) -> None:
+    def _on_roster_received(self, _event: RosterReceived) -> None:
         self._reset_roster()
 
     @event_filter(['account'])
-    def _on_roster_push(self, event: ApplicationEvent) -> None:
-        contact = self._get_contact(event.item.jid)
+    def _on_roster_push(self, event: RosterPush) -> None:
+        contact = self._contacts.get_contact(str(event.item.jid))
+        assert isinstance(contact, BareContact)
 
         if event.item.subscription == 'remove':
-            contact.disconnect(self)
             self._remove_contact(contact)
         else:
-            if contact.jid not in self._contact_refs:
-                self._connect_contact_signals(contact)
             self._add_or_update_contact(contact)
 
     def _get_current_groups(self, jid: JID) -> set[str]:
@@ -561,7 +497,7 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
         return group_iter
 
     def _add_contact_to_group(self,
-                              contact: types.BareContact,
+                              contact: BareContact,
                               group: str) -> None:
 
         group_iter = self._add_group(group)
@@ -573,13 +509,13 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
         self._contact_refs[contact.jid].append(ref)
 
     def _add_contact_to_groups(self,
-                               contact: types.BareContact,
+                               contact: BareContact,
                                groups: set[str]) -> None:
         for group in groups:
             self._add_contact_to_group(contact, group)
 
     def _remove_contact_from_groups(self,
-                                    contact: types.BareContact,
+                                    contact: BareContact,
                                     groups: set[str]) -> None:
         if not groups:
             return
@@ -599,7 +535,8 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
 
         self._check_for_empty_groups()
 
-    def _remove_contact(self, contact: types.BareContact) -> None:
+    def _remove_contact(self, contact: BareContact) -> None:
+        contact.disconnect(self)
         refs = self._contact_refs.pop(contact.jid)
         for ref in refs:
             iter_ = self._get_iter_from_ref(ref)
@@ -616,7 +553,8 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
             self._store.remove(group_iter)
             del self._group_refs[group]
 
-    def _add_or_update_contact(self, contact: types.BareContact) -> None:
+    def _add_or_update_contact(self, contact: BareContact) -> None:
+        self._connect_contact_signals(contact)
         new_groups = set(contact.groups or [DEFAULT_GROUP])
         groups = self._get_current_groups(contact.jid)
 
@@ -657,7 +595,9 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
         for group in self._store:
             group_is_visible = False
             for child in group.iterchildren():
-                contact = self._get_contact(child[Column.JID_OR_GROUP])
+                contact = self._contacts.get_bare_contact(
+                    child[Column.JID_OR_GROUP])
+                assert isinstance(contact, BareContact)
                 is_visible = self._get_contact_visible(contact)
                 child[Column.VISIBLE] = is_visible
                 if is_visible:
@@ -666,14 +606,14 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
             group[Column.VISIBLE] = group_is_visible
         self._roster.expand_all()
 
-    def _draw_contact(self, contact: types.BareContact) -> None:
+    def _draw_contact(self, contact: BareContact) -> None:
         for ref in self._contact_refs[contact.jid]:
             self._draw_contact_row(ref, contact)
         self._roster.expand_all()
 
     def _draw_contact_row(self,
                           ref: Gtk.TreeRowReference,
-                          contact: types.BareContact):
+                          contact: BareContact):
 
         iter_ = self._get_iter_from_ref(ref)
 
@@ -685,6 +625,7 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
         surface = contact.get_avatar(
             AvatarSize.ROSTER, self.get_scale_factor())
         self._store[iter_][Column.AVATAR] = surface
+        self._store[iter_][Column.VISIBLE] = self._get_contact_visible(contact)
 
     def _get_total_user_count(self) -> int:
         count = 0
@@ -697,7 +638,7 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
         assert path is not None
         return self._store.get_iter(path)
 
-    def _get_group_iter(self, group_name: str) -> Optional[Gtk.TreeIter]:
+    def _get_group_iter(self, group_name: str) -> Gtk.TreeIter | None:
         try:
             ref = self._group_refs[group_name]
         except KeyError:
@@ -718,15 +659,15 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
         has_parent = bool(model.iter_parent(iter_))
         style = 'contact' if has_parent else 'group'
 
-        bgcolor = app.css_config.get_value('.gajim-%s-row' % style,
+        bgcolor = app.css_config.get_value(f'.gajim-{style}-row',
                                            StyleAttr.BACKGROUND)
         renderer.set_property('cell-background', bgcolor)
 
-        color = app.css_config.get_value('.gajim-%s-row' % style,
+        color = app.css_config.get_value(f'.gajim-{style}-row',
                                          StyleAttr.COLOR)
         renderer.set_property('foreground', color)
 
-        desc = app.css_config.get_font('.gajim-%s-row' % style)
+        desc = app.css_config.get_font(f'.gajim-{style}-row')
         renderer.set_property('font-desc', desc)
 
         if not has_parent:
@@ -737,10 +678,10 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
                             model: Gtk.TreeModel,
                             iter1: Gtk.TreeIter,
                             iter2: Gtk.TreeIter,
-                            _user_data: Literal[None]):
-        """
+                            _user_data: Literal[None]) -> int:
+        '''
         Compare two iterators to sort them
-        """
+        '''
 
         is_contact = model.iter_parent(iter1)
         if is_contact:
@@ -750,10 +691,18 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
             if not app.settings.get('sort_by_show_in_roster'):
                 return locale.strcoll(name1.lower(), name2.lower())
 
-            contact1 = self._get_contact(model[iter1][Column.JID_OR_GROUP])
-            contact2 = self._get_contact(model[iter2][Column.JID_OR_GROUP])
+            contact1 = self._contacts.get_bare_contact(
+                model[iter1][Column.JID_OR_GROUP])
+            assert isinstance(contact1, BareContact)
+            contact2 = self._contacts.get_bare_contact(
+                model[iter2][Column.JID_OR_GROUP])
+            assert isinstance(contact2, BareContact)
 
             if contact1.show != contact2.show:
+                if contact1.show == PresenceShow.DND:
+                    return 1
+                if contact2.show == PresenceShow.DND:
+                    return -1
                 return -1 if contact1.show > contact2.show else 1
 
             return locale.strcoll(name1.lower(), name2.lower())
@@ -768,19 +717,33 @@ class Roster(Gtk.ScrolledWindow, EventHelper):
         self._group_refs.clear()
         self._store.clear()
 
-    def process_event(self, event: ApplicationEvent) -> None:
-        if event.name not in HANDLED_EVENTS:
-            return
+    def _disconnect_actions(self) -> None:
+        for action, signal_id in self._action_signal_ids.items():
+            action.disconnect(signal_id)
+        self._action_signal_ids.clear()
+
+    @staticmethod
+    def _dummy_tree_compare(
+        _model: Gtk.TreeModel,
+        _iter1: Gtk.TreeIter,
+        _iter2: Gtk.TreeIter,
+        _user_data: Any
+    ) -> int:
+        return 0
 
     def _on_destroy(self, _roster: Roster) -> None:
-        self._remove_actions()
+        app.settings.disconnect_signals(self)
+        self._disconnect_actions()
         self._contact_refs.clear()
         self._group_refs.clear()
         self._unset_model()
         self._enable_sort(False)
+        # Set dummy method, otherwise store will not get destroyed
+        self._store.set_sort_func(Column.TEXT, self._dummy_tree_compare)
         self._store.clear()
         self._roster_tooltip.destroy()
         del self._roster
         del self._store
         del self._roster_tooltip
+        del self._contacts
         app.check_finalize(self)

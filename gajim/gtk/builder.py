@@ -1,30 +1,19 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from typing import Any
-from typing import Optional
 
-import sys
 import functools
+import sys
 import xml.etree.ElementTree as ET
 
-from gi.repository import Gtk
 from gi.repository import Gio
+from gi.repository import Gtk
 
+from gajim.common import configpaths
 from gajim.common import i18n
 from gajim.common.i18n import _
-from gajim.common import configpaths
 
 
 class Builder:
@@ -32,10 +21,10 @@ class Builder:
     filename = ''
 
     def __init__(self,
-                 filename: Optional[str] = None,
-                 widgets: Optional[list[str]] = None,
-                 domain: Optional[str] = None,
-                 gettext_: Optional[Any] = None) -> None:
+                 filename: str | None = None,
+                 widgets: list[str] | None = None,
+                 domain: str | None = None,
+                 gettext_: Any | None = None) -> None:
 
         if filename is None:
             filename = self.filename
@@ -57,16 +46,16 @@ class Builder:
             self._builder.add_from_string(xml_text)
 
     @staticmethod
-    @functools.lru_cache(maxsize=None)
+    @functools.cache
     def _load_string_from_filename(filename: str, gettext_: Any) -> str:
         file_path = str(configpaths.get('GUI') / filename)
 
-        if sys.platform == "win32":
+        if sys.platform == 'win32':
             # This is a workaround for non working translation on Windows
             tree = ET.parse(file_path)
-            for node in tree.iter():
-                if 'translatable' in node.attrib and node.text is not None:
-                    node.text = gettext_(node.text)
+            for node in tree.findall(".//*[@translatable='yes']"):
+                node.text = gettext_(node.text) if node.text else ''
+                del node.attrib['translatable']
 
             return ET.tostring(tree.getroot(),
                                encoding='unicode',
@@ -86,5 +75,5 @@ class Builder:
         return self._builder.get_object(name)
 
 
-def get_builder(file_name, widgets=None):
+def get_builder(file_name: str, widgets: list[str] | None = None) -> Builder:
     return Builder(file_name, widgets)

@@ -1,20 +1,8 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from typing import Any
-from typing import Tuple
-from typing import Optional
 
 import logging
 
@@ -25,10 +13,11 @@ from gi.repository import GtkSource
 from gajim.common import app
 from gajim.common import ged
 from gajim.common.i18n import _
-
 from gajim.common.styling import PreBlock
 
-log = logging.getLogger('gajim.gui.conversation.code_widget')
+from gajim.gtk.util import get_source_view_style_scheme
+
+log = logging.getLogger('gajim.gtk.conversation.code_widget')
 
 
 class CodeWidget(Gtk.Box):
@@ -72,16 +61,17 @@ class CodeWidget(Gtk.Box):
 
     def add_content(self, block: PreBlock):
         code, lang = self._prepare_code(block.text)
-        lang_name = self._textview.set_language(lang)
         if lang is None:
             self._lang_label.set_text(_('Code snippet'))
         else:
+            lang_name = self._textview.set_language(lang)
             self._lang_label.set_text(_('Code snippet (%s)') % lang_name)
 
         self._textview.print_code(code)
 
     @staticmethod
-    def _prepare_code(text: str) -> Tuple[str, Optional[str]]:
+    def _prepare_code(text: str) -> tuple[str, str | None]:
+        text = text.strip()
         code_start = text.partition('\n')[0]
         lang = None
         if len(code_start) > 3:
@@ -99,41 +89,27 @@ class CodeTextview(GtkSource.View):
         self.set_top_margin(2)
         self.set_bottom_margin(2)
         self.set_monospace(True)
+        self.get_buffer().set_highlight_matching_brackets(False)
 
         self._source_manager = GtkSource.LanguageManager.get_default()
-        self._style_scheme_manager = GtkSource.StyleSchemeManager.get_default()
 
         app.ged.register_event_handler('style-changed',
                                        ged.GUI1,
                                        self._on_style_changed)
 
-        style_scheme = self._get_style_scheme()
+        style_scheme = get_source_view_style_scheme()
         if style_scheme is not None:
             self.get_buffer().set_style_scheme(style_scheme)
-
-    def _get_style_scheme(self) -> Optional[GtkSource.StyleScheme]:
-        if app.css_config.prefer_dark:
-            style_scheme = self._style_scheme_manager.get_scheme(
-                'solarized-dark')
-        else:
-            style_scheme = self._style_scheme_manager.get_scheme(
-                'solarized-light')
-        return style_scheme
 
     def _on_style_changed(self, *args: Any) -> None:
-        style_scheme = self._get_style_scheme()
+        style_scheme = get_source_view_style_scheme()
         if style_scheme is not None:
             self.get_buffer().set_style_scheme(style_scheme)
 
-    def set_language(self, language_string: Optional[str]) -> str:
-        if language_string is None:
-            language_string = 'python3'
-
+    def set_language(self, language_string: str) -> str:
         lang = self._source_manager.get_language(language_string)
         if lang is None:
-            lang = self._source_manager.get_language('python3')
-
-        assert lang is not None
+            return _('Unknown language')
 
         log.debug('Code snippet lang: %s', lang.get_name())
         self.get_buffer().set_language(lang)

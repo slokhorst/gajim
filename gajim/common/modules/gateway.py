@@ -1,33 +1,28 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 # XEP-0100: Gateway Interaction
 
+from __future__ import annotations
+
 import nbxmpp
 from nbxmpp.namespaces import Namespace
+from nbxmpp.protocol import Iq
+from nbxmpp.protocol import JID
 
 from gajim.common import app
+from gajim.common import types
 from gajim.common.events import AgentRemoved
 from gajim.common.events import GatewayPromptReceived
 from gajim.common.modules.base import BaseModule
 
 
 class Gateway(BaseModule):
-    def __init__(self, con):
+    def __init__(self, con: types.Client) -> None:
         BaseModule.__init__(self, con)
 
-    def unsubscribe(self, agent):
+    def unsubscribe(self, agent: str) -> None:
         if not app.account_is_available(self._account):
             return
         iq = nbxmpp.Iq('set', Namespace.REGISTER, to=agent)
@@ -37,14 +32,17 @@ class Gateway(BaseModule):
             iq, self._on_unsubscribe_result)
         self._con.get_module('Roster').delete_item(agent)
 
-    def _on_unsubscribe_result(self, _nbxmpp_client, stanza):
+    def _on_unsubscribe_result(self,
+                               _nbxmpp_client: types.xmppClient,
+                               stanza: nbxmpp.Node
+                               ) -> None:
         if not nbxmpp.isResultNode(stanza):
             self._log.info('Error: %s', stanza.getError())
             return
 
         agent = stanza.getFrom().bare
-        jid_list = []
-        for contact in self._client.get_module('Roster').iter_contacts:
+        jid_list: list[JID] = []
+        for contact in self._client.get_module('Roster').iter_contacts():
             if contact.jid.domain == agent:
                 jid_list.append(contact.jid)
                 self._log.info(
@@ -63,7 +61,10 @@ class Gateway(BaseModule):
                          agent=agent,
                          jid_list=jid_list))
 
-    def request_gateway_prompt(self, jid, prompt=None):
+    def request_gateway_prompt(self,
+                               jid: str,
+                               prompt: str | None = None
+                               ) -> None:
         typ_ = 'get'
         if prompt:
             typ_ = 'set'
@@ -73,7 +74,10 @@ class Gateway(BaseModule):
             query.setTagData('prompt', prompt)
         self._con.connection.SendAndCallForResponse(iq, self._on_prompt_result)
 
-    def _on_prompt_result(self, _nbxmpp_client, stanza):
+    def _on_prompt_result(self,
+                          _nbxmpp_client: types.xmppClient,
+                          stanza: Iq
+                          ) -> None:
         jid = str(stanza.getFrom())
         fjid = stanza.getFrom().bare
         resource = stanza.getFrom().resource

@@ -2,25 +2,18 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 '''
-Watch for system sleep using systemd-logind.
-Documentation: http://www.freedesktop.org/wiki/Software/systemd/inhibit
+Watch for system shutdown using systemd-logind.
+Documentation: https://www.freedesktop.org/wiki/Software/systemd/inhibit
 '''
+from __future__ import annotations
 
-import os
+from typing import Any
+
 import logging
+import os
 
 from gi.repository import Gio
 from gi.repository import GLib
@@ -32,118 +25,127 @@ log = logging.getLogger('gajim.c.dbus.logind')
 
 
 class LogindListener:
-    _instance = None
+    _instance: LogindListener | None = None
 
     @classmethod
-    def get(cls):
+    def get(cls) -> LogindListener:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         # file descriptor object of the inhibitor
-        self._inhibit_fd = None
+        self._inhibit_fd: int | None = None
 
         Gio.bus_watch_name(
             Gio.BusType.SYSTEM,
             'org.freedesktop.login1',
             Gio.BusNameWatcherFlags.NONE,
-            self._on_appear_logind,
-            self._on_vanish_logind)
+            self._on_logind_appeared,
+            self._on_logind_vanished)
 
-    def _on_prepare_for_sleep(self, connection, _sender_name, _object_path,
-                              interface_name, signal_name, parameters,
-                              *_user_data):
-        '''Signal handler for PrepareForSleep event'''
+    def _on_prepare_for_shutdown(self,
+                                 _connection: Gio.DBusConnection,
+                                 _sender_name: str,
+                                 _object_path: str,
+                                 interface_name: str,
+                                 signal_name: str,
+                                 parameters: tuple[str, str, str],
+                                 *_user_data: Any
+                                 ) -> None:
+        '''Signal handler for PrepareForShutdown event'''
         log.debug('Received signal %s.%s%s',
                   interface_name, signal_name, parameters)
 
-        before = parameters[0] # Signal is either before or after sleep occurs
-        if before:
-            warn = self._inhibit_fd is None
-            log.log(
-                logging.WARNING if warn else logging.INFO,
-                'Preparing for sleep by disconnecting from network%s',
-                ', without holding a sleep inhibitor' if warn else '')
-
-            for name, conn in app.connections.items():
-                if app.account_is_connected(name):
-                    st = conn.status_message
-                    conn.change_status('offline',
-                                       _('Machine is going to sleep'))
-                    # TODO: Make this nicer
-                    conn._status_message = st  # pylint: disable=protected-access
-                    conn.time_to_reconnect = 5
-
-            self._disinhibit_sleep()
+        if self._inhibit_fd is None:
+            log.warning('Preparing for shutdown by quitting Gajim, '
+                        'without holding a shutdown inhibitor')
         else:
-            try:
-                self._inhibit_sleep(connection)
-            except GLib.Error as error:
-                log.warning('Inhibit failed: %s', error)
+            log.info('Preparing for shutdown by quitting Gajim')
 
-            for conn in app.connections.values():
-                if conn.state.is_disconnected and conn.time_to_reconnect:
-                    conn.reconnect()
+        app.window.quit()
 
-    def _inhibit_sleep(self, connection):
-        '''Obtain a sleep delay inhibitor from logind'''
+    def _obtain_delay_inhibitor(self, connection: Gio.DBusConnection) -> None:
+        '''Obtain a shutdown delay inhibitor from logind'''
         if self._inhibit_fd is not None:
             # Something is wrong, we have an inhibitor fd, and we are asking for
             # yet another one.
-            log.warning('Trying to obtain a sleep inhibitor '
+            log.warning('Trying to obtain a shutdown inhibitor '
                         'while already holding one.')
+            return
 
         try:
-            ret, ret_fdlist = connection.call_with_unix_fd_list_sync(
+            result = connection.call_with_unix_fd_list_sync(
                 'org.freedesktop.login1',
                 '/org/freedesktop/login1',
                 'org.freedesktop.login1.Manager',
                 'Inhibit',
                 GLib.Variant('(ssss)', (
-                    'sleep',
+                    'shutdown',
                     'org.gajim.Gajim',
-                    _('Disconnect from the network'),
-                    'delay' # Inhibitor will delay but not block sleep
-                    )),
+                    _('Shutting down Gajim'),
+                    'delay'  # Inhibitor will delay but not block shutdown
+                )),
                 GLib.VariantType.new('(h)'),
-                Gio.DBusCallFlags.NONE, -1, None, None)
+                Gio.DBusCallFlags.NONE,
+                -1,
+                None,
+                None)
         except GLib.Error as error:
             log.warning(
-                'Cannot obtain a sleep delay inhibitor from logind: %s', error)
+                'Could not obtain a shutdown delay inhibitor from '
+                'logind: %s', error)
             return
 
-        log.info('Inhibit sleep')
-        self._inhibit_fd = ret_fdlist.get(ret.unpack()[0])
+        ret, ret_fdlist = result
+        if ret_fdlist is None:  # pyright: ignore
+            # This can happen as reported by users
+            log.warning('Unable to obtain inhibitor, fdlist is None')
+            return
 
-    def _disinhibit_sleep(self):
-        '''Relinquish our sleep delay inhibitor'''
+        self._inhibit_fd = ret_fdlist.get(ret.unpack()[0])
+        log.info('Obtained shutdown delay inhibitor')
+
+    def release_delay_inhibitor(self) -> None:
+        '''Release our shutdown delay inhibitor'''
         if self._inhibit_fd is not None:
             os.close(self._inhibit_fd)
             self._inhibit_fd = None
-        log.info('Disinhibit sleep')
+        log.info('Released shutdown delay inhibitor')
 
-    def _on_appear_logind(self, connection, name, name_owner, *_user_data):
+    def _on_logind_appeared(self,
+                            connection: Gio.DBusConnection,
+                            name: str,
+                            name_owner: str,
+                            *_user_data: Any
+                            ) -> None:
         '''Use signal and locks provided by org.freedesktop.login1'''
         log.info('Name %s appeared, owned by %s', name, name_owner)
 
         connection.signal_subscribe(
             'org.freedesktop.login1',
             'org.freedesktop.login1.Manager',
-            'PrepareForSleep',
+            'PrepareForShutdown',
             '/org/freedesktop/login1',
             None,
             Gio.DBusSignalFlags.NONE,
-            self._on_prepare_for_sleep,
+            self._on_prepare_for_shutdown,
             None)
-        self._inhibit_sleep(connection)
+        self._obtain_delay_inhibitor(connection)
 
-    def _on_vanish_logind(self, _connection, name, *_user_data):
+    def _on_logind_vanished(self,
+                            _connection: Gio.DBusConnection,
+                            name: str,
+                            *_user_data: Any
+                            ) -> None:
         '''Release remaining resources related to org.freedesktop.login1'''
         log.info('Name %s vanished', name)
-        self._disinhibit_sleep()
+        self.release_delay_inhibitor()
 
 
-def enable():
-    return
-    # LogindListener.get()
+def enable() -> None:
+    LogindListener.get()
+
+
+def shutdown() -> None:
+    LogindListener.get().release_delay_inhibitor()

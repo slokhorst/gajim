@@ -7,40 +7,27 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
-from typing import Generator
-from typing import Optional
-from typing import Union
 from typing import cast
 
+import importlib.resources
 import os
 import sys
 import tempfile
-import importlib.resources
+from collections.abc import Generator
 from pathlib import Path
 
 from gi.repository import GLib
 
 import gajim
-from gajim.common.i18n import _
-from gajim.common.const import PathType
 from gajim.common.const import PathLocation
+from gajim.common.const import PathType
+from gajim.common.i18n import _
 
-
-PathTupleT = tuple[Optional[PathLocation], Path, Optional[PathType]]
+PathTupleT = tuple[PathLocation | None, Path, PathType | None]
 
 
 def get(key: str) -> Path:
@@ -104,17 +91,17 @@ class ConfigPaths:
         self._paths: dict[str, PathTupleT] = {}
         self.profile = ''
         self.profile_separation = False
-        self.custom_config_root: Optional[Path] = None
+        self.custom_config_root: Path | None = None
 
         if os.name == 'nt':
             if gajim.IS_PORTABLE:
                 application_path = Path(sys.executable).parent
                 self.config_root = self.cache_root = self.data_root = \
-                        application_path.parent / 'UserData'
+                    application_path.parent / 'UserData'
             else:
                 # Documents and Settings\[User Name]\Application Data\Gajim
                 self.config_root = self.cache_root = self.data_root = \
-                        Path(os.environ['appdata']) / 'Gajim'
+                    Path(os.environ['APPDATA']) / 'Gajim'
         else:
             self.config_root = Path(GLib.get_user_config_dir()) / 'gajim'
             self.cache_root = Path(GLib.get_user_cache_dir()) / 'gajim'
@@ -125,7 +112,6 @@ class ConfigPaths:
         source_paths = [
             ('DATA', basedir / 'data'),
             ('STYLE', basedir / 'data' / 'style'),
-            ('EMOTICONS', basedir / 'data' / 'emoticons'),
             ('GUI', basedir / 'data' / 'gui'),
             ('ICONS', basedir / 'data' / 'icons'),
             ('HOME', Path.home()),
@@ -146,8 +132,7 @@ class ConfigPaths:
         return path
 
     def items(self) -> Generator[tuple[str, PathTupleT], None, None]:
-        for key, value in self._paths.items():
-            yield (key, value)
+        yield from self._paths.items()
 
     def _prepare(self, path: Path, unique: bool) -> Path:
         if os.name == 'nt':
@@ -159,9 +144,9 @@ class ConfigPaths:
 
     def add(self,
             name: str,
-            path: Union[Path, str],
-            location: Optional[PathLocation] = None,
-            path_type: Optional[PathType] = None,
+            path: Path | str,
+            location: PathLocation | None = None,
+            path_type: PathType | None = None,
             unique: bool = False) -> None:
 
         path = Path(path)
@@ -189,18 +174,18 @@ class ConfigPaths:
         unique_profile_paths = [
             # Data paths
             ('SECRETS_FILE', 'secrets', PathLocation.DATA, PathType.FILE),
-            ('MY_PEER_CERTS', 'certs', PathLocation.DATA, PathType.FOLDER),
             ('CERT_STORE', 'cert_store', PathLocation.DATA, PathType.FOLDER),
             ('DEBUG', 'debug', PathLocation.DATA, PathType.FOLDER),
-            ('PLUGINS_DATA', 'plugins_data', PathLocation.DATA, PathType.FOLDER),
+            ('PLUGINS_DATA', 'plugins_data',
+             PathLocation.DATA, PathType.FOLDER),
 
             # Config paths
             ('SETTINGS', 'settings.sqlite', PathLocation.CONFIG, PathType.FILE),
             ('CONFIG_FILE', 'config', PathLocation.CONFIG, PathType.FILE),
             ('PLUGINS_CONFIG_DIR',
              'pluginsconfig', PathLocation.CONFIG, PathType.FOLDER),
-            ('MY_CERT', 'localcerts', PathLocation.CONFIG, PathType.FOLDER),
-            ('MY_SHORTCUTS', 'shortcuts.json', PathLocation.CONFIG, PathType.FILE),
+            ('MY_SHORTCUTS', 'shortcuts.json',
+             PathLocation.CONFIG, PathType.FILE),
         ]
 
         for path in unique_profile_paths:
@@ -211,16 +196,19 @@ class ConfigPaths:
         paths = [
             # Data paths
             ('LOG_DB', 'logs.db', PathLocation.DATA, PathType.FILE),
-            ('PLUGINS_DOWNLOAD', 'plugins_download', PathLocation.CACHE, PathType.FOLDER),
+            ('PLUGINS_DOWNLOAD', 'plugins_download',
+             PathLocation.CACHE, PathType.FOLDER),
+            ('PLUGINS_IMAGES', 'plugins_images',
+             PathLocation.CACHE, PathType.FOLDER),
             ('PLUGINS_USER', 'plugins', PathLocation.DATA, PathType.FOLDER),
-            ('MY_EMOTS',
-             'emoticons', PathLocation.DATA, PathType.FOLDER_OPTIONAL),
             ('MY_ICONSETS',
              'iconsets', PathLocation.DATA, PathType.FOLDER_OPTIONAL),
 
             # Cache paths
             ('CACHE_DB', 'cache.db', PathLocation.CACHE, PathType.FILE),
             ('AVATAR', 'avatars', PathLocation.CACHE, PathType.FOLDER),
+            ('AVATAR_ICONS', 'avatar_icons',
+             PathLocation.CACHE, PathType.FOLDER),
             ('BOB', 'bob', PathLocation.CACHE, PathType.FOLDER),
 
             # Config paths

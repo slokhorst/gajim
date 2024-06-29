@@ -3,40 +3,35 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-from typing import Optional
-from typing import Tuple
+from __future__ import annotations
 
-import os
+from typing import Any
+from typing import cast
+
 import logging
 from enum import IntEnum
 from enum import unique
 
+import cairo
 from gi.repository import Gdk
 from gi.repository import GdkPixbuf
 from gi.repository import GLib
 from gi.repository import Gtk
-import cairo
 
+from gajim.common import app
 from gajim.common.const import AvatarSize
-from gajim.common.i18n import _
 from gajim.common.helpers import get_file_path_from_dnd_dropped_uri
+from gajim.common.i18n import _
+from gajim.common.image_helpers import scale_with_ratio
 
-from .filechoosers import AvatarChooserDialog
-from .util import scale_with_ratio
+from gajim.gtk import types
+from gajim.gtk.const import TARGET_TYPE_URI_LIST
+from gajim.gtk.dialogs import ErrorDialog
+from gajim.gtk.filechoosers import AvatarChooserDialog
 
-log = logging.getLogger('gajim.gui.avatar_selector')
+log = logging.getLogger('gajim.gtk.avatar_selector')
 
 
 @unique
@@ -66,10 +61,15 @@ class AvatarSelector(Gtk.Box):
     def __init__(self) -> None:
         Gtk.Box.__init__(self, orientation=Gtk.Orientation.VERTICAL,
                          spacing=12)
-        self.get_style_context().add_class('padding-18')
+        self.get_style_context().add_class('avatar-selector')
+
+        if app.is_flatpak():
+            target = 'application/vnd.portal.files'
+        else:
+            target = 'text/uri-list'
 
         uri_entry = Gtk.TargetEntry.new(
-            'text/uri-list', Gtk.TargetFlags.OTHER_APP, 80)
+            target, Gtk.TargetFlags.OTHER_APP, TARGET_TYPE_URI_LIST)
         dst_targets = Gtk.TargetList.new([uri_entry])
 
         self.drag_dest_set(
@@ -78,6 +78,7 @@ class AvatarSelector(Gtk.Box):
             Gdk.DragAction.COPY | Gdk.DragAction.MOVE)
         self.drag_dest_set_target_list(dst_targets)
         self.connect('drag-data-received', self._on_drag_data_received)
+        self.connect('destroy', self._on_destroy)
 
         self._crop_area = CropArea()
         self._crop_area.set_vexpand(True)
@@ -102,19 +103,31 @@ class AvatarSelector(Gtk.Box):
 
         self.show_all()
 
+    def _on_destroy(self, *args: Any) -> None:
+        app.check_finalize(self)
+
+    def reset(self) -> None:
+        self._crop_area.reset()
+        self._load_button.show()
+        self._helper_label.show()
+
     def prepare_crop_area(self, path: str) -> None:
         pixbuf = self._get_pixbuf_from_path(path)
+        if pixbuf is None:
+            log.info('Could not load from path %s', path)
+            return
+
         self._crop_area.set_pixbuf(pixbuf)
         self._load_button.hide()
         self._helper_label.hide()
         self._crop_area.show()
 
     def _on_load_clicked(self, _button: Gtk.Button) -> None:
-        def _on_file_selected(path: str) -> None:
-            self.prepare_crop_area(path)
+        def _on_file_selected(paths: list[str]) -> None:
+            self.prepare_crop_area(paths[0])
 
         AvatarChooserDialog(_on_file_selected,
-                            transient_for=self.get_toplevel(),
+                            transient_for=cast(Gtk.Window, self.get_toplevel()),
                             modal=True)
 
     def _on_drag_data_received(self,
@@ -129,15 +142,15 @@ class AvatarSelector(Gtk.Box):
         if not selection.get_data():
             return
 
-        if target_type == 80:
+        if target_type == TARGET_TYPE_URI_LIST:
             uri_split = selection.get_uris()  # Might be more than one
             path = get_file_path_from_dnd_dropped_uri(uri_split[0])
-            if not os.path.isfile(path):
+            if not path or not path.is_file():
                 return
-            self.prepare_crop_area(path)
+            self.prepare_crop_area(str(path))
 
     @staticmethod
-    def _get_pixbuf_from_path(path: str) -> Optional[GdkPixbuf.Pixbuf]:
+    def _get_pixbuf_from_path(path: str) -> GdkPixbuf.Pixbuf | None:
         try:
             pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
             return pixbuf
@@ -150,18 +163,19 @@ class AvatarSelector(Gtk.Box):
 
     @staticmethod
     def _scale_for_publish(pixbuf: GdkPixbuf.Pixbuf
-                           ) -> Tuple[GdkPixbuf.Pixbuf, int, int]:
+                           ) -> tuple[GdkPixbuf.Pixbuf, int, int]:
         width = pixbuf.get_width()
         height = pixbuf.get_height()
         if width > AvatarSize.PUBLISH or height > AvatarSize.PUBLISH:
             # Scale only down, never up
             width, height = scale_with_ratio(AvatarSize.PUBLISH, width, height)
-            pixbuf = pixbuf.scale_simple(width,
-                                         height,
-                                         GdkPixbuf.InterpType.BILINEAR)
+            scaled_pixbuf = pixbuf.scale_simple(
+                width, height, GdkPixbuf.InterpType.BILINEAR)
+            assert scaled_pixbuf is not None
+            return scaled_pixbuf, width, height
         return pixbuf, width, height
 
-    def get_avatar_surface(self) -> Optional[Tuple[cairo.Surface, int, int]]:
+    def get_avatar_surface(self) -> tuple[cairo.ImageSurface, int, int] | None:
         pixbuf = self._crop_area.get_pixbuf()
         if pixbuf is None:
             return None
@@ -170,7 +184,7 @@ class AvatarSelector(Gtk.Box):
         return Gdk.cairo_surface_create_from_pixbuf(
             scaled, self.get_scale_factor()), width, height
 
-    def get_avatar_bytes(self) -> Tuple[bool, Optional[bytes], int, int]:
+    def get_avatar_bytes(self) -> tuple[bool, bytes | None, int, int]:
         pixbuf = self._crop_area.get_pixbuf()
         if pixbuf is None:
             return False, None, 0, 0
@@ -191,12 +205,12 @@ class CropArea(Gtk.DrawingArea):
 
         self._image = Gdk.Rectangle()
         self._crop = Gdk.Rectangle()
-        self._pixbuf: Optional[GdkPixbuf.Pixbuf] = None
-        self._browse_pixbuf: Optional[GdkPixbuf.Pixbuf] = None
-        self._color_shifted_pixbuf: Optional[GdkPixbuf.Pixbuf] = None
-        self._current_cursor: Optional[Gdk.CursorType] = None
+        self._pixbuf: GdkPixbuf.Pixbuf | None = None
+        self._browse_pixbuf: GdkPixbuf.Pixbuf | None = None
+        self._color_shifted_pixbuf: GdkPixbuf.Pixbuf | None = None
+        self._current_cursor: Gdk.CursorType | None = None
 
-        self._scale = float(0.0)
+        self._scale = 1.0
         self._image.x = 0
         self._image.y = 0
         self._image.width = 0
@@ -206,7 +220,7 @@ class CropArea(Gtk.DrawingArea):
         self._last_press_y = -1
         self._base_width = 10
         self._base_height = 10
-        self._aspect = float(1.0)
+        self._aspect = 1.0
 
         self.set_size_request(self._base_width, self._base_height)
 
@@ -229,29 +243,31 @@ class CropArea(Gtk.DrawingArea):
         else:
             self._aspect = -1
 
+    def reset(self) -> None:
+        self._browse_pixbuf = None
+        self.hide()
+
     def set_pixbuf(self, pixbuf: GdkPixbuf.Pixbuf) -> None:
-        if pixbuf:
-            self._browse_pixbuf = pixbuf
-            width = pixbuf.get_width()
-            height = pixbuf.get_height()
-        else:
-            width = 0
-            height = 0
+        self._browse_pixbuf = pixbuf
+        width = pixbuf.get_width()
+        height = pixbuf.get_height()
 
         self._crop.width = 2 * self._base_width
         self._crop.height = 2 * self._base_height
         self._crop.x = int(abs((width - self._crop.width) / 2))
         self._crop.y = int(abs((height - self._crop.height) / 2))
 
-        self._scale = 0.0
+        self._scale = 1.0
         self._image.x = 0
         self._image.y = 0
         self._image.width = 0
         self._image.height = 0
 
+        self._update_pixbufs()
+
         self.queue_draw()
 
-    def get_pixbuf(self) -> Optional[GdkPixbuf.Pixbuf]:
+    def get_pixbuf(self) -> GdkPixbuf.Pixbuf | None:
         if self._browse_pixbuf is None:
             return None
 
@@ -266,11 +282,22 @@ class CropArea(Gtk.DrawingArea):
         return GdkPixbuf.Pixbuf.new_subpixbuf(
             self._browse_pixbuf, self._crop.x, self._crop.y, width, height)
 
-    def _on_draw(self, _widget: Gtk.Widget, context: cairo.Context) -> bool:
+    def _on_draw(self,
+                 _widget: Gtk.Widget,
+                 context: cairo.Context[types.SomeSurface]
+                 ) -> bool:
+
         if self._browse_pixbuf is None:
             return False
 
         self._update_pixbufs()
+
+        if self._pixbuf is None:
+            avatar_selector = cast(AvatarSelector, self.get_parent())
+            avatar_selector.reset()
+            ErrorDialog(_('Error Loading Image'),
+                        _('Selected image could not be loaded.'))
+            return False
 
         width = self._pixbuf.get_width()
         height = self._pixbuf.get_height()
@@ -279,6 +306,7 @@ class CropArea(Gtk.DrawingArea):
         ix = self._image.x
         iy = self._image.y
 
+        assert self._color_shifted_pixbuf is not None
         Gdk.cairo_set_source_pixbuf(
             context, self._color_shifted_pixbuf, ix, iy)
         context.rectangle(
@@ -583,6 +611,7 @@ class CropArea(Gtk.DrawingArea):
 
     def _update_pixbufs(self) -> None:
         allocation = self.get_allocation()
+        assert self._browse_pixbuf
         width = self._browse_pixbuf.get_width()
         height = self._browse_pixbuf.get_height()
 
@@ -593,9 +622,13 @@ class CropArea(Gtk.DrawingArea):
         dest_width = int(width * scale)
         dest_height = int(height * scale)
 
+        if dest_width == 0 or dest_height == 0:
+            log.warning('Image width or height is zero')
+            return
+
         if (self._pixbuf is None or
-                self._pixbuf.get_width != allocation.width or
-                self._pixbuf.get_height != allocation.height):
+                self._pixbuf.get_width() != allocation.width or
+                self._pixbuf.get_height() != allocation.height):
 
             self._pixbuf = GdkPixbuf.Pixbuf.new(
                 GdkPixbuf.Colorspace.RGB,
@@ -603,6 +636,10 @@ class CropArea(Gtk.DrawingArea):
                 8,
                 dest_width,
                 dest_height)
+
+            if self._pixbuf is None:
+                return
+
             self._pixbuf.fill(0x0)
 
             self._browse_pixbuf.scale(
@@ -619,7 +656,7 @@ class CropArea(Gtk.DrawingArea):
 
             self._generate_color_shifted_pixbuf()
 
-            if self._scale == 0.0:
+            if self._scale == 1.0:
                 scale_to_80 = float(min(
                     (self._pixbuf.get_width() * 0.8 / self._base_width),
                     (self._pixbuf.get_height() * 0.8 / self._base_height)))
@@ -677,10 +714,15 @@ class CropArea(Gtk.DrawingArea):
             cursor_type = Gdk.CursorType.LEFT_PTR
 
         if cursor_type is not self._current_cursor:
+            default_display = Gdk.Display.get_default()
+            if default_display is None:
+                return
             cursor = Gdk.Cursor.new_for_display(
-                Gdk.Display.get_default(),
+                default_display,
                 cursor_type)
-            self.get_window().set_cursor(cursor)
+            window = self.get_window()
+            assert window
+            window.set_cursor(cursor)
             self._current_cursor = cursor_type
 
     @staticmethod
@@ -710,7 +752,8 @@ class CropArea(Gtk.DrawingArea):
             [Loc.OUTSIDE, Loc.OUTSIDE, Loc.OUTSIDE, Loc.OUTSIDE, Loc.OUTSIDE],
             [Loc.OUTSIDE, Loc.TOP_LEFT, Loc.TOP, Loc.TOP_RIGHT, Loc.OUTSIDE],
             [Loc.OUTSIDE, Loc.LEFT, Loc.INSIDE, Loc.RIGHT, Loc.OUTSIDE],
-            [Loc.OUTSIDE, Loc.BOTTOM_LEFT, Loc.BOTTOM, Loc.BOTTOM_RIGHT, Loc.OUTSIDE],
+            [Loc.OUTSIDE, Loc.BOTTOM_LEFT, Loc.BOTTOM, Loc.BOTTOM_RIGHT,
+             Loc.OUTSIDE],
             [Loc.OUTSIDE, Loc.OUTSIDE, Loc.OUTSIDE, Loc.OUTSIDE, Loc.OUTSIDE],
         ]
         # pylint: enable=line-too-long
@@ -735,6 +778,7 @@ class CropArea(Gtk.DrawingArea):
 
     def _generate_color_shifted_pixbuf(self) -> None:
         # pylint: disable=no-member
+        assert self._pixbuf
         surface = cairo.ImageSurface(
             cairo.Format.ARGB32,
             self._pixbuf.get_width(),
@@ -750,5 +794,6 @@ class CropArea(Gtk.DrawingArea):
         context.paint()
 
         surface = context.get_target()
+        assert isinstance(surface, cairo.ImageSurface)
         self._color_shifted_pixbuf = Gdk.pixbuf_get_from_surface(
             surface, 0, 0, surface.get_width(), surface.get_height())

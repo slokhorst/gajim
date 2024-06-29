@@ -1,42 +1,36 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
+
+from __future__ import annotations
 
 from typing import Any
-from typing import List
+from typing import cast
+from typing import Literal
+from typing import overload
 
 import logging
 
 from gi.repository import Gtk
-
-from nbxmpp.errors import StanzaError
 from nbxmpp.errors import ChangePasswordStanzaError
+from nbxmpp.errors import StanzaError
 from nbxmpp.modules.dataforms import SimpleDataForm
+from nbxmpp.stringprep import saslprep
 from nbxmpp.task import Task
 
 from gajim.common import app
-from gajim.common.i18n import _
 from gajim.common import passwords
 from gajim.common.helpers import to_user_string
+from gajim.common.i18n import _
 
-from .assistant import Assistant
-from .assistant import Page
-from .assistant import ErrorPage
-from .assistant import SuccessPage
-from .dataform import DataFormWidget
-from .util import ensure_not_destroyed
+from gajim.gtk.assistant import Assistant
+from gajim.gtk.assistant import ErrorPage
+from gajim.gtk.assistant import Page
+from gajim.gtk.assistant import SuccessPage
+from gajim.gtk.dataform import DataFormWidget
+from gajim.gtk.util import ensure_not_destroyed
 
-log = logging.getLogger('gajim.gui.change_password')
+log = logging.getLogger('gajim.gtk.change_password')
 
 
 class ChangePassword(Assistant):
@@ -66,6 +60,21 @@ class ChangePassword(Assistant):
 
         self.show_all()
 
+    @overload
+    def get_page(self, name: Literal['password']) -> EnterPassword: ...
+
+    @overload
+    def get_page(self, name: Literal['next_stage']) -> NextStage: ...
+
+    @overload
+    def get_page(self, name: Literal['error']) -> Error: ...
+
+    @overload
+    def get_page(self, name: Literal['success']) -> Success: ...
+
+    def get_page(self, name: str) -> Page:
+        return self._pages[name]
+
     def _on_button_clicked(self,
                            _assistant: Assistant,
                            button_name: str
@@ -83,6 +92,7 @@ class ChangePassword(Assistant):
 
     def _on_apply(self, next_stage: bool = False) -> None:
         if next_stage:
+            # TODO: Does not apply sasl prep profile
             form = self.get_page('next_stage').get_submit_form()
             self._client.get_module('Register').change_password_with_form(
                 form, callback=self._on_change_password)
@@ -96,7 +106,8 @@ class ChangePassword(Assistant):
         try:
             task.finish()
         except ChangePasswordStanzaError as error:
-            self.get_page('next_stage').set_form(error.get_form())
+            form = cast(SimpleDataForm, error.get_form())
+            self.get_page('next_stage').set_form(form)
             self.show_page('next_stage', Gtk.StackTransitionType.SLIDE_LEFT)
 
         except StanzaError as error:
@@ -155,32 +166,40 @@ class EnterPassword(Page):
         self.pack_start(label, False, True, 0)
         self.pack_start(self._password1_entry, True, True, 0)
         self.pack_start(self._password2_entry, True, True, 0)
-        self._show_icon(False)
+        self._hide_warning()
         self.show_all()
 
-    def _show_icon(self, show: bool) -> None:
-        if show:
-            self._password2_entry.set_icon_from_icon_name(
-                Gtk.EntryIconPosition.SECONDARY, 'dialog-warning-symbolic')
-            self._password2_entry.set_icon_tooltip_text(
-                Gtk.EntryIconPosition.SECONDARY, _('Passwords do not match'))
-        else:
-            self._password2_entry.set_icon_from_icon_name(
-                Gtk.EntryIconPosition.SECONDARY, None)
+    def _hide_warning(self) -> None:
+        self._password1_entry.set_icon_from_icon_name(
+            Gtk.EntryIconPosition.SECONDARY, None)
+
+    def _show_warning(self, text: str) -> None:
+        self._password1_entry.set_icon_from_icon_name(
+            Gtk.EntryIconPosition.SECONDARY, 'dialog-warning-symbolic')
+        self._password1_entry.set_icon_tooltip_text(
+            Gtk.EntryIconPosition.SECONDARY, text)
 
     def _on_changed(self, _entry: Gtk.Entry) -> None:
         password1 = self._password1_entry.get_text()
         if not password1:
-            self._show_icon(True)
+            self._show_warning(_('Passwords do not match'))
             self._set_complete(False)
             return
 
         password2 = self._password2_entry.get_text()
         if password1 != password2:
-            self._show_icon(True)
+            self._show_warning(_('Passwords do not match'))
             self._set_complete(False)
             return
-        self._show_icon(False)
+
+        try:
+            saslprep(password1)
+        except Exception:
+            self._show_warning(_('Password contains prohibited characters'))
+            self._set_complete(False)
+            return
+
+        self._hide_warning()
         self._set_complete(True)
 
     def _set_complete(self, state: bool) -> None:
@@ -188,9 +207,9 @@ class EnterPassword(Page):
         self.update_page_complete()
 
     def get_password(self) -> str:
-        return self._password1_entry.get_text()
+        return saslprep(self._password1_entry.get_text())
 
-    def get_visible_buttons(self) -> List[str]:
+    def get_visible_buttons(self) -> list[str]:
         return ['apply']
 
 
@@ -219,9 +238,12 @@ class NextStage(Page):
         self._current_form.show_all()
 
     def get_submit_form(self) -> SimpleDataForm:
-        return self._current_form.get_submit_form()
+        assert self._current_form is not None
+        form = self._current_form.get_submit_form()
+        assert isinstance(form, SimpleDataForm)
+        return form
 
-    def get_visible_buttons(self) -> List[str]:
+    def get_visible_buttons(self) -> list[str]:
         return ['apply']
 
 
@@ -233,7 +255,7 @@ class Error(ErrorPage):
         self.set_text(
             _('An error occurred while trying to change your password.'))
 
-    def get_visible_buttons(self) -> List[str]:
+    def get_visible_buttons(self) -> list[str]:
         return ['back']
 
 
@@ -244,5 +266,5 @@ class Success(SuccessPage):
         self.set_heading(_('Password Changed'))
         self.set_text(_('Your password has successfully been changed.'))
 
-    def get_visible_buttons(self) -> List[str]:
+    def get_visible_buttons(self) -> list[str]:
         return ['close']

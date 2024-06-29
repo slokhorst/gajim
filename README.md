@@ -1,93 +1,165 @@
-# Welcome to Gajim
+[[_TOC_]]
+
+## Requirements
 
 ### Runtime Requirements
 
-- python3.9 or higher
-- python3-gi
-- python3-gi-cairo
-- gir1.2-gtk-3.0 (>=3.22)
-- gir1.2-gtksource-4
-- python3-nbxmpp (>=2.99.0)
-- python3-openssl (>=16.2)
-- python3-css-parser
-- python3-keyring
-- python3-precis-i18n
-- python3-packaging
-- python3-setuptools
-- gir1.2-soup-2.4
-- gir1.2-farstream-0.2, gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0, gstreamer1.0-plugins-ugly, gstreamer1.0-libav, and gstreamer1.0-gtk3 for audio and video calls
-- GLib (>=2.60.0)
+- [cairo](https://gitlab.freedesktop.org/cairo/cairo) (>=1.16.0)
+- [cryptography](https://pypi.org/project/cryptography/) (>=3.4.8)
+- [css-parser](https://pypi.org/project/css-parser/)
+- [emoji](https://pypi.org/project/emoji/) (>=2.6.0)
+- [GLib](https://gitlab.gnome.org/GNOME/glib) (>=2.66.0)
+- [Gtk3](https://gitlab.gnome.org/GNOME/gtk) (>=3.24.30)
+- [GtkSourceView](https://gitlab.gnome.org/GNOME/gtksourceview)
+- [keyring](https://pypi.org/project/keyring/)
+- [nbxmpp](https://pypi.org/project/nbxmpp/) (>=5.0.1)
+- [omemo-dr](https://dev.gajim.org/gajim/omemo-dr) (>=1.0.0)
+- [packaging](https://pypi.org/project/packaging/)
+- [Pango](https://gitlab.gnome.org/GNOME/pango) (>=1.50.0)
+- [Pillow](https://pypi.org/project/Pillow/) (>=9.1.0)
+- [precis_i18n](https://pypi.org/project/precis-i18n/)
+- [pycairo](https://pypi.org/project/pycairo/)
+- [PyGObject](https://pypi.org/project/PyGObject/) (>=3.42.0)
+- [Python](https://www.python.org/) (>=3.10)
+- [qrcode](https://pypi.org/project/qrcode/) (>=7.3.1)
+- [setuptools](https://pypi.org/project/setuptools/) (>=65.0.0)
+- [SQLAlchemy](https://pypi.org/project/SQLAlchemy/) (>=2.0.0)
+- [sqlite](https://www.sqlite.org/) (>=3.35.0)
+- [PyWinRT](https://github.com/pywinrt/pywinrt) (Only on Windows)
+- [windows-toasts](https://github.com/DatGuy1/Windows-Toasts) (Only on Windows)
 
 ### Optional Runtime Requirements
 
-- python3-pil (pillow) for support of webp avatars
-- gir1.2-avahi-0.6 for zeroconf on Linux or [pybonjour](https://dev.gajim.org/lovetox/pybonjour-python3) on Windows/macOS
-- gir1.2-gspell-1 and hunspell-LANG where lang is your locale eg. en, fr etc
-- gir1.2-secret-1 for GNOME Keyring or KDE support as password storage
 - D-Bus running to have gajim-remote working
-- gir1.2-gupnpigd-1.0 for better NAT traversing
-- gir1.2-networkmanager-1.0 for network lose detection
-- gir1.2-geoclue-2.0 for sharing your location
-- gir1.2-gsound-1.0 for sound on Linux
+- [sentry-sdk](https://pypi.org/project/sentry-sdk/) for Sentry error reporting to dev.gajim.org (users decide whether to send reports or not)
+- [gspell](https://gitlab.gnome.org/GNOME/gspell) and hunspell-LANG where lang is your locale eg. en, fr etc
+- [libsecret](https://gitlab.gnome.org/GNOME/libsecret/) for GNOME Keyring or KDE support as password storage
+- [GUPnP-IGD](https://gitlab.gnome.org/GNOME/gupnp) for better NAT traversing
+- [NetworkManager](https://gitlab.freedesktop.org/NetworkManager/NetworkManager) for network lose detection
+- [GeoClue](https://gitlab.freedesktop.org/geoclue/geoclue) for sharing your location
+- [GSound](https://gitlab.gnome.org/GNOME/gsound) for sound on Linux
+- [AppIndicator](https://github.com/AyatanaIndicators/libayatana-appindicator) for App Indicator on Wayland
 
-### Compile-time Requirements
+#### For Video and Audio Calls
 
-- python3-setuptools
-- gettext
+- [Farstream](https://gitlab.freedesktop.org/farstream/farstream)
+- [GStreamer](https://gitlab.freedesktop.org/gstreamer/gstreamer)
+- [gst-plugins-base](https://gitlab.freedesktop.org/gstreamer/gst-plugins-base)
+- [gst-plugins-ugly](https://gitlab.freedesktop.org/gstreamer/gst-plugins-ugly)
+- [gst-libav](https://gitlab.freedesktop.org/gstreamer/gst-libav)
 
-### Installation Procedure
+### Build Requirements
 
-#### Packages
+- [setuptools](https://pypi.org/project/setuptools/) (>=65.0.0)
+- [gettext](https://savannah.gnu.org/projects/gettext/)
 
-- [Arch Linux](https://www.archlinux.org/packages/community/any/gajim/)
+To build Gajim a PEP517 build frontend like pip (https://pip.pypa.io/en/stable/) or build (https://pypa-build.readthedocs.io/en/stable/) must be used.
+
+The build frontend takes care of installing all python build requirements. Beware `gettext` is not a python library and cannot be installed by the build frontend.
+
+## Building
+
+### Building the metadata files (Unix only)
+
+```bash
+./pep517build/build_metadata.py -o dist/metadata
+```
+
+### Building the wheel
+
+This is only necessary if you need the wheel, otherwise you can skip to the Installing section.
+
+#### Using `build`
+
+```bash
+python -m build -w
+```
+
+#### Using `pip`
+
+```bash
+pip wheel --no-deps --use-pep517 -w dist .
+```
+
+## Installing
+
+### Installing with `pip`
+
+```bash
+pip install .
+```
+
+### Installing the wheel
+
+```bash
+pip install dist/name_of_wheel.whl
+```
+
+### Installing the metadata files (Unix only)
+
+```bash
+./pep517build/install_metadata.py dist/metadata --prefix=/usr
+```
+
+## Tests
+
+- `python -m unittest discover -s test`
+- `python -m unittest ./test/dialogs/gui_file.py` (for testing GUI files)
+
+## Packages and install instructions
+
+### Packages
+
+- [Arch Linux](https://www.archlinux.org/packages/extra/any/gajim/)
 - [Debian](https://packages.debian.org/stable/gajim)
-- [Fedora](https://apps.fedoraproject.org/packages/gajim)
+- [Fedora](https://packages.fedoraproject.org/pkgs/gajim/)
 - [Ubuntu](https://packages.ubuntu.com/gajim)
 - [FreeBSD](https://www.freshports.org/net-im/gajim/)
 
-#### Flatpak
+### Flatpak
 
 see [README](./flatpak/README.md)
 
-#### Snapshots
+### Snapshots
 
 - [Daily Linux](https://www.gajim.org/downloads/snap/)
 - [Daily Windows](https://gajim.org/downloads/snap/win)
 
-#### Linux
+### Mac
 
-    pip install .
+see [Wiki](https://dev.gajim.org/gajim/gajim/-/wikis/help/Gajim-on-macOS)
 
-#### Mac
+## Developing
 
-see [Wiki](https://dev.gajim.org/gajim/gajim/wikis/help/gajimmacosx#python3brew)
+To create a virtualenv you can execute
 
-#### Developing
+    ./scripts/dev_env.sh
 
-For developing you don't have to install Gajim.
+Be sure all install requirements are available.
 
-After installing all dependencies execute
+Afterwards activate the virtual environment with
 
+    source .venv/bin/activate
     ./launch.py
 
-#### Windows
+### Windows
 
 see [README](./win/README.md)
 
-### Miscellaneous
+## Miscellaneous
 
-#### Debugging
+### Debugging
 
 Execute gajim with `--verbose`
 
-#### Links
+### Links
 
 - [FAQ](https://dev.gajim.org/gajim/gajim/wikis/help/gajimfaq)
 - [Wiki](https://dev.gajim.org/gajim/gajim/wikis/home)
 
 That is all, **enjoy**!
 
-(C) 2003-2022
+(C) 2003-2024
 The Gajim Team
 [https://gajim.org](https://gajim.org)
 

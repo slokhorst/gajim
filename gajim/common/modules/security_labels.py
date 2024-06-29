@@ -1,23 +1,21 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 # XEP-0258: Security Labels in XMPP
 
-from nbxmpp.namespaces import Namespace
+from __future__ import annotations
+
+from collections.abc import Generator
+
 from nbxmpp.errors import is_error
+from nbxmpp.modules.security_labels import Catalog
+from nbxmpp.namespaces import Namespace
+from nbxmpp.protocol import JID
+from nbxmpp.structs import DiscoInfo
 
 from gajim.common import app
+from gajim.common import types
 from gajim.common.events import SecCatalogReceived
 from gajim.common.modules.base import BaseModule
 from gajim.common.modules.util import as_task
@@ -30,13 +28,13 @@ class SecLabels(BaseModule):
         'request_catalog',
     ]
 
-    def __init__(self, con):
+    def __init__(self, con: types.Client) -> None:
         BaseModule.__init__(self, con)
 
-        self._catalogs = {}
+        self._catalogs: dict[JID, Catalog] = {}
         self.supported = False
 
-    def pass_disco(self, info):
+    def pass_disco(self, info: DiscoInfo) -> None:
         if Namespace.SECLABEL not in info.features:
             return
 
@@ -44,15 +42,17 @@ class SecLabels(BaseModule):
         self._log.info('Discovered security labels: %s', info.jid)
 
     @as_task
-    def request_catalog(self, jid):
-        _task = yield
+    def request_catalog(self, jid: JID) -> Generator[Catalog, None, None]:
 
-        catalog = yield self._nbxmpp('SecurityLabels').request_catalog(jid)
+        _task = yield  # noqa: F841
+
+        catalog = yield self._nbxmpp('SecurityLabels').request_catalog(str(jid))
 
         if is_error(catalog):
             self._log.info(catalog)
             return
 
+        assert catalog is not None
         self._catalogs[jid] = catalog
 
         self._log.info('Received catalog: %s', jid)
@@ -61,5 +61,12 @@ class SecLabels(BaseModule):
                                                jid=jid,
                                                catalog=catalog))
 
-    def get_catalog(self, jid):
-        return self._catalogs.get(jid)
+    def get_catalog(self, jid: JID) -> Catalog | None:
+        if not self.supported:
+            return None
+
+        catalog = self._catalogs.get(jid)
+        if catalog is None:
+            self.request_catalog(jid)
+            return None
+        return catalog

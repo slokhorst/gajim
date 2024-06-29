@@ -1,28 +1,17 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from gi.repository import Gio
 from gi.repository import Gtk
 
 from gajim.common import app
 from gajim.common.client import Client
-
 from gajim.common.const import GIO_TLS_ERRORS
 from gajim.common.i18n import _
 
-from .builder import get_builder
-from .util import open_window
+from gajim.gtk.builder import get_builder
+from gajim.gtk.util import open_window
 
 
 class SSLErrorDialog(Gtk.ApplicationWindow):
@@ -30,6 +19,7 @@ class SSLErrorDialog(Gtk.ApplicationWindow):
                  account: str,
                  client: Client,
                  cert: Gio.TlsCertificate,
+                 ignored_errors: set[Gio.TlsCertificateFlags],
                  error: Gio.TlsCertificateFlags
                  ) -> None:
         Gtk.ApplicationWindow.__init__(self)
@@ -45,10 +35,10 @@ class SSLErrorDialog(Gtk.ApplicationWindow):
 
         self.account = account
         self._error = error
+        self._ignored_errors = ignored_errors
         self._client = client
         self._cert = cert
-        self._server = app.settings.get_account_setting(self.account,
-                                                        'hostname')
+        self._server = app.get_hostname_from_account(self.account)
 
         self._process_error()
 
@@ -60,7 +50,7 @@ class SSLErrorDialog(Gtk.ApplicationWindow):
             _('There was an error while attempting to verify the SSL '
               'certificate of your XMPP server (%s).') % self._server)
 
-        unknown_error = _('Unknown SSL error \'%s\'') % self._error
+        unknown_error = _('Unknown SSL error "%s"') % self._error
         ssl_error = GIO_TLS_ERRORS.get(self._error, unknown_error)
         self._ui.ssl_error.set_text(ssl_error)
 
@@ -89,9 +79,8 @@ class SSLErrorDialog(Gtk.ApplicationWindow):
         if self._ui.add_certificate_checkbutton.get_active():
             app.cert_store.add_certificate(self._cert)
 
-        ignored_tls_errors = None
         if self._error == Gio.TlsCertificateFlags.EXPIRED:
-            ignored_tls_errors = set([Gio.TlsCertificateFlags.EXPIRED])
+            self._ignored_errors.add(Gio.TlsCertificateFlags.EXPIRED)
 
         self.destroy()
-        self._client.connect(ignored_tls_errors=ignored_tls_errors)
+        self._client.connect(ignored_tls_errors=self._ignored_errors)

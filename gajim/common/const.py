@@ -1,43 +1,43 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
-from typing import Any, Union
 from typing import NamedTuple
 
-from enum import IntEnum
+from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from enum import Enum
+from enum import IntEnum
 from enum import unique
 from functools import total_ordering
 
 from gi.repository import Gio
-
-from nbxmpp.namespaces import Namespace
 from nbxmpp.const import PresenceShow
+from nbxmpp.namespaces import Namespace
 from nbxmpp.protocol import JID
 
 from gajim.common.i18n import _
-from gajim.common.i18n import Q_
-
+from gajim.common.i18n import p_
 
 STOP_EVENT = True
 PROPAGATE_EVENT = False
 
+MAX_MESSAGE_CORRECTION_DELAY = 300
 
-class EncryptionData(NamedTuple):
-    additional_data: Any = None
+
+class EncryptionInfoMsg(Enum):
+    BAD_OMEMO_CONFIG = _('This chat’s configuration is unsuitable for '
+                         'encryption with OMEMO. To use OMEMO in this chat, '
+                         'it should be non-anonymous and members-only.')
+    NO_FINGERPRINTS = _('To send an encrypted message, you have to decide '
+                        'whether to trust the device of your contact.')
+    QUERY_DEVICES = _('No devices found to encrypt this message to. '
+                      'Querying for devices now…')
+    UNDECIDED_FINGERPRINTS = _('There are devices for which you have not made '
+                               'a trust decision yet.')
 
 
 class Entity(NamedTuple):
@@ -48,9 +48,8 @@ class Entity(NamedTuple):
 
 
 class RowHeaderType(IntEnum):
-    ACTIVE = 0
-    CONVERSATIONS = 1
-    PINNED = 2
+    CONVERSATIONS = 0
+    PINNED = 1
 
 
 class AvatarSize(IntEnum):
@@ -62,8 +61,10 @@ class AvatarSize(IntEnum):
     WORKSPACE = 40
     WORKSPACE_EDIT = 100
     CHAT = 48
-    NOTIFICATION = 48
+    MESSAGE_REPLY = 24
+    NOTIFICATION = 96
     CALL = 100
+    CALL_BIG = 200
     GROUP_INFO = 100
     TOOLTIP = 100
     ACCOUNT_PAGE = 150
@@ -71,9 +72,9 @@ class AvatarSize(IntEnum):
     PUBLISH = 200
 
 
-class ArchiveState(IntEnum):
-    NEVER = 0
-    ALL = 1
+class ArchiveState:
+    NEVER = None
+    ALL = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 @unique
@@ -91,84 +92,27 @@ class PathType(IntEnum):
 
 
 @unique
-class KindConstant(IntEnum):
-    STATUS = 0
-    GCSTATUS = 1
-    GC_MSG = 2
-    SINGLE_MSG_RECV = 3
-    CHAT_MSG_RECV = 4
-    SINGLE_MSG_SENT = 5
-    CHAT_MSG_SENT = 6
-    ERROR = 7
-    FILE_TRANSFER_INCOMING = 8
-    FILE_TRANSFER_OUTGOING = 9
-    CALL_INCOMING = 10
-    CALL_OUTGOING = 11
-
-    def __str__(self):
-        return str(self.value)
-
-
-@unique
-class ShowConstant(IntEnum):
-    ONLINE = 0
-    CHAT = 1
-    AWAY = 2
-    XA = 3
-    DND = 4
-    OFFLINE = 5
-
-
-@unique
-class TypeConstant(IntEnum):
-    AIM = 0
-    GG = 1
-    HTTP_WS = 2
-    ICQ = 3
-    MSN = 4
-    QQ = 5
-    SMS = 6
-    SMTP = 7
-    TLEN = 8
-    YAHOO = 9
-    NEWMAIL = 10
-    RSS = 11
-    WEATHER = 12
-    MRIM = 13
-    NO_TRANSPORT = 14
-
-
-@unique
-class SubscriptionConstant(IntEnum):
-    NONE = 0
-    TO = 1
-    FROM = 2
-    BOTH = 3
-
-
-@unique
-class JIDConstant(IntEnum):
-    NORMAL_TYPE = 0
-    ROOM_TYPE = 1
-
-@unique
 class StyleAttr(Enum):
     COLOR = 'color'
     BACKGROUND = 'background'
     FONT = 'font'
 
+
 @unique
 class CSSPriority(IntEnum):
+    PRE_APPLICATION = 599
     APPLICATION = 600
     APPLICATION_DARK = 601
     DEFAULT_THEME = 610
     DEFAULT_THEME_DARK = 611
     USER_THEME = 650
 
+
 @unique
 class ButtonAction(Enum):
     DESTRUCTIVE = 'destructive-action'
     SUGGESTED = 'suggested-action'
+
 
 @unique
 class IdleState(Enum):
@@ -176,19 +120,6 @@ class IdleState(Enum):
     XA = 'xa'
     AWAY = 'away'
     AWAKE = 'online'
-
-
-@unique
-class PEPEventType(IntEnum):
-    ABSTRACT = 0
-    ACTIVITY = 1
-    TUNE = 2
-    MOOD = 3
-    LOCATION = 4
-    NICKNAME = 5
-    AVATAR = 6
-    ATOM = 7
-    BOOKMARKS = 8
 
 
 class SyncThreshold(IntEnum):
@@ -230,7 +161,7 @@ class Display(Enum):
 
 
 class URIType(Enum):
-    UNKNOWN = 'unknown'
+    INVALID = 'invalid'
     XMPP = 'xmpp'
     MAIL = 'mail'
     GEO = 'geo'
@@ -238,12 +169,28 @@ class URIType(Enum):
     FILE = 'file'
     AT = 'at'
     TEL = 'tel'
+    OTHER = 'other'
 
 
-class URIAction(Enum):
+# https://xmpp.org/registrar/querytypes.html
+class XmppUriQuery(Enum):
+    NONE = ''
     MESSAGE = 'message'
     JOIN = 'join'
-    SUBSCRIBE = 'subscribe'
+
+    @staticmethod
+    def from_str(s: str) -> XmppUriQuery | None:
+        try:
+            return XmppUriQuery(s)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def from_str_or_none(s: str) -> XmppUriQuery:
+        qtype = XmppUriQuery.from_str(s)
+        if qtype:
+            return qtype
+        return XmppUriQuery.NONE
 
 
 class MUCJoinedState(Enum):
@@ -253,6 +200,7 @@ class MUCJoinedState(Enum):
     CREATING = 'creating'
     CAPTCHA_REQUEST = 'captcha in progress'
     CAPTCHA_FAILED = 'captcha failed'
+    PASSWORD_REQUEST = 'password request'  # noqa: S105
 
     def __str__(self):
         return self.name
@@ -280,6 +228,10 @@ class MUCJoinedState(Enum):
     @property
     def is_captcha_failed(self):
         return self == MUCJoinedState.CAPTCHA_FAILED
+
+    @property
+    def is_password_request(self):
+        return self == MUCJoinedState.PASSWORD_REQUEST
 
 
 class ClientState(IntEnum):
@@ -316,21 +268,26 @@ class ClientState(IntEnum):
 
 
 class SimpleClientState(Enum):
+    CONNECTING = 'connecting'
     DISCONNECTED = 'disconnected'
     CONNECTED = 'connected'
-    RESUME_IN_PREGRESS = 'resume-in-progress'
+    RESUME_IN_PROGRESS = 'resume-in-progress'
 
     @property
-    def is_disconnected(self):
-        return self == SimpleClientState.DISCONNECTED
+    def is_connecting(self):
+        return self == SimpleClientState.CONNECTING
 
     @property
     def is_connected(self):
         return self == SimpleClientState.CONNECTED
 
     @property
+    def is_disconnected(self):
+        return self == SimpleClientState.DISCONNECTED
+
+    @property
     def is_resume_in_progress(self):
-        return self == SimpleClientState.RESUME_IN_PREGRESS
+        return self == SimpleClientState.RESUME_IN_PROGRESS
 
 
 class JingleState(Enum):
@@ -344,22 +301,33 @@ class JingleState(Enum):
         return self.value
 
 
+class CallType(Enum):
+    AUDIO = 'audio'
+    VIDEO = 'video'
+
+
+@dataclass
+class Draft:
+    text: str
+    reply_pk: int | None
+
+
 MUC_CREATION_EXAMPLES = [
-    (Q_('?Group chat name:Team'),
-     Q_('?Group chat description:Project discussion'),
-     Q_('?Group chat address:team')),
-    (Q_('?Group chat name:Family'),
-     Q_('?Group chat description:Spring gathering'),
-     Q_('?Group chat address:family')),
-    (Q_('?Group chat name:Vacation'),
-     Q_('?Group chat description:Trip planning'),
-     Q_('?Group chat address:vacation')),
-    (Q_('?Group chat name:Repairs'),
-     Q_('?Group chat description:Local help group'),
-     Q_('?Group chat address:repairs')),
-    (Q_('?Group chat name:News'),
-     Q_('?Group chat description:Local news and reports'),
-     Q_('?Group chat address:news')),
+    (p_('Group chat name', 'Team'),
+     p_('Group chat description', 'Project discussion'),
+     p_('Group chat address', 'team')),
+    (p_('Group chat name', 'Family'),
+     p_('Group chat description', 'Spring gathering'),
+     p_('Group chat address', 'family')),
+    (p_('Group chat name', 'Vacation'),
+     p_('Group chat description', 'Trip planning'),
+     p_('Group chat address', 'vacation')),
+    (p_('Group chat name', 'Repairs'),
+     p_('Group chat description', 'Local help group'),
+     p_('Group chat address', 'repairs')),
+    (p_('Group chat name', 'News'),
+     p_('Group chat description', 'Local news and reports'),
+     p_('Group chat address', 'news')),
 ]
 
 
@@ -367,7 +335,8 @@ MUC_DISCO_ERRORS = {
     'remote-server-not-found': _('Remote server not found'),
     'remote-server-timeout': _('Remote server timeout'),
     'service-unavailable': _('Address does not belong to a group chat server'),
-    'subscription-required': _('Address does not belong to a group chat server'),
+    'subscription-required': _(
+        'Address does not belong to a group chat server'),
     'not-muc-service': _('Address does not belong to a group chat server'),
     'already-exists': _('Group chat already exists'),
     'item-not-found': _('Group chat does not exist'),
@@ -420,120 +389,129 @@ LOCATION_DATA = {
 
 
 SSLError = {
-    2: _("Unable to get issuer certificate"),
-    3: _("Unable to get certificate CRL"),
+    2: _('Unable to get issuer certificate'),
+    3: _('Unable to get certificate CRL'),
     4: _("Unable to decrypt certificate's signature"),
     5: _("Unable to decrypt CRL's signature"),
-    6: _("Unable to decode issuer public key"),
-    7: _("Certificate signature failure"),
-    8: _("CRL signature failure"),
-    9: _("Certificate is not yet valid"),
-    10: _("Certificate has expired"),
-    11: _("CRL is not yet valid"),
-    12: _("CRL has expired"),
+    6: _('Unable to decode issuer public key'),
+    7: _('Certificate signature failure'),
+    8: _('CRL signature failure'),
+    9: _('Certificate is not yet valid'),
+    10: _('Certificate has expired'),
+    11: _('CRL is not yet valid'),
+    12: _('CRL has expired'),
     13: _("Format error in certificate's notBefore field"),
     14: _("Format error in certificate's notAfter field"),
     15: _("Format error in CRL's lastUpdate field"),
     16: _("Format error in CRL's nextUpdate field"),
-    17: _("Out of memory"),
-    18: _("Self signed certificate"),
-    19: _("Self signed certificate in certificate chain"),
-    20: _("Unable to get local issuer certificate"),
-    21: _("Unable to verify the first certificate"),
-    22: _("Certificate chain too long"),
-    23: _("Certificate revoked"),
-    24: _("Invalid CA certificate"),
-    25: _("Path length constraint exceeded"),
-    26: _("Unsupported certificate purpose"),
-    27: _("Certificate not trusted"),
-    28: _("Certificate rejected"),
-    29: _("Subject issuer mismatch"),
-    30: _("Authority and subject key identifier mismatch"),
-    31: _("Authority and issuer serial number mismatch"),
-    32: _("Key usage does not include certificate signing"),
-    50: _("Application verification failure"),
+    17: _('Out of memory'),
+    18: _('Self signed certificate'),
+    19: _('Self signed certificate in certificate chain'),
+    20: _('Unable to get local issuer certificate'),
+    21: _('Unable to verify the first certificate'),
+    22: _('Certificate chain too long'),
+    23: _('Certificate revoked'),
+    24: _('Invalid CA certificate'),
+    25: _('Path length constraint exceeded'),
+    26: _('Unsupported certificate purpose'),
+    27: _('Certificate not trusted'),
+    28: _('Certificate rejected'),
+    29: _('Subject issuer mismatch'),
+    30: _('Authority and subject key identifier mismatch'),
+    31: _('Authority and issuer serial number mismatch'),
+    32: _('Key usage does not include certificate signing'),
+    50: _('Application verification failure'),
 }
 
 
-THANKS = u"""\
-Alexander Futász
-Alexander V. Butenko
-Alexey Nezhdanov
-Alfredo Junix
-Anaël Verrier
-Anders Ström
-Andrew Sayman
-Anton Shmigirilov
-Christian Bjälevik
-Christophe Got
-Christoph Neuroth
-David Campey
-Dennis Craven
-Fabian Neumann
-Filippos Papadopoulos
-Francisco Alburquerque Parra (Membris Khan)
-Frederic Lory
-Fridtjof Bussefor
-Geobert Quach
-Guillaume Morin
-Gustavo J. A. M. Carneiro
-Ivo Anjo
-Josef Vybíral
-Juraj Michalek
-Kjell Braden
-Luis Peralta
-Michael Scherer
-Michele Campeotto
-Mike Albon
-Miguel Fonseca
-Norman Rasmussen
-Oscar Hellström
-Peter Saint-Andre
-Petr Menšík
-Sergey Kuleshov
-Stavros Giannouris
-Stian B. Barmen
-Thilo Molitor
-Thomas Klein-Hitpaß
-Urtzi Alfaro
-Witold Kieraś
-Yakov Bezrukov
-Yavor Doganov
-""".strip().split("\n")
+VOWELS = 'aeiou'
 
-ARTISTS = u"""\
-Anders Ström
-Christophe Got
-Dennis Craven
-Dmitry Korzhevin
-Guillaume Morin
-Gvorcek Spajreh
-Josef Vybíral
-Membris Khan
-Rederick Asher
-Jakub Szypulka
-""".strip().split("\n")
 
-DEVS_CURRENT = u"""\
-Yann Leboulanger (asterix AT lagaule.org)
-Philipp Hörist (philipp AT hoerist.com)
-Daniel Brötzmann (wurstsalat AT posteo.de)
-André Apitzsch
-""".strip().split("\n")
+CONSONANTS = 'bcdfghjklmnpqrstvwxyz'
 
-DEVS_PAST = u"""\
-Stefan Bethge (stefan AT lanpartei.de)
-Alexander Cherniuk (ts33kr AT gmail.com)
-Stephan Erb (steve-e AT h3c.de)
-Vincent Hanquez (tab AT snarc.org)
-Dimitur Kirov (dkirov AT gmail.com)
-Nikos Kouremenos (kourem AT gmail.com)
-Julien Pivotto (roidelapluie AT gmail.com)
-Jonathan Schleifer (js-gajim AT webkeks.org)
-Travis Shirk (travis AT pobox.com)
-Brendan Taylor (whateley AT gmail.com)
-Jean-Marie Traissard (jim AT lapin.org)
-""".strip().split("\n")
+
+THANKS = [
+    'Alexander Futász',
+    'Alexander V. Butenko',
+    'Alexey Nezhdanov',
+    'Alfredo Junix',
+    'Anaël Verrier',
+    'Anders Ström',
+    'Andrew Sayman',
+    'Anton Shmigirilov',
+    'Christian Bjälevik',
+    'Christophe Got',
+    'Christoph Neuroth',
+    'David Campey',
+    'Dennis Craven',
+    'Fabian Neumann',
+    'Filippos Papadopoulos',
+    'Francisco Alburquerque Parra (Membris Khan)',
+    'Frederic Lory',
+    'Fridtjof Bussefor',
+    'Geobert Quach',
+    'Guillaume Morin',
+    'Gustavo J. A. M. Carneiro',
+    'Ivo Anjo',
+    'Josef Vybíral',
+    'Juraj Michalek',
+    'Kjell Braden',
+    'Luis Peralta',
+    'Michael Scherer',
+    'Michele Campeotto',
+    'Mike Albon',
+    'Miguel Fonseca',
+    'Norman Rasmussen',
+    'Oscar Hellström',
+    'Peter Saint-Andre',
+    'Petr Menšík',
+    'Sergey Kuleshov',
+    'Stavros Giannouris',
+    'Stian B. Barmen',
+    'Thilo Molitor',
+    'Thomas Klein-Hitpaß',
+    'Urtzi Alfaro',
+    'Witold Kieraś',
+    'Yakov Bezrukov',
+    'Yavor Doganov',
+]
+
+
+ARTISTS = [
+    'Anders Ström',
+    'Christophe Got',
+    'Dennis Craven',
+    'Dmitry Korzhevin',
+    'Guillaume Morin',
+    'Gvorcek Spajreh',
+    'Josef Vybíral',
+    'Membris Khan',
+    'Rederick Asher',
+    'Jakub Szypulka',
+]
+
+
+DEVS_CURRENT = [
+    'Yann Leboulanger (asterix AT lagaule.org)',
+    'Philipp Hörist (philipp AT hoerist.com)',
+    'Daniel Brötzmann (wurstsalat AT posteo.de)',
+    'André Apitzsch',
+]
+
+
+DEVS_PAST = [
+    'Stefan Bethge (stefan AT lanpartei.de)',
+    'Alexander Cherniuk (ts33kr AT gmail.com)',
+    'Stephan Erb (steve-e AT h3c.de)',
+    'Vincent Hanquez (tab AT snarc.org)',
+    'Dimitur Kirov (dkirov AT gmail.com)',
+    'Nikos Kouremenos (kourem AT gmail.com)',
+    'Julien Pivotto (roidelapluie AT gmail.com)',
+    'Jonathan Schleifer (js-gajim AT webkeks.org)',
+    'Travis Shirk (travis AT pobox.com)',
+    'Brendan Taylor (whateley AT gmail.com)',
+    'Jean-Marie Traissard (jim AT lapin.org)',
+]
 
 
 RFC5646_LANGUAGE_TAGS = {
@@ -758,7 +736,7 @@ RFC5646_LANGUAGE_TAGS = {
     'uz-UZ': 'Uzbek (Latin) (Uzbekistan)',
     'uz-Cyrl-UZ': 'Uzbek (Cyrillic) (Uzbekistan)',
     'vi': 'Vietnamese',
-    'vi-VN': 'Vietnamese (Viet Nam)',
+    'vi-VN': 'Vietnamese (Vietnam)',
     'xh': 'Xhosa',
     'xh-ZA': 'Xhosa (South Africa)',
     'zh': 'Chinese',
@@ -771,17 +749,21 @@ RFC5646_LANGUAGE_TAGS = {
     'zu-ZA': 'Zulu (South Africa)'
 }
 
-# pylint: disable=line-too-long
+
 GIO_TLS_ERRORS = {
-    Gio.TlsCertificateFlags.UNKNOWN_CA: _('The signing certificate authority is not known'),
-    Gio.TlsCertificateFlags.REVOKED: _('The certificate has been revoked'),
-    Gio.TlsCertificateFlags.BAD_IDENTITY: _('The certificate does not match the expected identity of the site'),
-    Gio.TlsCertificateFlags.INSECURE: _('The certificate’s algorithm is insecure'),
-    Gio.TlsCertificateFlags.NOT_ACTIVATED: _('The certificate’s activation time is in the future'),
+    Gio.TlsCertificateFlags.UNKNOWN_CA: _(
+        'The signing certificate authority is not known'),
+    Gio.TlsCertificateFlags.REVOKED: _(
+        'The certificate has been revoked'),
+    Gio.TlsCertificateFlags.BAD_IDENTITY: _(
+        'The certificate does not match the expected identity of the site'),
+    Gio.TlsCertificateFlags.INSECURE: _(
+        'The certificate’s algorithm is insecure'),
+    Gio.TlsCertificateFlags.NOT_ACTIVATED: _(
+        'The certificate’s activation time is in the future'),
     Gio.TlsCertificateFlags.GENERIC_ERROR: _('Unknown validation error'),
     Gio.TlsCertificateFlags.EXPIRED: _('The certificate has expired'),
 }
-# pylint: enable=line-too-long
 
 
 class FTState(Enum):
@@ -880,119 +862,57 @@ COMMON_FEATURES = [
     Namespace.HASHES_BLAKE2B_512,
     Namespace.JINGLE,
     Namespace.JINGLE_FILE_TRANSFER_5,
-    Namespace.JINGLE_XTLS,
     Namespace.JINGLE_BYTESTREAM,
     Namespace.JINGLE_IBB,
     Namespace.AVATAR_METADATA + '+notify',
-    Namespace.MESSAGE_MODERATE
+    Namespace.MESSAGE_MODERATE,
+    Namespace.REPLY,
+    Namespace.OMEMO_TEMP_DL + '+notify',
+    Namespace.STYLING,
+    Namespace.REACTIONS,
 ]
 
 
 SHOW_LIST = [
     'offline',
     'connecting',
-    'online',
-    'chat',
     'away',
     'xa',
+    'chat',
+    'online',
     'dnd',
-    'error'
 ]
 
-GAJIM_FAQ_URI = 'https://dev.gajim.org/gajim/gajim/wikis/help/gajimfaq'
-GAJIM_WIKI_URI = 'https://dev.gajim.org/gajim/gajim/wikis'
-
-URI_SCHEMES = {
-    'aaa://',
-    'aaas://',
-    'acap://',
-    'cap://',
-    'cid:',
-    'crid://',
-    'data:',
-    'dav:',
-    'dict://',
-    'dns:',
-    'fax:',
-    'file:/',
-    'ftp://',
-    'geo:',
-    'go:',
-    'gopher://',
-    'h323:',
-    'http://',
-    'https://',
-    'iax:',
-    'icap://',
-    'im:',
-    'imap://',
-    'info:',
-    'ipp://',
-    'iris:',
-    'iris.beep:',
-    'iris.xpc:',
-    'iris.xpcs:',
-    'iris.lwz:',
-    'ldap://',
-    'mailto:',
-    'mid:',
-    'modem:',
-    'msrp://',
-    'msrps://',
-    'mtqp://',
-    'mupdate://',
-    'news:',
-    'nfs://',
-    'nntp://',
-    'opaquelocktoken:',
-    'pop://',
-    'pres:',
-    'prospero://',
-    'rtsp://',
-    'service:',
-    'sip:',
-    'sips:',
-    'sms:',
-    'snmp://',
-    'soap.beep://',
-    'soap.beeps://',
-    'tag:',
-    'tel:',
-    'telnet://',
-    'tftp://',
-    'thismessage:/',
-    'tip://',
-    'tv:',
-    'urn://',
-    'vemmi://',
-    'xmlrpc.beep://',
-    'xmlrpc.beeps://',
-    'xmpp:',
-    'z39.50r://',
-    'z39.50s://',
-    'about:',
-    'apt:',
-    'cvs://',
-    'daap://',
-    'ed2k://',
-    'feed:',
-    'fish://',
-    'git://',
-    'iax2:',
-    'irc://',
-    'ircs://',
-    'ldaps://',
-    'magnet:',
-    'mms://',
-    'rsync://',
-    'ssh://',
-    'svn://',
-    'sftp://',
-    'smb://',
-    'webcal://',
-    'aesgcm://',
+SHOW_STRING = {
+    'dnd': p_('User status', 'Busy'),
+    'xa': p_('User status', 'Not Available'),
+    'chat': p_('User status', 'Free for Chat'),
+    'online': p_('User status', 'Available'),
+    'connecting': _('Connecting'),
+    'away': p_('User status', 'Away'),
+    'offline': _('Offline'),
 }
 
+SHOW_STRING_MNEMONIC = {
+    'dnd': p_('User status', '_Busy'),
+    'xa': p_('User status', '_Not Available'),
+    'chat': p_('User status', '_Free for Chat'),
+    'online': p_('User status', '_Available'),
+    'connecting': _('Connecting'),
+    'away': p_('User status', 'A_way'),
+    'offline': _('_Offline'),
+}
+
+GAJIM_FAQ_URI = 'https://dev.gajim.org/gajim/gajim/wikis/help/gajimfaq'
+GAJIM_PRIVACY_POLICY_URI = 'https://gajim.org/privacy/'
+GAJIM_WIKI_URI = 'https://dev.gajim.org/gajim/gajim/wikis'
+GAJIM_SUPPORT_JID = 'gajim@conference.gajim.org'
+
+
+# Clickable URI schemes not (yet) registered with IANA (see ./iana.py)
+NONREGISTERED_URI_SCHEMES = {
+    'gemini',
+}
 
 # This is an excerpt of Media Types from
 # https://www.iana.org/assignments/media-types/media-types.xhtml
@@ -1046,14 +966,22 @@ MIME_TYPES = (
     'audio/aac',
     'audio/ac3',
     'audio/flac',
+    'audio/mp3',
     'audio/mp4',
     'audio/mpeg',
     'audio/ogg',
     'audio/opus',
+    'audio/vnd.wave',
     'audio/wav',
+    'audio/wave',
+    'audio/x-aac',
     'audio/x-flac',
     'audio/x-m4a',
     'audio/x-matroska',
+    'audio/x-mp3',
+    'audio/x-mpeg',
+    'audio/x-ogg',
+    'audio/x-wav',
     # font/*
     'font/ttf',
     'font/woff',
@@ -1103,64 +1031,6 @@ MIME_TYPES = (
 )
 
 
-FILE_CATEGORIES = {
-    'img': [
-        'jpg',
-        'jpeg',
-        'jpe',
-        'jif',
-        'jfif',
-        'jfi',
-        'png',
-        'gif',
-        'webp',
-        'tiff',
-        'tif',
-        'psd',
-        'raw',
-        'arw',
-        'cr2',
-        'nrw',
-        'k25',
-        'bmp',
-        'dib',
-        'heif',
-        'heic',
-        'ind',
-        'indd',
-        'indt',
-        'jp2',
-        'j2k',
-        'jpf',
-        'jpx',
-        'jpm',
-        'mj2',
-        'svg',
-        'svgz',
-        'ai'
-    ],
-    'video': [
-        'webm',
-        'mpg',
-        'mp2',
-        'mpeg',
-        'mpe',
-        'mpv',
-        'ogg',
-        'mp4',
-        'm4p',
-        'm4v',
-        'avi',
-        'wmv',
-        'mov',
-        'qt',
-        'flv',
-        'swf',
-        'avchd'
-    ],
-}
-
-
 TRUST_SYMBOL_DATA = {
     Trust.UNTRUSTED: ('dialog-error-symbolic',
                       _('Untrusted'),
@@ -1201,9 +1071,18 @@ class PresenceShowExt(Enum):
     def is_offline(self):
         return self == PresenceShowExt.OFFLINE
 
-    def __lt__(self, other: Union[PresenceShowExt, PresenceShow]) -> bool:
+    def __lt__(self, other: PresenceShowExt | PresenceShow) -> bool:
         if isinstance(other, PresenceShowExt):
             return False
-        if not isinstance(other, PresenceShow):
+        if not isinstance(other, PresenceShow):  # pyright: ignore
             return NotImplemented
         return True
+
+
+# Replace keys with Gio.TlsProtocolVersion enum once
+# we require GLib >= 2.69
+TLS_VERSION_STRINGS = {
+    3: '1.1',
+    4: '1.2',
+    5: '1.3',
+}

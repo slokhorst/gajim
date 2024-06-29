@@ -1,31 +1,28 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 # XEP-0047: In-Band Bytestreams
+
+from __future__ import annotations
 
 import time
 
 import nbxmpp
-from nbxmpp.namespaces import Namespace
-from nbxmpp.protocol import NodeProcessed
-from nbxmpp.structs import StanzaHandler
 from nbxmpp.errors import StanzaError
+from nbxmpp.namespaces import Namespace
+from nbxmpp.protocol import Iq
+from nbxmpp.protocol import NodeProcessed
+from nbxmpp.structs import IqProperties
+from nbxmpp.structs import StanzaHandler
+from nbxmpp.task import Task
 
 from gajim.common import app
+from gajim.common import types
+from gajim.common.file_props import FileProp
+from gajim.common.file_props import FilesProp
 from gajim.common.helpers import to_user_string
 from gajim.common.modules.base import BaseModule
-from gajim.common.file_props import FilesProp
 
 
 class IBB(BaseModule):
@@ -38,7 +35,7 @@ class IBB(BaseModule):
         'send_reply',
     ]
 
-    def __init__(self, con):
+    def __init__(self, con: types.Client) -> None:
         BaseModule.__init__(self, con)
 
         self.handlers = [
@@ -47,7 +44,11 @@ class IBB(BaseModule):
                           ns=Namespace.IBB),
         ]
 
-    def _ibb_received(self, _con, stanza, properties):
+    def _ibb_received(self,
+                      _con: types.xmppClient,
+                      stanza: Iq,
+                      properties: IqProperties
+                      ) -> None:
         if not properties.is_ibb:
             return
 
@@ -86,7 +87,7 @@ class IBB(BaseModule):
             file_props.disconnect_cb = None
             file_props.continue_cb = None
             file_props.syn_id = stanza.getID()
-            file_props.fp = open(file_props.file_name, 'wb')  # pylint: disable=consider-using-with
+            file_props.fp = open(file_props.file_name, 'wb')  # pylint: disable=consider-using-with  # noqa: E501
             self.send_reply(stanza)
 
         elif properties.ibb.type == 'close':
@@ -106,7 +107,11 @@ class IBB(BaseModule):
 
         raise NodeProcessed
 
-    def _on_data_received(self, stanza, file_props, properties):
+    def _on_data_received(self,
+                          stanza: Iq,
+                          file_props: FileProp,
+                          properties: IqProperties
+                          ) -> None:
         ibb = properties.ibb
         if ibb.seq != file_props.seq:
             self.send_reply(stanza, nbxmpp.ERR_UNEXPECTED_REQUEST)
@@ -127,7 +132,7 @@ class IBB(BaseModule):
         if file_props.received_len >= file_props.size:
             file_props.completed = True
 
-    def send_open(self, to, sid, fp):
+    def send_open(self, to: str, sid: str, fp: FileProp) -> FileProp:
         self._log.info('Send open to %s, sid: %s', to, sid)
         file_props = FilesProp.getFilePropBySid(sid)
         file_props.direction = '>'
@@ -149,7 +154,7 @@ class IBB(BaseModule):
                                       user_data=file_props)
         return file_props
 
-    def _on_open_result(self, task):
+    def _on_open_result(self, task: Task) -> None:
         try:
             task.finish()
         except StanzaError as error:
@@ -160,7 +165,7 @@ class IBB(BaseModule):
         file_props = task.get_user_data()
         self.send_data(file_props)
 
-    def send_close(self, file_props):
+    def send_close(self, file_props: FileProp) -> None:
         file_props.connected = False
         file_props.fp.close()
         file_props.stopped = True
@@ -187,7 +192,7 @@ class IBB(BaseModule):
             if session.weinitiate:
                 session.cancel_session()
 
-    def _on_close_result(self, task):
+    def _on_close_result(self, task: Task) -> None:
         try:
             task.finish()
         except StanzaError as error:
@@ -195,7 +200,7 @@ class IBB(BaseModule):
             self._log.warning(error)
             return
 
-    def send_data(self, file_props):
+    def send_data(self, file_props: FileProp) -> None:
         if file_props.completed:
             self.send_close(file_props)
             return
@@ -223,7 +228,7 @@ class IBB(BaseModule):
                 file_props.completed = True
             app.socks5queue.progress_transfer_cb(self._account, file_props)
 
-    def _on_data_result(self, task):
+    def _on_data_result(self, task: Task) -> None:
         try:
             task.finish()
         except StanzaError as error:

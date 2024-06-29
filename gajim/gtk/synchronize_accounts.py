@@ -1,27 +1,21 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
+
+from __future__ import annotations
 
 from gi.repository import Gdk
 from gi.repository import Gtk
 
 from gajim.common import app
-from gajim.common.exceptions import GajimGeneralException
+from gajim.common import types
+from gajim.common.const import SimpleClientState
 from gajim.common.i18n import _
+from gajim.common.modules.contacts import BareContact
 
-from .dialogs import ErrorDialog
-from .util import get_app_window
-from .builder import get_builder
+from gajim.gtk.builder import get_builder
+from gajim.gtk.dialogs import ErrorDialog
+from gajim.gtk.util import get_app_window
 
 
 class SynchronizeAccounts(Gtk.ApplicationWindow):
@@ -36,15 +30,14 @@ class SynchronizeAccounts(Gtk.ApplicationWindow):
         self.set_title(_('Synchronize Accounts'))
         self.set_transient_for(get_app_window('AccountsWindow'))
 
-        if not app.account_is_available(account):
-            ErrorDialog(
-                _('You are not connected to the server'),
-                _('You cannot synchronize with an account unless it is '
-                  'connected.'))
-            raise GajimGeneralException('You are not connected to the server')
-
         self.account = account
+        if not app.account_is_available(account):
+            self._ui.connection_warning_label.show()
+            self._ui.select_contacts_button.set_sensitive(False)
+
         self._local_client = app.get_client(account)
+        self._local_client.connect_signal(
+            'state-changed', self._on_client_state_changed)
 
         self._remote_account = None
         self._remote_client = None
@@ -86,24 +79,31 @@ class SynchronizeAccounts(Gtk.ApplicationWindow):
         if event.keyval == Gdk.KEY_Escape:
             self.destroy()
 
+    def _on_client_state_changed(self,
+                                 _client: types.Client,
+                                 _signal_name: str,
+                                 state: SimpleClientState
+                                 ) -> None:
+
+        self._ui.select_contacts_button.set_sensitive(state.is_connected)
+        self._ui.connection_warning_label.set_visible(not state.is_connected)
+
     def _init_accounts(self) -> None:
-        """
+        '''
         Initialize listStore with existing accounts
-        """
+        '''
         model = self._ui.accounts_treeview.get_model()
         assert isinstance(model, Gtk.ListStore)
         model.clear()
-        for remote_account in app.connections:
+        for remote_account in app.settings.get_active_accounts():
             if remote_account == self.account:
                 # Do not show the account we're sync'ing
                 continue
             iter_ = model.append()
             model.set(
                 iter_,
-                0,
-                remote_account,
-                1,
-                app.get_hostname_from_account(remote_account))
+                {0: remote_account,
+                 1: app.get_hostname_from_account(remote_account)})
 
     def _on_next_clicked(self, _button: Gtk.Button) -> None:
         selection = self._ui.accounts_treeview.get_selection()
@@ -146,7 +146,10 @@ class SynchronizeAccounts(Gtk.ApplicationWindow):
         for remote_jid in remote_jid_list:
             if remote_jid not in local_jid_list:
                 iter_ = model.append()
-                model.set(iter_, 0, True, 1, remote_jid)
+                model.set(
+                    iter_,
+                    {0: True,
+                     1: remote_jid})
 
     def _on_sync_toggled(self, cell: Gtk.CellRendererToggle, path: str) -> None:
         model = self._ui.contacts_treeview.get_model()
@@ -167,9 +170,10 @@ class SynchronizeAccounts(Gtk.ApplicationWindow):
                 hostname = app.get_hostname_from_account(self._remote_account)
                 message = _('I’m synchronizing my contacts from my account at '
                             '"%s". Could you please add this address to your '
-                            'contact list?' % hostname)
+                            'contact list?') % hostname
                 remote_contact = self._remote_client.get_module(
                     'Contacts').get_contact(remote_jid)
+                assert isinstance(remote_contact, BareContact)
 
                 # keep same groups and same nickname
                 self._local_client.get_module('Presence').subscribe(

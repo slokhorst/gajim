@@ -1,69 +1,75 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 from typing import Any
-from typing import Dict
-from typing import Type
-from typing import TypeVar
 from typing import NamedTuple
-from typing import Optional
-from typing import Union
+from typing import TypeVar
 
-import time
+import base64
+import dataclasses
+import logging
 from dataclasses import dataclass
 from dataclasses import fields
+from datetime import datetime
 
 from gi.repository import GLib
-
-from nbxmpp.protocol import JID
-from nbxmpp.const import Role
 from nbxmpp.const import Affiliation
 from nbxmpp.const import PresenceShow
+from nbxmpp.const import Role
+from nbxmpp.modules.dataforms import SimpleDataForm
+from nbxmpp.modules.security_labels import SecurityLabel
+from nbxmpp.protocol import JID
+from nbxmpp.structs import EncryptionData
+from nbxmpp.structs import MucSubject
+from nbxmpp.structs import PresenceProperties
+from nbxmpp.util import generate_id
 
+from gajim.common import types
 from gajim.common.const import MUCJoinedState
-from gajim.common.const import KindConstant
 from gajim.common.const import PresenceShowExt
 from gajim.common.const import URIType
-from gajim.common.const import URIAction
+from gajim.common.storage.archive.const import MessageType
+from gajim.common.util.datetime import convert_epoch_to_local_datetime
+from gajim.common.util.datetime import utc_now
 
+log = logging.getLogger('gajim.c.structs')
 
 _T = TypeVar('_T')
 
 
 class URI(NamedTuple):
     type: URIType
-    action: Optional[URIAction] = None
-    data: Optional[Union[Dict[str, str], str]] = None
+    source: str
+    query_type: str = ''
+    query_params: dict[str, str] = {}
+    data: dict[str, str] = {}
 
 
 class MUCData:
     def __init__(self,
                  room_jid: str,
                  nick: str,
-                 password: str,
-                 config=None) -> None:
+                 occupant_id: str | None,
+                 password: str | None,
+                 config: dict[str, Any] | None = None
+                 ) -> None:
 
         self._room_jid = JID.from_string(room_jid)
         self._config = config
         self.nick = nick
         self.password = password
+        self.occupant_id = occupant_id
         self.state = MUCJoinedState.NOT_JOINED
         # Message id of the captcha challenge
-        self.captcha_id = None
-        self.subject = None
+        self.captcha_id: str | None = None
+        self.captcha_form: SimpleDataForm | None = None
+        self.error: str | None = None
+        self.error_text: str | None = None
+        self.subject: MucSubject | None = None
+        self.last_subject_timestamp: float | None = None
 
     @property
     def jid(self) -> JID:
@@ -74,151 +80,103 @@ class MUCData:
         return self._room_jid.new_with(resource=self.nick)
 
     @property
-    def config(self):
+    def config(self) -> dict[str, Any] | None:
         return self._config
 
 
+@dataclass(slots=True)
 class OutgoingMessage:
-    def __init__(self,
-                 account: str,
-                 contact,
-                 message: Optional[str],
-                 type_: str,
-                 subject: Optional[str] = None,
-                 chatstate=None,
-                 marker: Optional[tuple[str, str]] = None,
-                 resource: Optional[str] = None,
-                 user_nick: Optional[str] = None,
-                 label: Optional[str] = None,
-                 control=None,
-                 attention: Optional[bool] = None,
-                 correct_id: Optional[str] = None,
-                 oob_url: Optional[str] = None,
-                 xhtml=None,
-                 nodes=None,
-                 play_sound: bool = True):
+    account: str
+    contact: types.ChatContactT
+    text: dataclasses.InitVar[str | None] = None
+    chatstate: str | None = None
+    marker: tuple[str, str] | None = None
+    sec_label: SecurityLabel | None = None
+    control: Any | None = None
+    correct_id: str | None = None
+    reply_data: ReplyData | None = None
+    reaction_data: tuple[str, set[str]] | None = None
+    oob_url: str | None = None
+    play_sound: bool = True
 
-        if type_ not in ('chat', 'groupchat', 'normal', 'headline'):
-            raise ValueError('Unknown message type: %s' % type_)
+    type: MessageType = dataclasses.field(init=False)
+    message_id: str = dataclasses.field(init=False)
+    timestamp: datetime = dataclasses.field(init=False)
 
-        if not message and chatstate is None and marker is None:
-            raise ValueError('Trying to send message without content')
+    _text: str | None = dataclasses.field(init=False)
+    _encryption_data: EncryptionData | None = dataclasses.field(
+        init=False, default=None)
+    _stanza: Any = dataclasses.field(init=False, default=None)
 
-        self.account = account
-        self.contact = contact
-        self.message = message
-        self.type_ = type_
-
-        if type_ == 'chat':
-            self.kind = KindConstant.CHAT_MSG_SENT
-        elif type_ == 'groupchat':
-            self.kind = KindConstant.GC_MSG
-        elif type_ == 'normal':
-            self.kind = KindConstant.SINGLE_MSG_SENT
-        else:
-            raise ValueError('Unknown message type')
-
-        from gajim.common.helpers import AdditionalDataDict
-        self.additional_data = AdditionalDataDict()
-
-        self.subject = subject
-        self.chatstate = chatstate
-        self.marker = marker
-        self.resource = resource
-        self.user_nick = user_nick
-        self.label = label
-        self.control = control
-        self.attention = attention
-        self.correct_id = correct_id
-
-        self.oob_url = oob_url
-
-        if oob_url is not None:
-            self.additional_data.set_value('gajim', 'oob_url', oob_url)
-
-        self.xhtml = xhtml
-
-        if xhtml is not None:
-            self.additional_data.set_value('gajim', 'xhtml', xhtml)
-
-        self.nodes = nodes
-        self.play_sound = play_sound
-
-        self.timestamp = None
-        self.message_id = None
-        self.stanza = None
-        self.session = None
-        self.delayed = None # TODO never set
-
-        self.is_loggable = True
-
-    def copy(self):
-        message = OutgoingMessage(self.account,
-                                  self.contact,
-                                  self.message,
-                                  self.type_)
-        for name, value in vars(self).items():
-            setattr(message, name, value)
-        message.additional_data = self.additional_data.copy()
-        return message
-
-    @property
-    def jid(self) -> JID:
-        return self.contact.jid
+    def __post_init__(self, text: str | None) -> None:
+        self._text = text
+        self.timestamp = utc_now()
+        self.message_id = generate_id()
+        self.type = MessageType.from_str(self.contact.type_string)
 
     @property
     def is_groupchat(self) -> bool:
-        return self.type_ == 'groupchat'
+        return self.type == MessageType.GROUPCHAT
 
     @property
-    def is_chat(self) -> bool:
-        return self.type_ == 'chat'
+    def is_pm(self) -> bool:
+        return self.type == MessageType.PM
 
-    @property
-    def is_normal(self) -> bool:
-        return self.type_ == 'normal'
+    def get_text(self, with_fallback: bool = True) -> str | None:
+        if not with_fallback:
+            return self._text
 
-    def set_sent_timestamp(self) -> None:
-        if self.is_groupchat:
-            return
-        self.timestamp = time.time()
+        if self.reply_data is None:
+            return self._text
+        assert self._text is not None
+        return f'{self.reply_data.fallback_text}{self._text}'
+
+    def has_text(self) -> bool:
+        return bool(self._text)
+
+    def set_encryption(self, data: EncryptionData) -> None:
+        self._encryption_data = data
+
+    def get_encryption(self) -> EncryptionData | None:
+        return self._encryption_data
 
     @property
     def is_encrypted(self) -> bool:
-        return bool(self.additional_data.get_value('encrypted', 'name', False))
+        return self._encryption_data is not None
 
-    @property
-    def msg_iq(self) -> Any:
-        # Backwards compatibility for plugins
-        return self.stanza
+    def set_stanza(self, stanza: Any) -> None:
+        self._stanza = stanza
 
-    @msg_iq.setter
-    def msg_iq(self, value: Any) -> None:
-        # Backwards compatibility for plugins
-        self.stanza = value
+    def get_stanza(self) -> Any:
+        return self._stanza
 
 
 @dataclass(frozen=True)
 class PresenceData:
-    show: str
+    show: PresenceShow
     status: str
     priority: int
-    idle_time: Optional[float]
+    idle_datetime: datetime | None
     available: bool
 
     @classmethod
-    def from_presence(cls, properties):
+    def from_presence(cls, properties: PresenceProperties) -> PresenceData:
+        idle_datetime = None
+        if properties.idle_timestamp is not None:
+            idle_datetime = convert_epoch_to_local_datetime(
+                properties.idle_timestamp)
+
         return cls(show=properties.show,
                    status=properties.status,
                    priority=properties.priority,
-                   idle_time=properties.idle_timestamp,
+                   idle_datetime=idle_datetime,
                    available=properties.type.is_available)
 
 
 UNKNOWN_PRESENCE = PresenceData(show=PresenceShowExt.OFFLINE,
                                 status='',
                                 priority=0,
-                                idle_time=0,
+                                idle_datetime=None,
                                 available=False)
 
 
@@ -226,30 +184,42 @@ UNKNOWN_PRESENCE = PresenceData(show=PresenceShowExt.OFFLINE,
 class MUCPresenceData:
     show: PresenceShow
     status: str
-    idle_time: Optional[float]
+    idle_datetime: datetime | None
     available: bool
     affiliation: Affiliation
     role: Role
-    real_jid: Optional[JID]
+    real_jid: JID | None
+    occupant_id: str | None
 
     @classmethod
-    def from_presence(cls, properties):
+    def from_presence(cls,
+                      properties: PresenceProperties,
+                      occupant_id: str | None
+                      ) -> MUCPresenceData:
+
+        idle_datetime = None
+        if properties.idle_timestamp is not None:
+            idle_datetime = convert_epoch_to_local_datetime(
+                properties.idle_timestamp)
+
         return cls(show=properties.show,
                    status=properties.status,
-                   idle_time=properties.idle_timestamp,
+                   idle_datetime=idle_datetime,
                    available=properties.type.is_available,
                    affiliation=properties.muc_user.affiliation,
                    role=properties.muc_user.role,
-                   real_jid=properties.muc_user.jid)
+                   real_jid=properties.muc_user.jid,
+                   occupant_id=occupant_id)
 
 
 UNKNOWN_MUC_PRESENCE = MUCPresenceData(show=PresenceShowExt.OFFLINE,
                                        status='',
-                                       idle_time=0,
+                                       idle_datetime=None,
                                        available=False,
                                        affiliation=Affiliation.NONE,
                                        role=Role.NONE,
-                                       real_jid=None)
+                                       real_jid=None,
+                                       occupant_id=None)
 
 
 class VariantMixin:
@@ -263,7 +233,7 @@ class VariantMixin:
     }
 
     def _get_type_and_variant_string(self,
-                                     field_type: str) -> tuple[Type[Any], str]:
+                                     field_type: str) -> tuple[type[Any], str]:
         variant_str = ''
         if 'Optional' in field_type:
             variant_str = 'm'
@@ -280,7 +250,7 @@ class VariantMixin:
         if 'JID' in field_type:
             return JID, f'{variant_str}s'
 
-        raise ValueError('unknown type: %s' % field_type)
+        raise ValueError(f'unknown type: {field_type}')
 
     def to_variant(self) -> GLib.Variant:
         __types = {}
@@ -293,8 +263,7 @@ class VariantMixin:
                 continue
 
             if not isinstance(value, field_t):
-                raise ValueError('invalid type: %s is not a %s' % (value,
-                                                                   field_t))
+                raise ValueError(f'invalid type: {value} is not a {field_t}')
 
             conversion_func = self._type_to_variant_funcs.get(field_t)
             if conversion_func is not None:
@@ -307,8 +276,35 @@ class VariantMixin:
             vdict['__types'] = GLib.Variant('a{ss}', __types)
         return GLib.Variant('a{sv}', vdict)
 
+    def serialize(self) -> str:
+        variant = self.to_variant()
+        variant_g_bytes = variant.get_data_as_bytes()
+        variant_data = variant_g_bytes.get_data()
+        assert variant_data is not None
+        return base64.b64encode(variant_data).decode()
+
     @classmethod
-    def from_variant(cls: Type[_T], variant: GLib.Variant) -> _T:
+    def from_serialized_string(
+        cls: type[_T],
+        serialized_data: str,
+        variant_type: GLib.VariantType
+    ) -> _T | None:
+        try:
+            data = base64.b64decode(serialized_data.encode())
+            g_bytes = GLib.Bytes.new(data)
+            variant = GLib.Variant.new_from_bytes(
+                variant_type,
+                g_bytes,
+                True
+            )
+        except Exception as e:
+            log.error('Could not decode serialized variant %s', e)
+            return None
+
+        return cls.from_variant(variant)
+
+    @classmethod
+    def from_variant(cls: type[_T], variant: GLib.Variant) -> _T:
         vdict = variant.unpack()
         __types = vdict.pop('__types', None)
         if __types is not None:
@@ -316,6 +312,16 @@ class VariantMixin:
                 value = vdict[field_name]
                 conversion_func = cls._variant_to_type_funcs.get(value_t_name)
                 if conversion_func is None:
-                    raise ValueError('no conversion for: %s' % value_t_name)
+                    raise ValueError(f'no conversion for: {value_t_name}')
                 vdict[field_name] = conversion_func(value)
         return cls(**vdict)
+
+
+@dataclass
+class ReplyData:
+    pk: int
+    to: JID
+    id: str
+    fallback_start: int
+    fallback_end: int
+    fallback_text: str

@@ -7,96 +7,104 @@
 #
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
+
+from __future__ import annotations
 
 import typing
 from typing import Any
-from typing import Union
 
+import logging
 import sys
 
-from gi.repository import Gtk
 from gi.repository import GLib
+from gi.repository import Gtk
 
 from gajim.common import app
 from gajim.common import configpaths
+from gajim.common import events
 from gajim.common import ged
-from gajim.common.i18n import _
-from gajim.common.events import AccountConnected
-from gajim.common.events import AccountDisonnected
-from gajim.common.events import ShowChanged
+from gajim.common.client import Client
+from gajim.common.const import Display
+from gajim.common.const import SimpleClientState
+from gajim.common.ged import EventHelper
 from gajim.common.helpers import get_global_show
 from gajim.common.helpers import get_uf_show
-from gajim.common.ged import EventHelper
+from gajim.common.i18n import _
 
-from .builder import get_builder
-from .util import get_icon_name
-from .util import save_main_window_position
-from .util import restore_main_window_position
-from .util import open_window
+from gajim.gtk.builder import get_builder
+from gajim.gtk.util import get_icon_name
+from gajim.gtk.util import open_window
 
 if app.is_installed('APPINDICATOR'):
-    from gi.repository import AppIndicator3 as appindicator  # pylint: disable=ungrouped-imports
+    from gi.repository import AppIndicator3 as AppIndicator
 
 elif app.is_installed('AYATANA_APPINDICATOR'):
-    from gi.repository import AyatanaAppIndicator3 as appindicator  # pylint: disable=ungrouped-imports
+    from gi.repository import AyatanaAppIndicator3 as AppIndicator
 
 if typing.TYPE_CHECKING:
-    from gi.repository import AyatanaAppIndicator3 as appindicator
+    from gi.repository import AyatanaAppIndicator3 as AppIndicator
+
+
+log = logging.getLogger('gajim.gtk.statusicon')
 
 
 class StatusIcon:
-    def __init__(self):
-        self._backend = None
-
-    def connect_unread_changed(self, chat_list_stack: Gtk.Stack) -> None:
-        # We trigger the signal connection from the main window because it
-        # is not yet available when initializing StatusIcon
-        chat_list_stack.connect(
-            'unread-count-changed', self._on_unread_count_changed)
-
-    def _on_unread_count_changed(self,
-                                 _chat_list_stack: Gtk.Stack,
-                                 _workspace_id: str,
-                                 _count: int) -> None:
-        if app.settings.get('trayicon_notification_on_events'):
-            count = app.window.get_total_unread_count()
-            self._backend._update_icon(count=count)  # type: ignore
-
-    def show_icon(self) -> None:
-        if self._backend is not None:
-            self._backend.show_icon()
-            return
-
-        indicator_installed = (app.is_installed('APPINDICATOR') or
-                               app.is_installed('AYATANA_APPINDICATOR'))
-        use_indicator = app.settings.get('use_libappindicator')
-        if indicator_installed and use_indicator:
-            self._backend = AppIndicator()
+    def __init__(self) -> None:
+        if self._can_use_libindicator():
+            app.settings.connect_signal('show_trayicon',
+                                        self._on_setting_changed)
+            self._backend = AppIndicatorIcon()
+            log.info('Use AppIndicator3 backend')
+        elif app.is_display(Display.WAYLAND):
+            self._backend = NoneBackend()
+            log.info('libappindicator not found or disabled')
         else:
+            app.settings.connect_signal('show_trayicon',
+                                        self._on_setting_changed)
             self._backend = GtkStatusIcon()
+            log.info('Use GtkStatusIcon backend')
 
-    def hide_icon(self) -> None:
-        if self._backend is None:
+    @staticmethod
+    def _can_use_libindicator() -> bool:
+        if not app.settings.get('use_libappindicator'):
+            return False
+        return (app.is_installed('APPINDICATOR') or
+                app.is_installed('AYATANA_APPINDICATOR'))
+
+    def _on_setting_changed(self, *args: Any) -> None:
+        self._backend.update_state()
+
+    def connect_unread_widget(self, widget: Gtk.Widget, signal: str) -> None:
+        widget.connect(signal, self._on_unread_count_changed)
+
+    def _on_unread_count_changed(self, *args: Any) -> None:
+        if not app.settings.get('trayicon_notification_on_events'):
             return
-        self._backend.hide_icon()
+        self._backend.update_state()
+
+    def is_visible(self) -> bool:
+        return self._backend.is_visible()
+
+    def shutdown(self) -> None:
+        self._backend.shutdown()
+
+
+class NoneBackend:
+    def update_state(self, init: bool = False) -> None:
+        pass
+
+    def is_visible(self) -> bool:
+        return False
+
+    def shutdown(self) -> None:
+        pass
 
 
 class GtkMenuBackend(EventHelper):
-    def __init__(self):
+    def __init__(self) -> None:
         EventHelper.__init__(self)
         self._popup_menus: list[Gtk.Menu] = []
-        self._enabled = True
 
         self._ui = get_builder('systray_context_menu.ui')
         self._ui.sounds_mute_menuitem.set_active(
@@ -107,17 +115,19 @@ class GtkMenuBackend(EventHelper):
 
         self.register_events([
             ('our-show', ged.GUI1, self._on_our_show),
+            ('account-enabled', ged.GUI1, self._on_account_enabled),
             ('account-connected', ged.CORE, self._on_account_state),
             ('account-disconnected', ged.CORE, self._on_account_state),
         ])
 
-    def show_icon(self) -> None:
+        for client in app.get_clients():
+            client.connect_signal('state-changed',
+                                  self._on_client_state_changed)
+
+    def update_state(self, init: bool = False) -> None:
         raise NotImplementedError
 
-    def hide_icon(self) -> None:
-        raise NotImplementedError
-
-    def _update_icon(self, count: int = 0) -> None:
+    def is_visible(self) -> bool:
         raise NotImplementedError
 
     def _add_status_menu(self) -> None:
@@ -140,41 +150,41 @@ class GtkMenuBackend(EventHelper):
         self._popup_menus.append(sub_menu)
         self._ui.status_menu.set_submenu(sub_menu)
 
-    def _on_our_show(self, _event: ShowChanged) -> None:
-        self._update_icon()
+    def _on_account_enabled(self, event: events.AccountEnabled) -> None:
+        client = app.get_client(event.account)
+        client.connect_signal('state-changed', self._on_client_state_changed)
 
-    def _on_account_state(self,
-                          _event: Union[AccountConnected, AccountDisonnected]
-                          ) -> None:
+    def _on_client_state_changed(self,
+                                 _client: Client,
+                                 _signal_name: str,
+                                 _state: SimpleClientState) -> None:
+        self.update_state()
+
+    def _on_our_show(self, _event: events.ShowChanged) -> None:
+        self.update_state()
+
+    def _on_account_state(
+        self,
+        _event: events.AccountConnected | events.AccountDisconnected
+    ) -> None:
         account_connected = bool(app.get_number_of_connected_accounts() > 0)
         self._ui.start_chat_menuitem.set_sensitive(account_connected)
 
     @staticmethod
     def _on_new_chat(_widget: Gtk.MenuItem) -> None:
-        app.app.activate_action('start-chat', GLib.Variant('s', ''))
+        app.app.activate_action('start-chat', GLib.Variant('as', ['', '']))
 
     @staticmethod
     def _on_sounds_mute(widget: Gtk.CheckMenuItem) -> None:
         app.settings.set('sounds_on', not widget.get_active())
 
     def _on_toggle_window(self, _widget: Gtk.MenuItem) -> None:
-        # When using Gtk.StatusIcon, app.window will never return True for
-        # 'has-toplevel-focus' while clicking the menu item
-        GLib.idle_add(self._on_activate)
-
-    def _on_activate(self, *args: Any) -> None:
-        if app.window.get_property('has-toplevel-focus'):
-            save_main_window_position()
+        if app.window.is_minimized():
+            app.window.unminimize()
+        elif app.window.is_withdrawn():
+            app.window.show()
+        else:
             app.window.hide()
-            return
-
-        if not app.window.get_property('visible'):
-            # Window was minimized
-            restore_main_window_position()
-
-        if not app.settings.get('main_window_skip_taskbar'):
-            app.window.set_property('skip-taskbar-hint', False)
-        app.window.present_with_time(Gtk.get_current_event_time())
 
     @staticmethod
     def _on_preferences(_widget: Gtk.MenuItem) -> None:
@@ -186,67 +196,75 @@ class GtkMenuBackend(EventHelper):
 
     @staticmethod
     def _on_show(_widget: Gtk.MenuItem, show: str) -> None:
-        app.interface.change_status(status=show)
+        app.app.change_status(status=show)
 
 
 class GtkStatusIcon(GtkMenuBackend):
-
-    def __init__(self):
+    def __init__(self) -> None:
         GtkMenuBackend.__init__(self)
         self._hide_menuitem_added = False
+        self._shutdown = False
 
         self._status_icon = Gtk.StatusIcon()
+        self._status_icon.set_tooltip_text('Gajim')  # Needed for Windows
         self._status_icon.connect('activate', self._on_activate)
         self._status_icon.connect('popup-menu', self._on_popup_menu)
         self._status_icon.connect('size-changed', self._on_size_changed)
 
-        self._update_icon()
+        self.update_state(init=True)
 
-    def show_icon(self):
-        self._enabled = True
-        self._status_icon.set_visible(True)
-        self._update_icon()
-
-    def hide_icon(self) -> None:
-        self._enabled = False
-        self._status_icon.set_visible(False)
-
-    def _update_icon(self, count: int = 0):
-        if not self._enabled:
+    def update_state(self, init: bool = False) -> None:
+        if self._shutdown:
+            # Shutdown in progress, don't update icon
             return
 
-        if app.settings.get('trayicon') == 'always':
-            self._status_icon.set_visible(True)
-
-        if count > 0:
-            self._status_icon.set_visible(True)
-            self._status_icon.set_from_icon_name('dcraven-message-new')
-            return
-
-        if app.settings.get('trayicon') == 'on_event':
+        if not app.settings.get('show_trayicon'):
             self._status_icon.set_visible(False)
+            return
+
+        self._status_icon.set_visible(True)
+
+        if not init and app.window.get_total_unread_count():
+            icon_name = 'dcraven-message-new'
+            if app.is_flatpak():
+                icon_name = 'mail-message-new'
+            self._status_icon.set_from_icon_name(icon_name)
+            return
 
         show = get_global_show()
         icon_name = get_icon_name(show)
         self._status_icon.set_from_icon_name(icon_name)
 
+    def is_visible(self) -> bool:
+        return self._status_icon.get_visible()
+
+    def shutdown(self) -> None:
+        # Necessary on Windows in order to remove icon from tray on shutdown
+        self._shutdown = True
+        self._status_icon.set_visible(False)
+
     def _on_size_changed(self,
                          _status_icon: Gtk.StatusIcon,
                          size: int) -> None:
-        self._update_icon()
+        self.update_state()
 
     def _on_popup_menu(self,
-                       _status_icon: Gtk.StatusIcon,
+                       status_icon: Gtk.StatusIcon,
                        button: int,
                        activate_time: int) -> None:
-        if button == 1:
-            self._on_activate()
-        elif button == 2:
-            self._on_activate()
-        elif button == 3:
-            self._build_menu(activate_time)
 
-    def _build_menu(self, event_time: int) -> None:
+        if button in (1, 2):
+            self._on_activate(status_icon)
+        elif button == 3:
+            self._build_menu(button, activate_time)
+
+    def _on_activate(self, _status_icon: Gtk.StatusIcon) -> None:
+        if app.window.has_toplevel_focus():
+            app.window.hide()
+        else:
+            app.window.show()
+
+    def _build_menu(self, button: int, event_time: int) -> None:
         for menu in self._popup_menus:
             menu.destroy()
 
@@ -267,52 +285,53 @@ class GtkStatusIcon(GtkMenuBackend):
 
         self._ui.systray_context_menu.show_all()
         self._ui.systray_context_menu.popup(
-            None, None, None, None, 0, event_time)
+            None, None, None, None, button, event_time)
 
 
-class AppIndicator(GtkMenuBackend):
-
-    def __init__(self):
+class AppIndicatorIcon(GtkMenuBackend):
+    def __init__(self) -> None:
         GtkMenuBackend.__init__(self)
 
-        self._status_icon = appindicator.Indicator.new(
+        assert AppIndicator is not None
+        self._status_icon = AppIndicator.Indicator.new(
             'Gajim',
-            'dcraven-online',
-            appindicator.IndicatorCategory.COMMUNICATIONS)
-        self._status_icon.set_icon_theme_path(str(configpaths.get('ICONS')))
-        self._status_icon.set_attention_icon_full('dcraven-message-new',
-                                                  'New Message')
-        self._status_icon.set_status(appindicator.IndicatorStatus.ACTIVE)
+            'org.gajim.Gajim',
+            AppIndicator.IndicatorCategory.COMMUNICATIONS)
+        if not app.is_flatpak():
+            self._status_icon.set_icon_theme_path(str(configpaths.get('ICONS')))
+        self._status_icon.set_status(AppIndicator.IndicatorStatus.ACTIVE)
         self._status_icon.set_menu(self._ui.systray_context_menu)
         self._status_icon.set_secondary_activate_target(
             self._ui.toggle_window_menuitem)
 
-        self._update_icon()
+        self.update_state(init=True)
 
-    def show_icon(self):
-        self._enabled = True
-        self._status_icon.set_status(appindicator.IndicatorStatus.ACTIVE)
-        self._update_icon()
-
-    def hide_icon(self) -> None:
-        self._enabled = False
-        self._status_icon.set_status(appindicator.IndicatorStatus.PASSIVE)
-
-    def _update_icon(self, count: int = 0) -> None:
-        if not self._enabled:
+    def update_state(self, init: bool = False) -> None:
+        if not app.settings.get('show_trayicon'):
+            self._status_icon.set_status(AppIndicator.IndicatorStatus.PASSIVE)
             return
 
-        if app.settings.get('trayicon') == 'always':
-            self._status_icon.set_status(appindicator.IndicatorStatus.ACTIVE)
+        self._status_icon.set_status(AppIndicator.IndicatorStatus.ACTIVE)
 
-        if count > 0:
+        if not init and app.window.get_total_unread_count():
             icon_name = 'dcraven-message-new'
+            if app.is_flatpak():
+                icon_name = 'mail-message-new'
             self._status_icon.set_icon_full(icon_name, _('Pending Event'))
+            return
 
-        if app.settings.get('trayicon') == 'on_event':
-            self._status_icon.set_status(appindicator.IndicatorStatus.PASSIVE)
+        if app.is_flatpak():
+            self._status_icon.set_icon_full('org.gajim.Gajim', 'online')
+            return
 
         show = get_global_show()
         icon_name = get_icon_name(show)
         self._status_icon.set_icon_full(icon_name, show)
-        self._status_icon.set_status(appindicator.IndicatorStatus.ACTIVE)
+
+    def is_visible(self) -> bool:
+        assert AppIndicator is not None
+        status = self._status_icon.get_status()
+        return status == AppIndicator.IndicatorStatus.ACTIVE
+
+    def shutdown(self) -> None:
+        pass

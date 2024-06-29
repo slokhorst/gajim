@@ -1,21 +1,10 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from typing import Any
 
 import time
-from datetime import datetime
 
 from gi.repository import GLib
 from gi.repository import Gtk
@@ -25,13 +14,14 @@ from gajim.common.const import AvatarSize
 from gajim.common.const import FTState
 from gajim.common.i18n import _
 from gajim.common.modules.httpupload import HTTPFileTransfer
+from gajim.common.util.datetime import utc_now
 
-from .base import BaseRow
-
-from ...dialogs import ErrorDialog
-from ...util import EventHelper
-from ...builder import get_builder
-from ...util import format_eta
+from gajim.gtk.builder import get_builder
+from gajim.gtk.conversation.rows.base import BaseRow
+from gajim.gtk.conversation.rows.widgets import DateTimeLabel
+from gajim.gtk.dialogs import ErrorDialog
+from gajim.gtk.util import EventHelper
+from gajim.gtk.util import format_eta
 
 
 class FileTransferRow(BaseRow, EventHelper):
@@ -40,9 +30,9 @@ class FileTransferRow(BaseRow, EventHelper):
         EventHelper.__init__(self)
 
         self.type = 'file-transfer'
-        timestamp = time.time()
-        self.timestamp = datetime.fromtimestamp(timestamp)
-        self.db_timestamp = timestamp
+        timestamp = utc_now()
+        self.timestamp = timestamp.astimezone()
+        self.db_timestamp = timestamp.timestamp()
 
         self._destroyed: bool = False
 
@@ -62,15 +52,16 @@ class FileTransferRow(BaseRow, EventHelper):
         avatar_placeholder.set_size_request(AvatarSize.ROSTER, -1)
         self.grid.attach(avatar_placeholder, 0, 0, 1, 1)
 
-        timestamp_widget = self.create_timestamp_widget(self.timestamp)
-        timestamp_widget.set_hexpand(True)
-        timestamp_widget.set_halign(Gtk.Align.END)
+        timestamp_widget = DateTimeLabel(self.timestamp)
+        timestamp_widget.set_halign(Gtk.Align.START)
         timestamp_widget.set_valign(Gtk.Align.START)
-        self.grid.attach(timestamp_widget, 2, 0, 1, 1)
+        self.grid.attach(timestamp_widget, 1, 0, 1, 1)
 
         self._ui = get_builder('file_transfer.ui')
-        self.grid.attach(self._ui.transfer_box, 1, 0, 1, 1)
+        self.grid.attach(self._ui.transfer_box, 1, 1, 1, 1)
         self._ui.file_name.set_text(transfer.filename)
+        self._ui.transfer_description.set_text(
+            transfer.get_state_description())
 
         self.connect('destroy', self._on_destroy)
         self._ui.connect_signals(self)
@@ -80,14 +71,14 @@ class FileTransferRow(BaseRow, EventHelper):
     def _on_destroy(self, *args: Any) -> None:
         self._destroyed = True
 
-        if self._transfer.state.is_active:
-            self._transfer.cancel()
-
         del self._transfer
         if self._pulse is not None:
             GLib.source_remove(self._pulse)
 
     def _on_cancel_clicked(self, _button: Gtk.Button) -> None:
+        if self._transfer.state.is_active:
+            self._transfer.cancel()
+
         self.destroy()
 
     def _on_transfer_state_change(self,
@@ -130,7 +121,10 @@ class FileTransferRow(BaseRow, EventHelper):
         size_total = GLib.format_size_full(transfer.size, self._units)
         self._ui.file_size.set_text(size_total)
 
-        bytes_sec = int(round(transfer.seen / (time_now - self._start_time), 1))
+        progress = transfer.get_progress()
+        seen = transfer.size * progress
+
+        bytes_sec = int(round(seen / (time_now - self._start_time), 1))
         speed = f'{GLib.format_size_full(bytes_sec, self._units)}/s'
         self._ui.transfer_progress.set_tooltip_text(_('Speed: %s') % speed)
 
@@ -138,9 +132,8 @@ class FileTransferRow(BaseRow, EventHelper):
             eta = '∞'
         else:
             eta = format_eta(round(
-                (transfer.size - transfer.seen) / bytes_sec))
+                (transfer.size - seen) / bytes_sec))
 
-        progress = float(transfer.seen) / transfer.size
         self._ui.transfer_progress.set_text(
             _('%(progress)s %% (%(time)s remaining)') % {
                 'progress': round(progress * 100),

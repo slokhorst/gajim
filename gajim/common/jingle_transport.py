@@ -1,41 +1,41 @@
 # This file is part of Gajim.
 #
-# Gajim is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published
-# by the Free Software Foundation; version 3 only.
-#
-# Gajim is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Gajim. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-only
 
-"""
-Handles Jingle Transports (currently only ICE-UDP)
-"""
 
-from typing import Any  # pylint: disable=unused-import
-from typing import Dict  # pylint: disable=unused-import
+# Handles Jingle Transports (currently only ICE-UDP)
+
+
+from __future__ import annotations
+
+from typing import Any
 
 import logging
 import socket
 import uuid
-from enum import IntEnum, unique
+from enum import IntEnum
+from enum import unique
 
 import nbxmpp
 from nbxmpp.namespaces import Namespace
 from nbxmpp.util import generate_id
 
+try:
+    from gi.repository import Farstream
+except ImportError:
+    pass
+
 from gajim.common import app
+from gajim.common.client import Client
+from gajim.common.file_props import FileProp
+from gajim.common.jingle_content import JingleContent
 
 log = logging.getLogger('gajim.c.jingle_transport')
 
+transports: dict[str, Any] = {}
 
-transports = {}  # type: Dict[str, Any]
 
-def get_jingle_transport(node):
+def get_jingle_transport(node: nbxmpp.Node):
     namespace = node.getNamespace()
     if namespace in transports:
         return transports[namespace](node)
@@ -43,88 +43,91 @@ def get_jingle_transport(node):
 
 @unique
 class TransportType(IntEnum):
-    """
+    '''
     Possible types of a JingleTransport
-    """
+    '''
     ICEUDP = 1
     SOCKS5 = 2
     IBB = 3
 
 
 class JingleTransport:
-    """
+    '''
     An abstraction of a transport in Jingle sessions
-    """
+    '''
 
     __slots__ = ['type_', 'candidates', 'remote_candidates', 'connection',
                  'file_props', 'ourjid', 'sid']
 
-    def __init__(self, type_):
+    def __init__(self, type_: TransportType) -> None:
         self.type_ = type_
-        self.candidates = []
-        self.remote_candidates = []
+        self.candidates: list[dict[str, Any]] = []
+        self.remote_candidates: list[dict[str, Any]] = []
 
-        self.connection = None
-        self.file_props = None
-        self.ourjid = None
-        self.sid = None
+        self.connection: Client | None = None
+        self.file_props: FileProp | None = None
+        self.ourjid: str | None = None
+        self.sid: str | None = None
 
     def _iter_candidates(self):
         for candidate in self.candidates:
             yield self.make_candidate(candidate)
 
-    def make_candidate(self, candidate):
-        """
+    def make_candidate(self, candidate: dict[str, Any]) -> Any:
+        '''
         Build a candidate stanza for the given candidate
-        """
+        '''
 
-    def make_transport(self, candidates=None):
-        """
-        Build a transport stanza with the given candidates (or self.candidates if
-        candidates is None)
-        """
+    def make_transport(self,
+                       candidates: list[dict[str, Any]] | None = None
+                       ) -> nbxmpp.Node:
+        '''
+        Build a transport stanza with the given candidates (or self.candidates
+        if candidates is None)
+        '''
         if not candidates:
             candidates = list(self._iter_candidates())
         else:
-            candidates = (self.make_candidate(candidate) for candidate in candidates)
+            candidates = (self.make_candidate(candidate) for candidate
+                          in candidates)
         transport = nbxmpp.Node('transport', payload=candidates)
         return transport
 
-    def parse_transport_stanza(self, transport):
-        """
+    def parse_transport_stanza(self, transport: nbxmpp.Node) -> list[Any]:
+        '''
         Return the list of transport candidates from a transport stanza
-        """
+        '''
         return []
 
-    def set_connection(self, conn):
+    def set_connection(self, conn: Client) -> None:
         self.connection = conn
         if not self.sid:
             self.sid = generate_id()
 
-    def set_file_props(self, file_props):
+    def set_file_props(self, file_props: FileProp) -> None:
         self.file_props = file_props
 
-    def set_our_jid(self, jid):
+    def set_our_jid(self, jid: str) -> None:
         self.ourjid = jid
 
-    def set_sid(self, sid):
+    def set_sid(self, sid: str) -> None:
         self.sid = sid
 
+
 class JingleTransportSocks5(JingleTransport):
-    """
+    '''
     Socks5 transport in jingle scenario
     Note: Don't forget to call set_file_props after initialization
-    """
-    def __init__(self, node=None):
+    '''
+    def __init__(self, node: nbxmpp.Node | None = None) -> None:
         JingleTransport.__init__(self, TransportType.SOCKS5)
         self.connection = None
-        self.remote_candidates = []
-        self.sid = None
+        self.remote_candidates: list[dict[str, Any]] = []
+        self.sid: str | None = None
         if node and node.getAttr('sid'):
             self.sid = node.getAttr('sid')
 
-
-    def make_candidate(self, candidate):
+    def make_candidate(self, candidate) -> nbxmpp.Node:
         log.info('candidate dict, %s', candidate)
         attrs = {
             'cid': candidate['candidate_id'],
@@ -137,7 +140,10 @@ class JingleTransportSocks5(JingleTransport):
 
         return nbxmpp.Node('candidate', attrs=attrs)
 
-    def make_transport(self, candidates=None, add_candidates=True):
+    def make_transport(self,
+                       candidates: list[dict[str, Any]] | None = None,
+                       add_candidates: bool = True
+                       ) -> nbxmpp.Node:
         if add_candidates:
             self._add_local_ips_as_candidates()
             self._add_additional_candidates()
@@ -151,19 +157,18 @@ class JingleTransportSocks5(JingleTransport):
             transport.setAttr('dstaddr', self.file_props.dstaddr)
         return transport
 
-    def parse_transport_stanza(self, transport):
-        candidates = []
+    def parse_transport_stanza(self,
+                               transport: nbxmpp.Node
+                               ) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
         for candidate in transport.iterTags('candidate'):
-            typ = 'direct' # default value
-            if candidate.has_attr('type'):
-                typ = candidate['type']
             cand = {
                 'state': 0,
                 'target': self.ourjid,
                 'host': candidate['host'],
-                'port': int(candidate['port']),
+                'port': int(candidate['port'] or 1080),
                 'candidate_id': candidate['cid'],
-                'type': typ,
+                'type': candidate['type'] or 'direct',
                 'priority': candidate['priority']
             }
             candidates.append(cand)
@@ -173,31 +178,30 @@ class JingleTransportSocks5(JingleTransport):
             self.remote_candidates = candidates
         return candidates
 
-
-    def _add_candidates(self, candidates):
+    def _add_candidates(self, candidates: list[dict[str, Any]]) -> None:
         for cand in candidates:
             in_remote = False
             for cand2 in self.remote_candidates:
-                if cand['host'] == cand2['host'] and \
-                cand['port'] == cand2['port']:
+                if (cand['host'] == cand2['host'] and
+                        cand['port'] == cand2['port']):
                     in_remote = True
                     break
             if not in_remote:
                 self.candidates.append(cand)
 
-    def _add_local_ips_as_candidates(self):
+    def _add_local_ips_as_candidates(self) -> None:
         if not app.settings.get_account_setting(self.connection.name,
                                                 'ft_send_local_ips'):
             return
         if not self.connection:
             return
         port = int(app.settings.get('file_transfers_port'))
-        #type preference of connection type. XEP-0260 section 2.2
+        # type preference of connection type. XEP-0260 section 2.2
         type_preference = 126
         priority = (2**16) * type_preference
 
-        hosts = set()
-        local_ip_cand = []
+        hosts: set[str | None] = set()
+        local_ip_cand: list[dict[str, Any]] = []
 
         my_ip = self.connection.local_address
         if my_ip is None:
@@ -218,8 +222,8 @@ class JingleTransportSocks5(JingleTransport):
         try:
             for addrinfo in socket.getaddrinfo(socket.gethostname(), None):
                 addr = addrinfo[4][0]
-                if not addr in hosts and not addr.startswith('127.') and \
-                addr != '::1':
+                if (addr not in hosts and not addr.startswith('127.') and
+                        addr != '::1'):
                     candidate = {
                         'host': addr,
                         'candidate_id': generate_id(),
@@ -233,10 +237,13 @@ class JingleTransportSocks5(JingleTransport):
                     hosts.add(addr)
                     local_ip_cand.append(candidate)
         except socket.gaierror:
-            pass # ignore address-related errors for getaddrinfo
+            pass  # ignore address-related errors for getaddrinfo
 
         try:
-            from netifaces import interfaces, ifaddresses, AF_INET, AF_INET6
+            from netifaces import AF_INET
+            from netifaces import AF_INET6
+            from netifaces import ifaddresses
+            from netifaces import interfaces
             for ifaceName in interfaces():
                 addresses = ifaddresses(ifaceName)
                 if AF_INET in addresses:
@@ -259,8 +266,8 @@ class JingleTransportSocks5(JingleTransport):
                 if AF_INET6 in addresses:
                     for address in addresses[AF_INET6]:
                         addr = address['addr']
-                        if addr in hosts or addr.startswith('::1') or \
-                        addr.count(':') != 7:
+                        if (addr in hosts or addr.startswith('::1') or
+                                addr.count(':') != 7):
                             continue
                         candidate = {
                             'host': addr,
@@ -280,7 +287,7 @@ class JingleTransportSocks5(JingleTransport):
 
         self._add_candidates(local_ip_cand)
 
-    def _add_additional_candidates(self):
+    def _add_additional_candidates(self) -> None:
         if not self.connection:
             return
         type_preference = 126
@@ -306,14 +313,16 @@ class JingleTransportSocks5(JingleTransport):
 
         self._add_candidates(additional_ip_cand)
 
-    def _add_proxy_candidates(self):
+    def _add_proxy_candidates(self) -> None:
         if not self.connection:
             return
         type_preference = 10
         priority = (2**16) * type_preference
         proxy_cand = []
         socks5conn = self.connection
-        proxyhosts = socks5conn.get_module('Bytestream')._get_file_transfer_proxies_from_config(self.file_props)
+        proxyhosts = socks5conn.get_module(
+            'Bytestream')._get_file_transfer_proxies_from_config(
+                self.file_props)
 
         if proxyhosts:
             self.file_props.proxyhosts = proxyhosts
@@ -333,12 +342,13 @@ class JingleTransportSocks5(JingleTransport):
 
         self._add_candidates(proxy_cand)
 
-    def get_content(self):
+    def get_content(self) -> JingleContent | None:
         sesn = self.connection.get_module('Jingle').get_jingle_session(
             self.ourjid, self.file_props.sid)
         for content in sesn.contents.values():
             if content.transport == self:
                 return content
+        return None
 
     def _on_proxy_auth_ok(self, proxy):
         log.info('proxy auth ok for %s', str(proxy))
@@ -351,7 +361,7 @@ class JingleTransportSocks5(JingleTransport):
             return
 
         iq = nbxmpp.Iq(to=proxy['jid'], frm=self.ourjid, typ='set')
-        auth_id = "au_" + proxy['sid']
+        auth_id = 'au_' + proxy['sid']
         iq.setID(auth_id)
         query = iq.setTag('query', namespace=Namespace.BYTESTREAM)
         query.setAttr('sid', proxy['sid'])
@@ -359,7 +369,6 @@ class JingleTransportSocks5(JingleTransport):
         activate.setData(sesn.peerjid)
         iq.setID(auth_id)
         self.connection.connection.send(iq)
-
 
         content = nbxmpp.Node('content')
         content.setAttr('creator', 'initiator')
@@ -375,8 +384,9 @@ class JingleTransportSocks5(JingleTransport):
             cid = proxy['cid']
         else:
             for host in self.candidates:
-                if host['host'] == proxy['host'] and host['jid'] == proxy['jid'] \
-                        and host['port'] == proxy['port']:
+                if (host['host'] == proxy['host'] and
+                        host['jid'] == proxy['jid'] and
+                        host['port'] == proxy['port']):
                     cid = host['candidate_id']
                     break
         if cid is None:
@@ -389,7 +399,10 @@ class JingleTransportSocks5(JingleTransport):
 
 class JingleTransportIBB(JingleTransport):
 
-    def __init__(self, node=None, block_sz=None):
+    def __init__(self,
+                 node: nbxmpp.Node | None = None,
+                 block_sz: str | None = None
+                 ) -> None:
 
         JingleTransport.__init__(self, TransportType.IBB)
 
@@ -399,29 +412,23 @@ class JingleTransportIBB(JingleTransport):
             self.block_sz = '4096'
 
         self.connection = None
-        self.sid = None
+        self.sid: str | None = None
         if node and node.getAttr('sid'):
             self.sid = node.getAttr('sid')
 
-
-    def make_transport(self):
-
+    def make_transport(self) -> nbxmpp.Node:
         transport = nbxmpp.Node('transport')
         transport.setNamespace(Namespace.JINGLE_IBB)
         transport.setAttr('block-size', self.block_sz)
         transport.setAttr('sid', self.sid)
         return transport
 
-try:
-    from gi.repository import Farstream
-except ImportError:
-    pass
 
 class JingleTransportICEUDP(JingleTransport):
-    def __init__(self, node):
+    def __init__(self, node: nbxmpp.Node | None) -> None:
         JingleTransport.__init__(self, TransportType.ICEUDP)
 
-    def make_candidate(self, candidate):
+    def make_candidate(self, candidate) -> nbxmpp.Node:
         types = {
             Farstream.CandidateType.HOST: 'host',
             Farstream.CandidateType.SRFLX: 'srflx',
@@ -429,14 +436,14 @@ class JingleTransportICEUDP(JingleTransport):
             Farstream.CandidateType.RELAY: 'relay',
             Farstream.CandidateType.MULTICAST: 'multicast'
         }
-        attrs = {
+        attrs: dict[str, Any] = {
             'component': candidate.component_id,
-            'foundation': '1', # hack
+            'foundation': '1',  # hack
             'generation': '0',
             'ip': candidate.ip,
             'network': '0',
             'port': candidate.port,
-            'priority': int(candidate.priority), # hack
+            'priority': int(candidate.priority),  # hack
             'id': str(uuid.uuid4())
         }
         if candidate.type in types:
@@ -448,7 +455,9 @@ class JingleTransportICEUDP(JingleTransport):
             attrs['protocol'] = 'tcp'
         return nbxmpp.Node('candidate', attrs=attrs)
 
-    def make_transport(self, candidates=None):
+    def make_transport(self,
+                       candidates: list[dict[str, Any]] | None = None
+                       ) -> nbxmpp.Node:
         transport = JingleTransport.make_transport(self, candidates)
         transport.setNamespace(Namespace.JINGLE_ICE_UDP)
         if self.candidates and self.candidates[0].username and \
@@ -457,8 +466,10 @@ class JingleTransportICEUDP(JingleTransport):
             transport.setAttr('pwd', self.candidates[0].password)
         return transport
 
-    def parse_transport_stanza(self, transport):
-        candidates = []
+    def parse_transport_stanza(self,
+                               transport: nbxmpp.Node
+                               ) -> list[Farstream.Candidate]:
+        candidates: list[Farstream.Candidate] = []
         for candidate in transport.iterTags('candidate'):
             foundation = str(candidate['foundation'])
             component_id = int(candidate['component'])
@@ -497,6 +508,7 @@ class JingleTransportICEUDP(JingleTransport):
             candidates.append(cand)
         self.remote_candidates.extend(candidates)
         return candidates
+
 
 transports[Namespace.JINGLE_ICE_UDP] = JingleTransportICEUDP
 transports[Namespace.JINGLE_BYTESTREAM] = JingleTransportSocks5
