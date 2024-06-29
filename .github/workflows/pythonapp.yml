@@ -8,7 +8,14 @@ jobs:
     runs-on: macos-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+        architecture: 'x64'
+    - name: Display Python version
+      run: python -c "import sys; print(sys.version)"
     - name: Install dependencies
       run: |
         brew install python
@@ -16,14 +23,13 @@ jobs:
         brew install gtksourceview3 gst-python
         brew install libsoup
         brew install libsoup@2
-        pip3 install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
-        pip3 install git+https://github.com/pyinstaller/pyinstaller.git@develop
-        #pip3 install git+https://dev.gajim.org/sebastiaanlokhorst/python-nbxmpp.git@libsoup3
-        pip3 install git+https://dev.gajim.org/gajim/python-nbxmpp.git
-        pip3 install .
+        python -m pip install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
+        python -m pip install git+https://github.com/pyinstaller/pyinstaller.git@develop
+        python -m pip install git+https://dev.gajim.org/gajim/python-nbxmpp.git
+        python -m pip install .
     - name: Build Mac app
       run: |
-        python3 mac/makebundle.py --version 0.0.1
+        python mac/makebundle.py --version 0.0.1
     - name: Upload app
       uses: actions/upload-artifact@v1
       with:
