@@ -18,11 +18,8 @@ jobs:
       run: python -c "import sys; print(sys.version)"
     - name: Install dependencies
       run: |
-        brew install python
-        brew install gettext git gtk+3 librsvg pygobject3 adwaita-icon-theme gtksourceview4
-        brew install gtksourceview3 gst-python
-        brew install libsoup
-        brew install libsoup@2
+        brew install gtk+3 librsvg pygobject3 adwaita-icon-theme gtksourceview3 gstreamer
+        brew install libsoup libsoup@2
         python -m pip install --upgrade pyOpenSSL pyasn1 pyobjc pillow idna precis-i18n certifi css-parser
         python -m pip install git+https://github.com/pyinstaller/pyinstaller.git@develop
         python -m pip install git+https://dev.gajim.org/gajim/python-nbxmpp.git
